@@ -1,11 +1,14 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { StoreProvider } from "@/contexts/StoreContext";
 import { AppLayout } from "@/components/AppLayout";
-import Dashboard from "@/pages/Dashboard";
+import LegacyDashboard from "@/pages/LegacyDashboard";
+import Dashboard from "@/pages/v2/Dashboard";
+import Orders from "@/pages/v2/Orders";
+import Reports from "@/pages/v2/Reports";
 import ProductMaster from "@/pages/ProductMaster";
 import ManualSync from "@/pages/ManualSync";
 import AICoPilot from "@/pages/AICoPilot";
@@ -34,7 +37,11 @@ const App = () => (
             <div className="min-h-screen flex w-full">
               <Routes>
                 <Route element={<AppLayout />}>
-                  <Route path="/" element={<Dashboard />} />
+                  <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                  <Route path="/dashboard" element={<Dashboard />} />
+                  <Route path="/legacy/dashboard" element={<LegacyDashboard />} />
+                  <Route path="/orders" element={<Orders />} />
+                  <Route path="/reports" element={<Reports />} />
                   <Route path="/products" element={<ProductMaster />} />
                   <Route path="/manual-sync" element={<ManualSync />} />
                   <Route path="/ai-copilot" element={<AICoPilot />} />

@@ -1,0 +1,94 @@
+export type DateRangeKey = "Today" | "WTD" | "MTD" | "QTD" | "YTD";
+
+export interface DateBounds {
+  startISO: string;
+  endISO: string;
+  days: number;
+  label: string;
+  prevStartISO: string;
+  prevEndISO: string;
+}
+
+function midnight(d: Date): Date {
+  const r = new Date(d);
+  r.setHours(0, 0, 0, 0);
+  return r;
+}
+
+export function getDateBounds(range: DateRangeKey): DateBounds {
+  const now = new Date();
+  const today = midnight(now);
+  const DAY = 86_400_000;
+  const fmt = (d: Date) => d.toLocaleDateString("en-GB", { month: "short", day: "numeric" });
+
+  let start: Date;
+  let prevStart: Date;
+  let prevEnd: Date;
+
+  switch (range) {
+    case "Today": {
+      start = today;
+      prevStart = new Date(today.getTime() - DAY);
+      prevEnd = new Date(today.getTime() - 1);
+      break;
+    }
+    case "WTD": {
+      const dow = today.getDay(); // 0=Sun
+      const offset = dow === 0 ? 6 : dow - 1;
+      start = new Date(today.getTime() - offset * DAY);
+      prevStart = new Date(start.getTime() - 7 * DAY);
+      prevEnd = new Date(today.getTime() - 7 * DAY + DAY - 1);
+      break;
+    }
+    case "MTD": {
+      start = new Date(now.getFullYear(), now.getMonth(), 1);
+      prevStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      prevEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+      break;
+    }
+    case "QTD": {
+      const q = Math.floor(now.getMonth() / 3);
+      start = new Date(now.getFullYear(), q * 3, 1);
+      prevStart = new Date(now.getFullYear(), q * 3 - 3, 1);
+      prevEnd = new Date(now.getFullYear(), q * 3, 0, 23, 59, 59, 999);
+      break;
+    }
+    case "YTD": {
+      start = new Date(now.getFullYear(), 0, 1);
+      prevStart = new Date(now.getFullYear() - 1, 0, 1);
+      prevEnd = new Date(now.getFullYear() - 1, 11, 31, 23, 59, 59, 999);
+      break;
+    }
+    default: {
+      start = new Date(now.getFullYear(), now.getMonth(), 1);
+      prevStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      prevEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+    }
+  }
+
+  const days = Math.max(1, Math.ceil((now.getTime() - start.getTime()) / DAY));
+  const label =
+    range === "Today"
+      ? fmt(today)
+      : `${fmt(start)} – ${fmt(now)}`;
+
+  return {
+    startISO: start.toISOString(),
+    endISO: now.toISOString(),
+    days,
+    label,
+    prevStartISO: prevStart.toISOString(),
+    prevEndISO: prevEnd.toISOString(),
+  };
+}
+
+export function comparePeriodLabel(range: DateRangeKey): string {
+  const map: Record<DateRangeKey, string> = {
+    Today: "vs yesterday",
+    WTD: "vs last week",
+    MTD: "vs last month",
+    QTD: "vs last quarter",
+    YTD: "vs last year",
+  };
+  return map[range];
+}

@@ -1,0 +1,1217 @@
+import { useState, useCallback, useEffect, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
+import {
+  ResponsiveContainer, ComposedChart, AreaChart, Area, Line,
+  BarChart, Bar, PieChart, Pie, Cell,
+  XAxis, YAxis, CartesianGrid, Tooltip,
+} from "recharts";
+import {
+  PoundSterling, ShoppingCart, CreditCard, TrendingUp, Activity,
+  Boxes, XCircle, Award, TrendingDown, AlertTriangle, Download,
+  RefreshCw, Filter, MoreHorizontal, Warehouse, Truck, Package,
+  Clock, Layers, ArrowUp, ArrowDown, ChevronRight, Eye, X,
+  CheckSquare, Loader2,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+import { fmtGBP, fmtNum, fmtAxisGBP } from "./mockData";
+import { useTopProducts } from "@/hooks/useTopProducts";
+import { useSalesTrend } from "@/hooks/useSalesTrend";
+import { useChannelPerformance } from "@/hooks/useChannelPerformance";
+import { useInventoryDashboard } from "@/hooks/useInventoryDashboard";
+import { useSalesKPIs, useCollectionSales } from "@/hooks/useSalesKPIs";
+import { supabase } from "@/integrations/supabase/client";
+import { type DateRangeKey, type DateBounds, getDateBounds, comparePeriodLabel } from "@/lib/dateRanges";
+
+// ─── Sparkline ───────────────────────────────────────────────────────────────
+
+function Sparkline({ data, color = "#6366f1" }: { data: number[]; color?: string }) {
+  const d = data.map((v, i) => ({ i, v }));
+  return (
+    <AreaChart width={70} height={26} data={d} margin={{ top: 2, right: 0, left: 0, bottom: 0 }}>
+      <Area type="monotone" dataKey="v" stroke={color} strokeWidth={1.5}
+        fill={color} fillOpacity={0.12} dot={false} isAnimationActive={false} />
+    </AreaChart>
+  );
+}
+
+// ─── KPI card ────────────────────────────────────────────────────────────────
+
+interface KpiCardProps {
+  label: string; value: string | number; unit?: string;
+  delta?: number; deltaUp?: boolean; deltaLabel?: string; footer?: string;
+  icon?: LucideIcon; iconColor?: string; iconBg?: string;
+  sparkData?: number[]; sparkColor?: string;
+  progress?: number; progressColor?: string;
+  onClick?: () => void;
+}
+
+function KpiCard({ label, value, unit, delta, deltaUp, deltaLabel, footer,
+  icon: Icon, iconColor, iconBg, sparkData, sparkColor, progress, progressColor, onClick }: KpiCardProps) {
+  return (
+    <Card className={cn("relative overflow-hidden", onClick && "cursor-pointer")} onClick={onClick}>
+      <CardContent className="p-4 pb-3">
+        <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
+          {Icon && (
+            <span className="w-[18px] h-[18px] rounded flex items-center justify-center shrink-0"
+              style={{ background: iconBg, color: iconColor }}>
+              <Icon size={10} strokeWidth={2.2} />
+            </span>
+          )}
+          {label}
+        </div>
+        <div className="text-[22px] font-semibold tracking-tight tabular-nums leading-none">
+          {value}{unit && <span className="text-sm font-normal text-muted-foreground ml-0.5">{unit}</span>}
+        </div>
+        <div className="flex items-center gap-1.5 mt-1.5 text-xs min-h-[16px]">
+          {delta != null && (
+            <span className={cn("flex items-center gap-0.5 font-medium",
+              deltaUp ? "text-emerald-600 dark:text-emerald-400" : "text-red-500 dark:text-red-400")}>
+              {deltaUp ? <ArrowUp size={10} strokeWidth={2.5} /> : <ArrowDown size={10} strokeWidth={2.5} />}
+              {Math.abs(delta)}%
+            </span>
+          )}
+          {(deltaLabel || footer) && (
+            <span className="text-muted-foreground truncate">{deltaLabel ?? footer}</span>
+          )}
+        </div>
+        {progress != null && (
+          <div className="mt-2 h-1 bg-muted rounded-full overflow-hidden">
+            <div className="h-full rounded-full transition-all" style={{ width: `${progress}%`, background: progressColor }} />
+          </div>
+        )}
+        {sparkData && (
+          <div className="mt-2 -mb-1">
+            <Sparkline data={sparkData} color={sparkColor} />
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─── Donut chart ─────────────────────────────────────────────────────────────
+
+interface DonutItem { name: string; value: number; color: string; formatted?: string }
+
+function DonutChart({ data, centerLabel, centerValue, size = 140, showLegend = true }:
+  { data: DonutItem[]; centerLabel: string; centerValue: string; size?: number; showLegend?: boolean }) {
+  const r = size / 2;
+  const outer = Math.round(r * 0.83);
+  const inner = Math.round(r * 0.54);
+  return (
+    <div className="flex items-center gap-4">
+      <div className="relative shrink-0" style={{ width: size, height: size }}>
+        <PieChart width={size} height={size}>
+          <Pie data={data} cx={r} cy={r} innerRadius={inner} outerRadius={outer}
+            strokeWidth={0} paddingAngle={1.5} dataKey="value">
+            {data.map((entry, i) => <Cell key={i} fill={entry.color} />)}
+          </Pie>
+        </PieChart>
+        <div className="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-none">
+          <span className="text-[8.5px] uppercase tracking-wider font-semibold text-muted-foreground leading-none">
+            {centerLabel}
+          </span>
+          <span className="text-base font-semibold mt-0.5 tabular-nums leading-none">{centerValue}</span>
+        </div>
+      </div>
+      {showLegend && (
+        <div className="flex-1 min-w-0 space-y-1.5">
+          {data.map((d, i) => (
+            <div key={i} className="flex items-center gap-2 text-xs">
+              <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: d.color }} />
+              <span className="flex-1 truncate text-muted-foreground">{d.name}</span>
+              <span className="font-medium tabular-nums">{d.formatted ?? d.value.toLocaleString()}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Trend chart tooltip ─────────────────────────────────────────────────────
+
+function TrendTooltip({ active, payload, label }: { active?: boolean; payload?: { name: string; value: number; color: string }[]; label?: string }) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="rounded-lg border bg-card p-2.5 shadow-lg text-xs min-w-[140px]">
+      <p className="font-semibold mb-1.5">{label}</p>
+      {payload.map((p, i) => (
+        <div key={i} className="flex justify-between gap-4">
+          <span className="text-muted-foreground flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-sm inline-block" style={{ background: p.color }} />
+            {p.name === "revenue" ? "Revenue" : "Orders"}
+          </span>
+          <span className="font-medium tabular-nums">
+            {p.name === "revenue" ? fmtGBP(p.value) : p.value}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Alert strip ─────────────────────────────────────────────────────────────
+
+function AlertStrip({ onDismiss, oos, winners, pendingOrders, pendingApprovals }: {
+  onDismiss: () => void;
+  oos: number | null;
+  winners: number | null;
+  pendingOrders: number | null;
+  pendingApprovals: number | null;
+}) {
+  const navigate = useNavigate();
+  const f = (n: number | null) => n != null ? fmtNum(n) : "—";
+  return (
+    <div className="flex items-center gap-3 px-4 py-2.5 rounded-lg border border-amber-300 bg-gradient-to-r from-amber-50 to-card dark:from-amber-950/30 dark:border-amber-800 text-sm flex-wrap">
+      <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 font-semibold text-xs shrink-0">
+        <AlertTriangle size={12} strokeWidth={2.4} /> Operations summary
+      </span>
+      <div className="flex items-center gap-3 text-xs flex-wrap">
+        <button onClick={() => navigate("/replenishment")} className="hover:underline">
+          <span className="font-semibold text-red-600 dark:text-red-400">{f(oos)}</span>{" "}
+          <span className="text-muted-foreground">SKUs out of stock</span>
+        </button>
+        <span className="text-border">·</span>
+        <button onClick={() => navigate("/replenishment")} className="hover:underline">
+          <span className="font-semibold text-emerald-600 dark:text-emerald-400">{f(winners)}</span>{" "}
+          <span className="text-muted-foreground">low-stock winners</span>
+        </button>
+        <span className="text-border">·</span>
+        <button onClick={() => navigate("/orders")} className="hover:underline">
+          <span className="font-semibold text-amber-600 dark:text-amber-400">{f(pendingOrders)}</span>{" "}
+          <span className="text-muted-foreground">orders pending fulfillment</span>
+        </button>
+        <span className="text-border">·</span>
+        <button onClick={() => navigate("/approvals")} className="hover:underline">
+          <span className="font-semibold text-violet-600 dark:text-violet-400">{f(pendingApprovals)}</span>{" "}
+          <span className="text-muted-foreground">approvals awaiting review</span>
+        </button>
+      </div>
+      <div className="flex-1" />
+      <Button size="sm" variant="outline" className="h-7 text-xs gap-1 shrink-0" onClick={() => navigate("/orders")}>
+        <CheckSquare size={11} /> Review orders
+      </Button>
+      <button onClick={onDismiss} className="text-muted-foreground hover:text-foreground shrink-0">
+        <X size={14} />
+      </button>
+    </div>
+  );
+}
+
+// ─── Sync progress banner ────────────────────────────────────────────────────
+
+const STAGE_LABELS: Record<string, string> = {
+  products:    "Syncing products",
+  collections: "Syncing collections",
+  orders:      "Syncing orders",
+  inventory:   "Syncing inventory",
+  complete:    "Sync complete",
+};
+
+const STAGE_PCT: Record<string, number> = {
+  products:    15,
+  collections: 35,
+  orders:      65,
+  inventory:   85,
+  complete:    100,
+};
+
+function SyncProgressBanner({ stage, recordsSynced, status }: {
+  stage: string | null;
+  recordsSynced: number;
+  status: string | null;
+}) {
+  const pct   = STAGE_PCT[stage ?? "products"] ?? 10;
+  const label = STAGE_LABELS[stage ?? "products"] ?? "Syncing…";
+  const done  = status === "success" || stage === "complete";
+  const failed = status === "failed";
+
+  return (
+    <div className={cn(
+      "flex items-center gap-3 px-4 py-2.5 rounded-lg border text-sm",
+      failed
+        ? "border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-950/30"
+        : done
+          ? "border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/30"
+          : "border-indigo-300 bg-indigo-50/60 dark:border-indigo-800 dark:bg-indigo-950/30"
+    )}>
+      <div className="flex items-center gap-2 shrink-0">
+        {failed ? (
+          <XCircle size={14} className="text-red-500" />
+        ) : done ? (
+          <CheckSquare size={14} className="text-emerald-600" />
+        ) : (
+          <Loader2 size={14} className="animate-spin text-indigo-600 dark:text-indigo-400" />
+        )}
+        <span className={cn("font-semibold text-xs",
+          failed ? "text-red-600" : done ? "text-emerald-700 dark:text-emerald-400" : "text-indigo-700 dark:text-indigo-300")}>
+          {failed ? "Sync failed" : done ? "Sync complete" : `${label}…`}
+        </span>
+      </div>
+      {!done && !failed && (
+        <>
+          <div className="flex-1 h-1.5 bg-indigo-200/60 dark:bg-indigo-900/60 rounded-full overflow-hidden min-w-[80px]">
+            <div className="h-full rounded-full bg-indigo-500 dark:bg-indigo-400 transition-all duration-700 ease-out"
+              style={{ width: `${pct}%` }} />
+          </div>
+          <span className="text-xs font-bold tabular-nums text-indigo-600 dark:text-indigo-400 shrink-0 w-9 text-right">
+            {pct}%
+          </span>
+        </>
+      )}
+      <span className="text-xs text-muted-foreground shrink-0">
+        {done
+          ? "All data refreshed — reloading dashboard…"
+          : failed
+            ? "Check your Shopify connection and try again"
+            : `${fmtNum(recordsSynced)} records synced`}
+      </span>
+    </div>
+  );
+}
+
+// ─── Sales section ───────────────────────────────────────────────────────────
+
+function TopProductsSkeleton() {
+  return (
+    <>
+      {Array.from({ length: 6 }).map((_, i) => (
+        <div key={i} className="flex items-center gap-3 px-4 py-2.5 border-t first:border-t-0">
+          <div className="w-8 h-8 rounded-md bg-muted animate-pulse shrink-0" />
+          <div className="flex-1 min-w-0 space-y-1.5">
+            <div className="h-3 bg-muted animate-pulse rounded w-3/4" />
+            <div className="h-2.5 bg-muted animate-pulse rounded w-1/2" />
+          </div>
+          <div className="text-right shrink-0 w-20 space-y-1.5">
+            <div className="h-3 bg-muted animate-pulse rounded w-full" />
+            <div className="h-2.5 bg-muted animate-pulse rounded w-2/3 ml-auto" />
+          </div>
+          <div className="w-[70px] h-6 bg-muted animate-pulse rounded shrink-0" />
+          <div className="w-10 h-5 bg-muted animate-pulse rounded shrink-0" />
+        </div>
+      ))}
+    </>
+  );
+}
+
+function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing }: {
+  bounds: DateBounds;
+  range: DateRangeKey;
+  onRangeChange: (r: DateRangeKey) => void;
+  onSyncStart: () => void;
+  syncing: boolean;
+}) {
+  const navigate = useNavigate();
+  const { data: liveProducts, isLoading: productsLoading, error: productsError } = useTopProducts(6, bounds);
+  const { data: trendData,    isLoading: trendLoading }    = useSalesTrend(30, bounds);
+  const { data: channelData,  isLoading: channelLoading }  = useChannelPerformance(30, bounds);
+  const { data: salesKPIs,    isLoading: kpisLoading }     = useSalesKPIs(bounds);
+  const { data: collectionData, isLoading: collectionsLoading } = useCollectionSales(bounds);
+  const sparkRev = trendData ? trendData.slice(-14).map(d => d.revenue) : [];
+  const sparkOrd = trendData ? trendData.slice(-14).map(d => d.orders) : [];
+  const totalChannelRevenue = channelData ? channelData.reduce((s, c) => s + c.revenue, 0) : 0;
+
+  // CSV export of current view
+  const handleExport = useCallback(() => {
+    const rows: string[][] = [];
+    rows.push(["Sales Dashboard Export", bounds.label]);
+    rows.push([]);
+    rows.push(["KPIs"]);
+    rows.push(["Metric", "Value"]);
+    if (salesKPIs) {
+      rows.push(["Revenue", salesKPIs.revenueMTD.toFixed(2)]);
+      rows.push(["Orders", String(salesKPIs.ordersMTD)]);
+      rows.push(["AOV", salesKPIs.aov.toFixed(2)]);
+      rows.push(["Sell-Through %", salesKPIs.sellThrough.toFixed(1)]);
+      rows.push(["Refund Rate %", String(salesKPIs.refundRate)]);
+      rows.push(["Pending Orders", String(salesKPIs.pendingOrders)]);
+    }
+    rows.push([]);
+    rows.push(["Top Products"]);
+    rows.push(["Name", "SKU", "Vendor", "Units", "Revenue", "Trend %"]);
+    (liveProducts ?? []).forEach(p => {
+      rows.push([p.name, p.sku, p.vendor, String(p.units), p.revenue.toFixed(2), String(p.trend)]);
+    });
+    rows.push([]);
+    rows.push(["Channel Performance"]);
+    rows.push(["Channel", "Revenue", "Orders", "AOV", "Share %"]);
+    (channelData ?? []).forEach(c => {
+      rows.push([c.name, c.revenue.toFixed(2), String(c.orders), c.aov.toFixed(2), String(c.share)]);
+    });
+    const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href     = url;
+    a.download = `sales-export-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [salesKPIs, liveProducts, channelData, bounds.label]);
+
+  return (
+    <div className="space-y-3.5">
+      {/* Section header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <span className="text-[10px] font-semibold uppercase tracking-widest px-2 py-0.5 rounded bg-primary/10 text-primary">Sales</span>
+          <h2 className="text-base font-semibold">Sales overview</h2>
+          <span className="text-xs text-muted-foreground">{bounds.label} · {comparePeriodLabel(range)}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="flex rounded-md border overflow-hidden">
+            {(["Today","WTD","MTD","QTD","YTD"] as DateRangeKey[]).map(r => (
+              <button key={r} onClick={() => onRangeChange(r)}
+                className={cn("px-2.5 py-1 text-xs font-medium transition-colors",
+                  range === r ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground")}>
+                {r}
+              </button>
+            ))}
+          </div>
+          <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" onClick={handleExport}
+            disabled={!salesKPIs && !liveProducts}>
+            <Download size={12} /> Export
+          </Button>
+          <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" onClick={onSyncStart} disabled={syncing}>
+            {syncing ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+            {syncing ? "Syncing…" : "Sync sales"}
+          </Button>
+        </div>
+      </div>
+
+      {/* KPI grid */}
+      {kpisLoading ? (
+        <div className="grid grid-cols-5 gap-3.5">
+          {Array.from({ length: 5 }).map((_, i) => <KpiSkeleton key={i} />)}
+        </div>
+      ) : (
+        <div className="grid grid-cols-5 gap-3.5">
+          <KpiCard icon={PoundSterling} iconColor="#4f46e5" iconBg="#eef2ff"
+            label={`Revenue (${range})`} value={fmtGBP(salesKPIs?.revenueMTD ?? 0)}
+            delta={salesKPIs?.revenueDelta ?? undefined}
+            deltaUp={(salesKPIs?.revenueDelta ?? 0) >= 0}
+            deltaLabel={comparePeriodLabel(range)}
+            sparkData={sparkRev} sparkColor="#6366f1" />
+          <KpiCard icon={ShoppingCart} iconColor="#7c3aed" iconBg="#ede9fe"
+            label={`Orders (${range})`} value={fmtNum(salesKPIs?.ordersMTD ?? 0)}
+            delta={salesKPIs?.ordersDelta ?? undefined}
+            deltaUp={(salesKPIs?.ordersDelta ?? 0) >= 0}
+            deltaLabel={comparePeriodLabel(range)}
+            sparkData={sparkOrd} sparkColor="#8b5cf6" />
+          <KpiCard icon={CreditCard} iconColor="#0891b2" iconBg="#cffafe"
+            label="Avg. Order Value" value={fmtGBP(salesKPIs?.aov ?? 0)}
+            footer={`${fmtNum(salesKPIs?.ordersMTD ?? 0)} orders`} />
+          <KpiCard icon={TrendingUp} iconColor="#059669" iconBg="#d1fae5"
+            label="Sell-Through %" value={salesKPIs ? salesKPIs.sellThrough.toFixed(1) : "—"} unit="%"
+            footer="current month" />
+          <KpiCard icon={Activity} iconColor="#db2777" iconBg="#fce7f3"
+            label="Refund rate" value={salesKPIs ? `${salesKPIs.refundRate}%` : "—"}
+            footer={salesKPIs ? `${fmtNum(salesKPIs.pendingOrders)} pending fulfillment` : "—"} />
+        </div>
+      )}
+
+      {/* Trend chart + Channel donut */}
+      <div className="grid grid-cols-3 gap-3.5">
+        <Card className="col-span-2">
+          <CardHeader className="pb-2 pt-4 px-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <h3 className="text-sm font-semibold">Revenue trend
+                  <span className="text-muted-foreground font-normal ml-1.5">{bounds.label}</span>
+                </h3>
+                <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                  <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-0.5 bg-indigo-500 rounded" />Revenue</span>
+                  <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-0.5 bg-violet-400 rounded border-t border-dashed" />Orders</span>
+                </div>
+              </div>
+              <button className="text-muted-foreground hover:text-foreground"><MoreHorizontal size={14} /></button>
+            </div>
+          </CardHeader>
+          <CardContent className="px-2 pb-3">
+            {trendLoading ? (
+              <div className="w-full h-[220px] flex flex-col gap-2 px-2 pt-2 pb-0">
+                <div className="flex-1 bg-muted animate-pulse rounded-md" />
+                <div className="flex justify-between gap-6 h-3">
+                  {Array.from({ length: 6 }).map((_, i) => (
+                    <div key={i} className="flex-1 bg-muted animate-pulse rounded" />
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height={220}>
+                <ComposedChart data={trendData ?? []} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="trendGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#6366f1" stopOpacity={0.18} />
+                      <stop offset="100%" stopColor="#6366f1" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
+                  <XAxis dataKey="label" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} minTickGap={40} axisLine={false} tickLine={false} />
+                  <YAxis yAxisId="left" tickFormatter={fmtAxisGBP} tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} width={40} />
+                  <YAxis yAxisId="right" orientation="right" hide />
+                  <Tooltip content={<TrendTooltip />} />
+                  <Area yAxisId="left" type="monotone" dataKey="revenue" fill="url(#trendGrad)" stroke="#6366f1" strokeWidth={2} dot={false} isAnimationActive={false} />
+                  <Line yAxisId="right" type="monotone" dataKey="orders" stroke="#8b5cf6" strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2 pt-4 px-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold">Sales by channel</h3>
+              <span className="text-xs text-muted-foreground">
+                {channelLoading ? <span className="inline-block w-14 h-3 bg-muted animate-pulse rounded" /> : fmtGBP(totalChannelRevenue)}
+              </span>
+            </div>
+          </CardHeader>
+          <CardContent className="px-4 pb-4">
+            {channelLoading ? (
+              <div className="flex items-center gap-4">
+                <div className="w-[130px] h-[130px] rounded-full bg-muted animate-pulse shrink-0" />
+                <div className="flex-1 space-y-2.5">
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <div className="w-2 h-2 rounded-sm bg-muted animate-pulse shrink-0" />
+                      <div className="flex-1 h-2.5 bg-muted animate-pulse rounded" />
+                      <div className="w-12 h-2.5 bg-muted animate-pulse rounded" />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <DonutChart
+                data={(channelData ?? []).map(c => ({ name: c.name, value: c.revenue, color: c.color, formatted: fmtGBP(c.revenue) }))}
+                centerLabel="Total" centerValue={fmtGBP(totalChannelRevenue)}
+                size={130} />
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Top products + Collections + Customers */}
+      <div className="grid grid-cols-5 gap-3.5">
+        <Card className="col-span-3">
+          <CardHeader className="pb-2 pt-4 px-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold">Top selling products
+                <span className="text-muted-foreground font-normal ml-1.5">by revenue · {range}</span>
+              </h3>
+              <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" onClick={() => navigate("/products")}>
+                View all <ChevronRight size={11} />
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="p-0">
+            {productsLoading ? (
+              <TopProductsSkeleton />
+            ) : productsError ? (
+              <div className="px-4 py-6 text-center text-xs text-muted-foreground">
+                Failed to load products
+              </div>
+            ) : !liveProducts?.length ? (
+              <div className="px-4 py-8 text-center">
+                <Package size={28} className="mx-auto mb-2 text-muted-foreground/40" />
+                <p className="text-xs text-muted-foreground">No product data available</p>
+              </div>
+            ) : (
+              liveProducts.map((p, i) => (
+                <div key={p.product_id} className="flex items-center gap-3 px-4 py-2.5 border-t first:border-t-0 hover:bg-muted/40 transition-colors">
+                  <div className="w-8 h-8 rounded-md bg-muted flex items-center justify-center shrink-0">
+                    <Package size={14} className="text-muted-foreground" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium truncate">{p.name}</div>
+                    <div className="text-xs text-muted-foreground">{p.vendor} · <span className="font-mono">{p.sku}</span></div>
+                  </div>
+                  <div className="text-right shrink-0 w-20">
+                    <div className="text-sm font-semibold">{fmtGBP(p.revenue)}</div>
+                    <div className="text-xs text-muted-foreground">{p.units} units</div>
+                  </div>
+                  <div className="w-[70px] shrink-0">
+                    <Sparkline
+                      data={Array.from({ length: 12 }, (_, k) => 50 + Math.sin(i + k * 0.7) * 25 + (p.trend > 0 ? k : -k) * 2)}
+                      color={p.trend > 0 ? "#10b981" : "#ef4444"} />
+                  </div>
+                  <Badge variant="outline" className={cn("text-[10px] px-1.5 py-0 shrink-0 gap-0.5",
+                    p.trend > 0
+                      ? "text-emerald-600 border-emerald-200 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-800 dark:text-emerald-400"
+                      : "text-red-500 border-red-200 bg-red-50 dark:bg-red-950/30 dark:border-red-800 dark:text-red-400")}>
+                    {p.trend > 0 ? <ArrowUp size={8} strokeWidth={2.5} /> : <ArrowDown size={8} strokeWidth={2.5} />}
+                    {Math.abs(p.trend)}%
+                  </Badge>
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
+
+        <div className="col-span-2 flex flex-col gap-3.5">
+          <Card className="flex-1">
+            <CardHeader className="pb-2 pt-4 px-4">
+              <h3 className="text-sm font-semibold">Sales by collection
+                <span className="text-muted-foreground font-normal ml-1.5">{bounds.label}</span>
+              </h3>
+            </CardHeader>
+            <CardContent className="px-4 pb-4 space-y-2">
+              {collectionsLoading ? (
+                Array.from({ length: 5 }).map((_, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <div className="w-20 h-2.5 bg-muted animate-pulse rounded" />
+                    <div className="flex-1 h-1.5 bg-muted animate-pulse rounded-full" />
+                    <div className="w-14 h-2.5 bg-muted animate-pulse rounded" />
+                  </div>
+                ))
+              ) : !collectionData?.length ? (
+                <p className="text-xs text-muted-foreground py-4 text-center">No collection data</p>
+              ) : (() => {
+                const max = Math.max(...collectionData.map(c => c.revenue));
+                return collectionData.map(c => (
+                  <div key={c.name} className="flex items-center gap-2 text-xs">
+                    <span className="w-20 text-muted-foreground truncate">{c.name}</span>
+                    <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                      <div className="h-full rounded-full" style={{ width: `${(c.revenue / max) * 100}%`, background: c.color }} />
+                    </div>
+                    <span className="w-14 text-right font-medium tabular-nums">{fmtGBP(c.revenue)}</span>
+                  </div>
+                ));
+              })()}
+            </CardContent>
+          </Card>
+
+          <Card className="flex-1">
+            <CardHeader className="pb-2 pt-4 px-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold">Orders summary</h3>
+                <span className="text-xs text-muted-foreground">MTD</span>
+              </div>
+            </CardHeader>
+            <CardContent className="px-4 pb-4">
+              {kpisLoading ? (
+                <div className="space-y-3">
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <div key={i} className="flex items-center justify-between">
+                      <div className="h-2.5 bg-muted animate-pulse rounded w-24" />
+                      <div className="h-2.5 bg-muted animate-pulse rounded w-12" />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-2.5">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-muted-foreground">Total orders</span>
+                      <span className="font-semibold tabular-nums">{fmtNum(salesKPIs?.ordersMTD ?? 0)}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-muted-foreground">Pending fulfillment</span>
+                      <span className="font-semibold tabular-nums text-amber-600">{fmtNum(salesKPIs?.pendingOrders ?? 0)}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-muted-foreground">Avg. order value</span>
+                      <span className="font-semibold tabular-nums">{fmtGBP(salesKPIs?.aov ?? 0)}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-muted-foreground">Refund rate</span>
+                      <span className="font-semibold tabular-nums">{salesKPIs?.refundRate ?? 0}%</span>
+                    </div>
+                  </div>
+                  <div className="mt-3 h-1 bg-muted rounded-full overflow-hidden">
+                    {salesKPIs && salesKPIs.ordersMTD > 0 && (
+                      <div className="h-full rounded-full bg-amber-400 transition-all"
+                        style={{ width: `${Math.min(100, (salesKPIs.pendingOrders / salesKPIs.ordersMTD) * 100)}%` }} />
+                    )}
+                  </div>
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    {salesKPIs && salesKPIs.ordersMTD > 0
+                      ? `${Math.round((salesKPIs.pendingOrders / salesKPIs.ordersMTD) * 100)}% awaiting fulfillment`
+                      : "No orders this month"}
+                  </p>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+
+      {/* Channel performance table */}
+      <Card>
+        <CardHeader className="pb-2 pt-4 px-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold">Channel performance</h3>
+            <Button size="sm" variant="ghost" className="h-7 text-xs">Manage channels</Button>
+          </div>
+        </CardHeader>
+        <CardContent className="p-0">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b">
+                {["Channel","Revenue","Orders","AOV","Share","Trend (14d)",""].map((h, i) => (
+                  <th key={i} className={cn("px-4 py-2.5 font-medium text-muted-foreground text-left",
+                    i >= 1 && i <= 4 && "text-right")}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {channelLoading ? (
+                Array.from({ length: 4 }).map((_, i) => (
+                  <tr key={i} className="border-b last:border-b-0">
+                    <td className="px-4 py-2.5">
+                      <div className="flex items-center gap-2">
+                        <div className="w-6 h-6 rounded-md bg-muted animate-pulse shrink-0" />
+                        <div className="w-24 h-3 bg-muted animate-pulse rounded" />
+                      </div>
+                    </td>
+                    {Array.from({ length: 5 }).map((_, j) => (
+                      <td key={j} className="px-4 py-2.5 text-right">
+                        <div className="h-3 bg-muted animate-pulse rounded w-16 ml-auto" />
+                      </td>
+                    ))}
+                    <td className="px-4 py-2.5">
+                      <div className="w-[70px] h-6 bg-muted animate-pulse rounded" />
+                    </td>
+                    <td />
+                  </tr>
+                ))
+              ) : !channelData?.length ? (
+                <tr>
+                  <td colSpan={7} className="px-4 py-6 text-center text-muted-foreground">No channel data available</td>
+                </tr>
+              ) : (
+                channelData.map(c => (
+                  <tr key={c.key} className="border-b last:border-b-0 hover:bg-muted/40 transition-colors">
+                    <td className="px-4 py-2.5">
+                      <div className="flex items-center gap-2">
+                        <span className="w-6 h-6 rounded-md flex items-center justify-center" style={{ background: c.color + "22", color: c.color }}>
+                          <span className="text-[9px] font-bold">{c.name[0]}</span>
+                        </span>
+                        <span className="font-medium">{c.name}</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-2.5 text-right font-medium tabular-nums">{fmtGBP(c.revenue)}</td>
+                    <td className="px-4 py-2.5 text-right text-muted-foreground tabular-nums">{fmtNum(c.orders)}</td>
+                    <td className="px-4 py-2.5 text-right text-muted-foreground tabular-nums">{fmtGBP(c.aov)}</td>
+                    <td className="px-4 py-2.5 text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        <div className="w-14 h-1 bg-muted rounded-full overflow-hidden">
+                          <div className="h-full rounded-full" style={{ width: `${c.share}%`, background: c.color }} />
+                        </div>
+                        <span className="tabular-nums w-9 text-right">{c.share}%</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <Sparkline data={c.dailyRevenue} color={c.color} />
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <button className="text-muted-foreground hover:text-foreground"><MoreHorizontal size={14} /></button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// ─── Inventory section ───────────────────────────────────────────────────────
+
+function KpiSkeleton() {
+  return (
+    <Card><CardContent className="p-4 space-y-2">
+      <div className="h-3 bg-muted animate-pulse rounded w-20" />
+      <div className="h-6 bg-muted animate-pulse rounded w-28" />
+      <div className="h-2.5 bg-muted animate-pulse rounded w-24" />
+    </CardContent></Card>
+  );
+}
+
+function RowSkeleton({ cols = 5 }: { cols?: number }) {
+  return (
+    <tr className="border-b last:border-b-0">
+      {Array.from({ length: cols }).map((_, i) => (
+        <td key={i} className="px-4 py-2.5">
+          <div className="h-3 bg-muted animate-pulse rounded" style={{ width: i === 0 ? "80%" : "60%" }} />
+        </td>
+      ))}
+    </tr>
+  );
+}
+
+function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; syncing: boolean }) {
+  const navigate = useNavigate();
+  const { data, isLoading } = useInventoryDashboard();
+
+  const onHand     = data?.kpis.onHand ?? 0;
+  const stockValue = data?.stockValue  ?? 0;
+  const oos        = data?.kpis.outOfStock ?? 0;
+  const winners    = data?.kpis.winners ?? 0;
+  const losersCount = data?.kpis.losers ?? 0;
+  const sparkInv   = Array.from({ length: 14 }, (_, i) => Math.max(0, onHand - i * 80 + Math.sin(i) * 200));
+  const totalCategoryUnits = data?.categories.reduce((s, c) => s + c.units, 0) ?? 0;
+
+  return (
+    <div className="space-y-3.5">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <span className="text-[10px] font-semibold uppercase tracking-widest px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">Inventory</span>
+          <h2 className="text-base font-semibold">Inventory health</h2>
+          <span className="text-xs text-muted-foreground">Across all stores · live</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" onClick={onSyncStart} disabled={syncing}>
+            {syncing ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+            {syncing ? "Syncing…" : "Sync now"}
+          </Button>
+          <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5"><Filter size={12} /> Filter</Button>
+        </div>
+      </div>
+
+      {/* KPI grid */}
+      {isLoading ? (
+        <div className="grid grid-cols-5 gap-3.5">
+          {Array.from({ length: 5 }).map((_, i) => <KpiSkeleton key={i} />)}
+        </div>
+      ) : (
+        <div className="grid grid-cols-5 gap-3.5">
+          <KpiCard icon={Boxes} iconColor="#4f46e5" iconBg="#eef2ff"
+            label="On-hand units" value={fmtNum(onHand)}
+            sparkData={sparkInv} sparkColor="#6366f1" />
+          <KpiCard icon={PoundSterling} iconColor="#059669" iconBg="#d1fae5"
+            label="Stock value" value={fmtGBP(stockValue)}
+            footer="at current prices" />
+          <KpiCard icon={XCircle} iconColor="#dc2626" iconBg="#fee2e2"
+            label="Out of stock" value={fmtNum(oos)}
+            footer="needs replenishment" />
+          <KpiCard icon={Award} iconColor="#059669" iconBg="#d1fae5"
+            label="Winners" value={fmtNum(winners)}
+            footer={winners + losersCount > 0 ? `${Math.round(winners / (winners + losersCount) * 100)}% of active SKUs` : "—"} />
+          <KpiCard icon={TrendingDown} iconColor="#dc2626" iconBg="#fee2e2"
+            label="Losers" value={fmtNum(losersCount)}
+            footer=">20 days on shelf" />
+        </div>
+      )}
+
+      {/* Aging chart + Category donut */}
+      <div className="grid grid-cols-3 gap-3.5">
+        <Card className="col-span-2">
+          <CardHeader className="pb-2 pt-4 px-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold">Stock aging
+                <span className="text-muted-foreground font-normal ml-1.5">days on shelf · all SKUs</span>
+              </h3>
+              <Button size="sm" variant="ghost" className="h-7 text-xs">View report</Button>
+            </div>
+          </CardHeader>
+          <CardContent className="px-2 pb-3">
+            {isLoading ? (
+              <div className="w-full h-[160px] px-2 pt-2 flex items-end gap-3">
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <div key={i} className="flex-1 bg-muted animate-pulse rounded-t" style={{ height: `${40 + i * 18}%` }} />
+                ))}
+              </div>
+            ) : (
+              <>
+                <ResponsiveContainer width="100%" height={160}>
+                  <BarChart data={data?.agingBuckets ?? []} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
+                    <XAxis dataKey="label" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
+                    <YAxis tickFormatter={v => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)}
+                      tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} width={36} />
+                    <Bar dataKey="units" radius={[3, 3, 0, 0]} isAnimationActive={false}>
+                      {(data?.agingBuckets ?? []).map((b, i) => <Cell key={i} fill={b.color} />)}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 px-2">
+                  {(data?.agingBuckets ?? []).map((b, i) => (
+                    <div key={i} className="flex items-center gap-1.5 text-xs">
+                      <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: b.color }} />
+                      <span className="text-muted-foreground">{b.label}</span>
+                      <span className="font-medium tabular-nums">{fmtNum(b.units)}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2 pt-4 px-4">
+            <h3 className="text-sm font-semibold">By category</h3>
+          </CardHeader>
+          <CardContent className="px-4 pb-4">
+            {isLoading ? (
+              <div className="flex items-center gap-4">
+                <div className="w-[120px] h-[120px] rounded-full bg-muted animate-pulse shrink-0" />
+                <div className="flex-1 space-y-2">
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <div className="w-2 h-2 rounded-sm bg-muted animate-pulse shrink-0" />
+                      <div className="flex-1 h-2.5 bg-muted animate-pulse rounded" />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <DonutChart
+                data={(data?.categories ?? []).map(c => ({ name: c.name, value: c.units, color: c.color, formatted: fmtNum(c.units) }))}
+                centerLabel="Units" centerValue={fmtNum(totalCategoryUnits)}
+                size={120} />
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Central WMS pool */}
+      <Card>
+        <CardHeader className="pb-1 pt-4 px-4">
+          <div className="flex items-center gap-2">
+            <Warehouse size={14} className="text-muted-foreground" />
+            <h3 className="text-sm font-semibold">Central WMS pool</h3>
+            <span className="text-xs text-muted-foreground">Master pool feeding all stores</span>
+          </div>
+        </CardHeader>
+        <CardContent className="p-3">
+          {isLoading ? (
+            <div className="grid grid-cols-6 gap-3">
+              {Array.from({ length: 6 }).map((_, i) => <KpiSkeleton key={i} />)}
+            </div>
+          ) : (
+            <div className="grid grid-cols-6 gap-3">
+              <KpiCard label="Central SKUs"    value={fmtNum(data?.wmsPool.totalSKUs ?? 0)}
+                icon={Layers}        iconColor="#4f46e5" iconBg="#eef2ff" footer="Master variants" />
+              <KpiCard label="Total available" value={fmtNum(data?.wmsPool.totalAvailable ?? 0)}
+                icon={ShoppingCart}  iconColor="#059669" iconBg="#d1fae5" footer="Sellable" />
+              <KpiCard label="Reserved"        value={fmtNum(data?.wmsPool.totalReserved ?? 0)}
+                icon={Clock}         iconColor="#d97706" iconBg="#fef3c7" />
+              <KpiCard label="Net available"   value={fmtNum(data?.wmsPool.totalNetAvailable ?? 0)}
+                icon={TrendingUp}    iconColor="#7c3aed" iconBg="#ede9fe" />
+              <KpiCard label="In transit"      value="—"
+                icon={Truck}         iconColor="#0891b2" iconBg="#cffafe" />
+              <KpiCard label="Central value"   value={fmtGBP(data?.wmsPool.totalValue ?? 0)}
+                icon={PoundSterling} iconColor="#059669" iconBg="#d1fae5" footer="At base prices" />
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Losers + Replenishment + Expiry */}
+      <div className="grid grid-cols-3 gap-3.5">
+        <Card className="col-span-2">
+          <CardHeader className="pb-2 pt-4 px-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <TrendingDown size={14} className="text-red-500" />
+                <h3 className="text-sm font-semibold">Shelf life of losers</h3>
+                <span className="text-xs text-muted-foreground">{data?.loserProducts.length ?? 0} products</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => navigate("/campaigns")}>Mark for promo</Button>
+                <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" onClick={() => navigate("/products")}><Eye size={12} /> Review</Button>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="p-0">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b">
+                  {["Product","Vendor","Collection","Stock","Days old","Price",""].map((h, i) => (
+                    <th key={i} className={cn("px-4 py-2 font-medium text-muted-foreground text-left",
+                      i >= 3 && i <= 5 && "text-right")}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {isLoading ? (
+                  Array.from({ length: 6 }).map((_, i) => <RowSkeleton key={i} cols={7} />)
+                ) : !data?.loserProducts.length ? (
+                  <tr><td colSpan={7} className="px-4 py-6 text-center text-muted-foreground">No slow-moving products</td></tr>
+                ) : (
+                  data.loserProducts.map(l => (
+                    <tr key={l.product_id} className="border-b last:border-b-0 hover:bg-muted/40 transition-colors">
+                      <td className="px-4 py-2.5">
+                        <div className="font-medium">{l.name}</div>
+                        <div className="font-mono text-muted-foreground text-[10px]">{l.sku}</div>
+                      </td>
+                      <td className="px-4 py-2.5 text-muted-foreground">{l.vendor}</td>
+                      <td className="px-4 py-2.5">
+                        <Badge variant="outline" className="text-[10px] px-1.5 py-0">{l.collection}</Badge>
+                      </td>
+                      <td className="px-4 py-2.5 text-right tabular-nums">{fmtNum(l.stock)}</td>
+                      <td className="px-4 py-2.5 text-right">
+                        <Badge variant="outline" className={cn("text-[10px] px-1.5 py-0",
+                          l.days > 60
+                            ? "text-red-500 border-red-200 bg-red-50 dark:bg-red-950/30 dark:border-red-800 dark:text-red-400"
+                            : "text-amber-600 border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-400")}>
+                          {l.days}d
+                        </Badge>
+                      </td>
+                      <td className="px-4 py-2.5 text-right tabular-nums">
+                        {l.price != null ? fmtGBP(l.price) : "—"}
+                        {l.compare != null && l.compare > (l.price ?? 0) && (
+                          <span className="text-muted-foreground line-through ml-1">{fmtGBP(l.compare)}</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <button className="text-muted-foreground hover:text-foreground"><MoreHorizontal size={14} /></button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </CardContent>
+        </Card>
+
+        <div className="flex flex-col gap-3.5">
+          <Card className="flex-1">
+            <CardHeader className="pb-2 pt-4 px-4">
+              <div className="flex items-center gap-2">
+                <Truck size={13} className="text-muted-foreground" />
+                <h3 className="text-sm font-semibold">Replenishment queue</h3>
+                <span className="text-xs text-muted-foreground">{data?.replenishment.length ?? 0}</span>
+              </div>
+            </CardHeader>
+            <CardContent className="p-0">
+              {isLoading ? (
+                Array.from({ length: 4 }).map((_, i) => (
+                  <div key={i} className="flex items-center gap-3 px-4 py-2.5 border-t first:border-t-0">
+                    <div className="w-7 h-7 rounded-md bg-muted animate-pulse shrink-0" />
+                    <div className="flex-1 space-y-1.5">
+                      <div className="h-3 bg-muted animate-pulse rounded w-3/4" />
+                      <div className="h-2.5 bg-muted animate-pulse rounded w-1/2" />
+                    </div>
+                    <div className="w-12 h-4 bg-muted animate-pulse rounded" />
+                  </div>
+                ))
+              ) : !data?.replenishment.length ? (
+                <div className="px-4 py-5 text-center text-xs text-muted-foreground">No items need replenishment</div>
+              ) : (
+                data.replenishment.map(r => (
+                  <div key={r.sku} className="flex items-center gap-3 px-4 py-2.5 border-t first:border-t-0">
+                    <div className="w-7 h-7 rounded-md bg-muted flex items-center justify-center shrink-0">
+                      <Package size={13} className="text-muted-foreground" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-medium truncate">{r.name}</div>
+                      <div className="font-mono text-[10px] text-muted-foreground">{r.sku}</div>
+                    </div>
+                    <Badge variant="outline" className={cn("text-[10px] px-1.5 py-0 shrink-0",
+                      r.urgency === "High"
+                        ? "text-red-500 border-red-200 bg-red-50 dark:bg-red-950/30 dark:border-red-800 dark:text-red-400"
+                        : r.urgency === "Medium"
+                          ? "text-amber-600 border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-400"
+                          : "")}>
+                      {r.urgency}
+                    </Badge>
+                    {r.suggested > 0 && (
+                      <span className="text-xs font-semibold tabular-nums shrink-0">+{r.suggested}</span>
+                    )}
+                  </div>
+                ))
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="flex-1">
+            <CardHeader className="pb-2 pt-4 px-4">
+              <div className="flex items-center gap-2">
+                <Clock size={13} className="text-muted-foreground" />
+                <h3 className="text-sm font-semibold">Expiring within 30 days</h3>
+              </div>
+            </CardHeader>
+            <CardContent className="p-0">
+              {isLoading ? (
+                Array.from({ length: 3 }).map((_, i) => (
+                  <div key={i} className="flex items-center gap-3 px-4 py-2.5 border-t first:border-t-0">
+                    <div className="w-7 h-7 rounded-md bg-muted animate-pulse shrink-0" />
+                    <div className="flex-1 space-y-1.5">
+                      <div className="h-3 bg-muted animate-pulse rounded w-3/4" />
+                      <div className="h-2.5 bg-muted animate-pulse rounded w-1/2" />
+                    </div>
+                    <div className="w-8 h-4 bg-muted animate-pulse rounded" />
+                  </div>
+                ))
+              ) : !data?.expiringSoon.length ? (
+                <div className="px-4 py-5 text-center text-xs text-muted-foreground">No items expiring soon</div>
+              ) : (
+                data.expiringSoon.map(e => (
+                  <div key={e.sku} className="flex items-center gap-3 px-4 py-2.5 border-t first:border-t-0">
+                    <div className="w-7 h-7 rounded-md bg-amber-50 dark:bg-amber-950/30 flex items-center justify-center shrink-0">
+                      <AlertTriangle size={12} className="text-amber-600" strokeWidth={2} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-medium truncate">{e.name}</div>
+                      <div className="font-mono text-[10px] text-muted-foreground">{e.sku}</div>
+                    </div>
+                    <span className="text-xs font-medium shrink-0">{e.units}u.</span>
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-amber-600 border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-400 shrink-0">
+                      {e.days}d
+                    </Badge>
+                  </div>
+                ))
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Page ────────────────────────────────────────────────────────────────────
+
+type SyncLogRow = { current_stage: string | null; records_synced: number; status: string } | null;
+
+export default function Dashboard() {
+  const [showBanner, setShowBanner] = useState(true);
+  const [range, setRange]           = useState<DateRangeKey>("MTD");
+  const bounds                      = getDateBounds(range);
+  const queryClient                 = useQueryClient();
+  const { data: inventoryData }     = useInventoryDashboard();
+  const { data: globalKPIs }        = useSalesKPIs();
+
+  // Real-time sync state — driven by DB, not local React state
+  const [syncLog, setSyncLog]         = useState<SyncLogRow>(null);
+  const [buttonPending, setButtonPending] = useState(false);
+  const pendingTimerRef               = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const didInvalidateRef              = useRef(false);
+
+  const isActivelySyncing = syncLog?.status === "in_progress";
+  // syncing = true while HTTP request is in flight (before DB log appears) OR while DB shows in_progress
+  const syncing = buttonPending || isActivelySyncing;
+
+  const invalidateAll = useCallback(async () => {
+    await queryClient.invalidateQueries({ queryKey: ["sales-kpis"] });
+    await queryClient.invalidateQueries({ queryKey: ["sales-trend"] });
+    await queryClient.invalidateQueries({ queryKey: ["channel-performance"] });
+    await queryClient.invalidateQueries({ queryKey: ["top-products"] });
+    await queryClient.invalidateQueries({ queryKey: ["collection-sales"] });
+    await queryClient.invalidateQueries({ queryKey: ["inventory-dashboard"] });
+  }, [queryClient]);
+
+  // On mount: fetch latest log + subscribe to Realtime push updates
+  useEffect(() => {
+    let alive = true;
+
+    // Initial fetch — shows banner immediately if a sync is already running
+    (supabase as any)
+      .from("shopify_sync_logs")
+      .select("current_stage, records_synced, status")
+      .order("started_at", { ascending: false })
+      .limit(1)
+      .single()
+      .then(({ data }: { data: SyncLogRow }) => {
+        if (alive) setSyncLog(data ?? null);
+      });
+
+    // Realtime subscription — push updates the moment the DB row changes
+    const channel = (supabase as any)
+      .channel("sync-progress-rt")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "shopify_sync_logs" },
+        (payload: { new: SyncLogRow }) => {
+          if (alive) setSyncLog(payload.new ?? null);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      alive = false;
+      (supabase as any).removeChannel(channel);
+    };
+  }, []);
+
+  // When sync completes → invalidate queries once, then let banner linger briefly
+  useEffect(() => {
+    if (syncLog?.status === "in_progress") {
+      didInvalidateRef.current = false; // reset for fresh sync
+      return;
+    }
+    if (
+      (syncLog?.status === "success" || syncLog?.current_stage === "complete") &&
+      !didInvalidateRef.current
+    ) {
+      didInvalidateRef.current = true;
+      invalidateAll();
+    }
+  }, [syncLog?.status, syncLog?.current_stage, invalidateAll]);
+
+  // Once DB log appears as in_progress, clear the button-pending state
+  useEffect(() => {
+    if (buttonPending && isActivelySyncing) {
+      if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current);
+      setButtonPending(false);
+    }
+  }, [buttonPending, isActivelySyncing]);
+
+  const handleSync = useCallback(async () => {
+    if (syncing) return;
+    setButtonPending(true);
+    didInvalidateRef.current = false;
+    // Fallback: clear pending after 20s if edge function never creates a log
+    pendingTimerRef.current = setTimeout(() => setButtonPending(false), 20_000);
+    try {
+      const { data: conns } = await (supabase as any)
+        .from("shopify_connections")
+        .select("id")
+        .eq("is_active", true);
+      if (conns?.length) {
+        await Promise.all(
+          (conns as { id: string }[]).map(c =>
+            supabase.functions.invoke("shopify-sync", {
+              body: { action: "sync", connection_id: c.id },
+            })
+          )
+        );
+      }
+      // Don't clear buttonPending — Realtime will push the in_progress log which clears it
+    } catch {
+      if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current);
+      setButtonPending(false);
+    }
+  }, [syncing]);
+
+  return (
+    <div className="p-6 space-y-5 max-w-[1600px]">
+      {showBanner && (
+        <AlertStrip
+          onDismiss={() => setShowBanner(false)}
+          oos={inventoryData?.kpis.outOfStock ?? null}
+          winners={inventoryData?.kpis.winners ?? null}
+          pendingOrders={globalKPIs?.pendingOrders ?? null}
+          pendingApprovals={globalKPIs?.pendingApprovals ?? null}
+        />
+      )}
+      {syncing && (
+        <SyncProgressBanner
+          stage={syncLog?.current_stage ?? null}
+          recordsSynced={syncLog?.records_synced ?? 0}
+          status={syncLog?.status ?? "in_progress"}
+        />
+      )}
+      <SalesSection
+        bounds={bounds}
+        range={range}
+        onRangeChange={setRange}
+        onSyncStart={handleSync}
+        syncing={syncing}
+      />
+      <div className="border-t border-dashed" />
+      <InventorySection onSyncStart={handleSync} syncing={syncing} />
+    </div>
+  );
+}

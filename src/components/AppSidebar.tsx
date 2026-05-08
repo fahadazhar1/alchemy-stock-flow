@@ -1,6 +1,7 @@
 import {
   LayoutDashboard, Package, RefreshCw, Brain, Bot, FileText,
-  BarChart3, Truck, CheckSquare, FlaskConical, Clock, Settings, Beaker, Store
+  BarChart3, Truck, CheckSquare, FlaskConical, Clock, Settings, Beaker, Store,
+  ShoppingCart, BarChart2,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
@@ -10,7 +11,9 @@ import {
 } from "@/components/ui/sidebar";
 
 const navItems = [
-  { title: "Dashboard", url: "/", icon: LayoutDashboard },
+  { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
+  { title: "Orders",    url: "/orders",    icon: ShoppingCart },
+  { title: "Reports",   url: "/reports",   icon: BarChart2 },
   { title: "Product Master", url: "/products", icon: Package },
   { title: "Manual Sync", url: "/manual-sync", icon: RefreshCw },
   { title: "AI Co-Pilot", url: "/ai-copilot", icon: Brain },
@@ -50,7 +53,7 @@ export function AppSidebar() {
                   <SidebarMenuButton asChild>
                     <NavLink
                       to={item.url}
-                      end={item.url === "/"}
+                      end
                       className="hover:bg-sidebar-accent/50"
                       activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
                     >

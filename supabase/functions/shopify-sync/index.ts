@@ -154,7 +154,12 @@ async function createOrResumeLog(supabase: any, connectionId: string, storeId: s
   if (failed) {
     const { data: resumed } = await supabase
       .from("shopify_sync_logs")
-      .update({ status: "in_progress", error_message: null, metadata: { heartbeat_at: new Date().toISOString() } })
+      .update({
+        status: "in_progress",
+        error_message: null,
+        // Preserve existing metadata (collection_map etc.) when resuming
+        metadata: { ...(failed.metadata ?? {}), heartbeat_at: new Date().toISOString() },
+      })
       .eq("id", failed.id)
       .select("*")
       .single();
@@ -174,11 +179,15 @@ async function createOrResumeLog(supabase: any, connectionId: string, storeId: s
   return created;
 }
 
-async function updateLog(supabase: any, logId: string, patch: Record<string, unknown>) {
-  await supabase.from("shopify_sync_logs").update({
-    ...patch,
-    metadata: { heartbeat_at: new Date().toISOString() },
-  }).eq("id", logId);
+async function updateLog(supabase: any, logId: string, patch: Record<string, unknown>, currentMeta?: Record<string, unknown>) {
+  const { metadata: patchMeta, ...rest } = patch as Record<string, unknown>;
+  // Merge metadata: preserve existing keys (especially collection_map) across invocations
+  const merged: Record<string, unknown> = {
+    ...(currentMeta ?? {}),
+    ...((patchMeta as Record<string, unknown>) ?? {}),
+    heartbeat_at: new Date().toISOString(),
+  };
+  await supabase.from("shopify_sync_logs").update({ ...rest, metadata: merged }).eq("id", logId);
 }
 
 // ------------ Self-invoke helper (fixed: awaited with retry) ------------
@@ -223,6 +232,18 @@ async function syncProducts(supabase: any, conn: any, log: any, totalRef: { n: n
 
   for (const p of products) {
     const productSku = p.variants?.[0]?.sku || `shopify-${p.id}`;
+
+    // Upsert vendor
+    let vendorId: string | null = null;
+    if (p.vendor) {
+      const { data: vendor } = await supabase
+        .from("vendors")
+        .upsert({ name: p.vendor }, { onConflict: "name" })
+        .select("id")
+        .single();
+      vendorId = vendor?.id ?? null;
+    }
+
     const productRow = {
       name: p.title,
       sku: productSku,
@@ -231,6 +252,7 @@ async function syncProducts(supabase: any, conn: any, log: any, totalRef: { n: n
       status: p.status || "active",
       shopify_product_id: String(p.id),
       store_id: conn.store_id,
+      ...(vendorId ? { vendor_id: vendorId } : {}),
     };
     const { data: existing } = await supabase
       .from("products").select("id").eq("shopify_product_id", String(p.id)).maybeSingle();
@@ -290,9 +312,10 @@ async function syncProducts(supabase: any, conn: any, log: any, totalRef: { n: n
 async function syncCollections(supabase: any, conn: any, log: any, totalRef: { n: number }): Promise<boolean> {
   const domain = normalizeDomain(conn.shop_domain);
 
-  // Phase 1: sync collection metadata (custom + smart), one page per invocation
   // Cursor format: "meta:custom:PAGE_INFO", "meta:smart:PAGE_INFO", "collects:PAGE_INFO", or null
   const savedCursor: string | null = log.cursor ?? null;
+  // collection_map persists across invocations in log.metadata: { shopifyCollectionId → dbCollectionId }
+  const existingMap: Record<string, string> = (log.metadata?.collection_map ?? {}) as Record<string, string>;
 
   // --- Phase 1a: custom_collections metadata ---
   if (!savedCursor || savedCursor.startsWith("meta:custom:")) {
@@ -301,21 +324,32 @@ async function syncCollections(supabase: any, conn: any, log: any, totalRef: { n
       ? `/custom_collections.json?limit=50&page_info=${encodeURIComponent(pageInfo)}`
       : `/custom_collections.json?limit=50`;
     const res = await shopifyFetch(domain, conn.access_token, path);
+    const pageMap: Record<string, string> = {};
     if (res.ok) {
       const json = await res.json();
       for (const c of json.custom_collections ?? []) {
-        await upsertCollection(supabase, c);
+        const dbId = await upsertCollection(supabase, c);
+        if (dbId) pageMap[String(c.id)] = dbId;
         totalRef.n++;
       }
       const link = res.headers.get("Link") ?? res.headers.get("link");
       const next = parseNextPageInfo(link);
+      const merged = { ...existingMap, ...pageMap };
       if (next) {
-        await updateLog(supabase, log.id, { current_stage: "collections", cursor: `meta:custom:${next}`, records_synced: totalRef.n });
+        await updateLog(supabase, log.id,
+          { current_stage: "collections", cursor: `meta:custom:${next}`, records_synced: totalRef.n, metadata: { collection_map: merged } },
+          log.metadata);
         return true;
       }
+      // All custom pages done — advance to smart
+      await updateLog(supabase, log.id,
+        { current_stage: "collections", cursor: "meta:smart:", records_synced: totalRef.n, metadata: { collection_map: merged } },
+        log.metadata);
+    } else {
+      await updateLog(supabase, log.id,
+        { current_stage: "collections", cursor: "meta:smart:", records_synced: totalRef.n },
+        log.metadata);
     }
-    // custom done or failed — move to smart
-    await updateLog(supabase, log.id, { current_stage: "collections", cursor: "meta:smart:", records_synced: totalRef.n });
     return true;
   }
 
@@ -326,25 +360,37 @@ async function syncCollections(supabase: any, conn: any, log: any, totalRef: { n
       ? `/smart_collections.json?limit=50&page_info=${encodeURIComponent(pageInfo)}`
       : `/smart_collections.json?limit=50`;
     const res = await shopifyFetch(domain, conn.access_token, path);
+    const pageMap: Record<string, string> = {};
     if (res.ok) {
       const json = await res.json();
       for (const c of json.smart_collections ?? []) {
-        await upsertCollection(supabase, c);
+        const dbId = await upsertCollection(supabase, c);
+        if (dbId) pageMap[String(c.id)] = dbId;
         totalRef.n++;
       }
       const link = res.headers.get("Link") ?? res.headers.get("link");
       const next = parseNextPageInfo(link);
+      const merged = { ...existingMap, ...pageMap };
       if (next) {
-        await updateLog(supabase, log.id, { current_stage: "collections", cursor: `meta:smart:${next}`, records_synced: totalRef.n });
+        await updateLog(supabase, log.id,
+          { current_stage: "collections", cursor: `meta:smart:${next}`, records_synced: totalRef.n, metadata: { collection_map: merged } },
+          log.metadata);
         return true;
       }
+      // All smart pages done — advance to collects
+      await updateLog(supabase, log.id,
+        { current_stage: "collections", cursor: "collects:", records_synced: totalRef.n, metadata: { collection_map: merged } },
+        log.metadata);
+    } else {
+      await updateLog(supabase, log.id,
+        { current_stage: "collections", cursor: "collects:", records_synced: totalRef.n },
+        log.metadata);
     }
-    // smart done — move to collects phase
-    await updateLog(supabase, log.id, { current_stage: "collections", cursor: "collects:", records_synced: totalRef.n });
     return true;
   }
 
-  // --- Phase 2: bulk collects (product↔collection links) via /collects.json ---
+  // --- Phase 2: product↔collection links via /collects.json ---
+  // Uses collection_map from metadata — no shopify_collection_id column required
   if (savedCursor.startsWith("collects:")) {
     const pageInfo = savedCursor.slice("collects:".length) || null;
     const path = pageInfo
@@ -354,39 +400,66 @@ async function syncCollections(supabase: any, conn: any, log: any, totalRef: { n
     if (res.ok) {
       const json = await res.json();
       for (const collect of json.collects ?? []) {
+        // Look up DB collection ID from the map built in phases 1a/1b — no column query needed
+        const collId = existingMap[String(collect.collection_id)] ?? null;
+        if (!collId) continue;
         const { data: prod } = await supabase.from("products").select("id")
           .eq("shopify_product_id", String(collect.product_id)).maybeSingle();
-        const { data: coll } = await supabase.from("collections").select("id")
-          .eq("shopify_collection_id", String(collect.collection_id)).maybeSingle();
-        if (prod?.id && coll?.id) {
-          await supabase.from("product_collections")
-            .upsert({ product_id: prod.id, collection_id: coll.id }, { onConflict: "product_id,collection_id" });
-          totalRef.n++;
-        }
+        if (!prod?.id) continue;
+        // Populate direct FK on products — works with base schema, no extra migration needed
+        await supabase.from("products").update({ collection_id: collId }).eq("id", prod.id);
+        // Also try junction table if migration has been applied (silently ignored if not)
+        await supabase.from("product_collections")
+          .upsert({ product_id: prod.id, collection_id: collId }, { onConflict: "product_id,collection_id" });
+        totalRef.n++;
       }
       const link = res.headers.get("Link") ?? res.headers.get("link");
       const next = parseNextPageInfo(link);
       if (next) {
-        await updateLog(supabase, log.id, { current_stage: "collections", cursor: `collects:${next}`, records_synced: totalRef.n });
+        await updateLog(supabase, log.id,
+          { current_stage: "collections", cursor: `collects:${next}`, records_synced: totalRef.n },
+          log.metadata);
         return true;
       }
     }
-    // collects done
-    await updateLog(supabase, log.id, { current_stage: "collections", cursor: null, records_synced: totalRef.n });
+    await updateLog(supabase, log.id,
+      { current_stage: "collections", cursor: null, records_synced: totalRef.n },
+      log.metadata);
     return false;
   }
 
   return false;
 }
 
-async function upsertCollection(supabase: any, c: any) {
+async function upsertCollection(supabase: any, c: any): Promise<string | null> {
+  const shopifyId = String(c.id);
+  // Try to find by shopify_collection_id (available if migration 9 has been applied)
   const { data: existing } = await supabase
-    .from("collections").select("id").eq("shopify_collection_id", String(c.id)).maybeSingle();
+    .from("collections").select("id").eq("shopify_collection_id", shopifyId).maybeSingle();
   if (existing?.id) {
     await supabase.from("collections").update({ name: c.title }).eq("id", existing.id);
-  } else {
-    await supabase.from("collections").insert({ name: c.title, shopify_collection_id: String(c.id) });
+    return existing.id;
   }
+  // Find by name (works without shopify_collection_id column)
+  const { data: byName } = await supabase
+    .from("collections").select("id").eq("name", c.title).maybeSingle();
+  if (byName?.id) {
+    // Try to store shopify_collection_id — silently ignored if column doesn't exist
+    await supabase.from("collections").update({ shopify_collection_id: shopifyId }).eq("id", byName.id);
+    return byName.id;
+  }
+  // Insert — try with shopify_collection_id first; if that fails, insert name-only
+  const withId = await supabase
+    .from("collections")
+    .insert({ name: c.title, shopify_collection_id: shopifyId })
+    .select("id").single();
+  if (!withId.error) return withId.data?.id ?? null;
+  // shopify_collection_id column doesn't exist yet — insert name only
+  const { data: ins } = await supabase
+    .from("collections")
+    .insert({ name: c.title })
+    .select("id").single();
+  return ins?.id ?? null;
 }
 
 // FIXED: single page per invocation (was: all pages in one invocation)
@@ -507,6 +580,61 @@ async function syncInventory(supabase: any, conn: any, log: any, totalRef: { n: 
   return variants.length === 50;
 }
 
+// ------------ Velocity metrics refresh ------------
+async function refreshVelocityMetrics(supabase: any, storeId: string | null) {
+  try {
+    const now = new Date();
+    const windows = [
+      { col: "units_sold_7d",  days: 7  },
+      { col: "units_sold_14d", days: 14 },
+      { col: "units_sold_21d", days: 21 },
+      { col: "units_sold_30d", days: 30 },
+    ];
+
+    // Get all products for this store that have order_items
+    const productQ = storeId
+      ? supabase.from("products").select("id").eq("store_id", storeId)
+      : supabase.from("products").select("id");
+    const { data: products } = await productQ;
+    if (!products?.length) return;
+
+    for (const { col, days } of windows) {
+      const cutoff = new Date(now.getTime() - days * 86_400_000).toISOString();
+      // For each window, sum quantities from order_items joined with non-cancelled orders
+      const { data: agg } = await supabase.rpc("calc_velocity_window", {
+        p_cutoff: cutoff,
+        p_store_id: storeId,
+      }).maybeSingle();
+
+      // Fallback: client-side aggregation if RPC doesn't exist
+      if (!agg) {
+        let q = (supabase as any)
+          .from("order_items")
+          .select("product_id, quantity, orders!inner(cancelled_at, shopify_created_at)")
+          .gte("orders.shopify_created_at", cutoff)
+          .is("orders.cancelled_at", null);
+        if (storeId) q = q.eq("store_id", storeId);
+        const { data: items } = await q;
+
+        const map = new Map<string, number>();
+        for (const item of (items ?? []) as any[]) {
+          const pid = item.product_id as string;
+          map.set(pid, (map.get(pid) ?? 0) + Number(item.quantity ?? 0));
+        }
+
+        for (const [productId, units] of map.entries()) {
+          await supabase.from("product_velocity_metrics").upsert(
+            { product_id: productId, [col]: units, updated_at: now.toISOString() },
+            { onConflict: "product_id", ignoreDuplicates: false }
+          );
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("refreshVelocityMetrics failed (non-fatal):", e);
+  }
+}
+
 // ------------ Orchestrator ------------
 async function syncShopifyData(supabase: any, connectionId: string) {
   const { data: conn } = await supabase
@@ -553,6 +681,9 @@ async function syncShopifyData(supabase: any, connectionId: string) {
       });
       await triggerContinue(connectionId);
     } else {
+      // All stages done — refresh product_velocity_metrics from order_items
+      await refreshVelocityMetrics(supabase, conn.store_id);
+
       await updateLog(supabase, log.id, {
         status: "success",
         completed_at: new Date().toISOString(),
