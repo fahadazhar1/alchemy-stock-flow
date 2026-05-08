@@ -8,11 +8,9 @@ const corsHeaders = {
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-
 const STAGES = ["products", "collections", "orders", "inventory"] as const;
 type Stage = typeof STAGES[number];
-
-const INVOKE_URL = `${Deno.env.get("SUPABASE_URL")}/functions/v1/shopify-sync`;
+const INVOKE_URL = `${SUPABASE_URL}/functions/v1/shopify-sync`;
 
 function normalizeDomain(d: string) {
   return d.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/+$/, "");
@@ -123,29 +121,38 @@ async function updateLog(supabase: any, logId: string, patch: Record<string, unk
   }).eq("id", logId);
 }
 
-// ------------ Self-invoke helper ------------
-function triggerContinue(connectionId: string) {
-  fetch(INVOKE_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${SERVICE_ROLE}`,
-    },
-    body: JSON.stringify({ action: "continue_sync", connection_id: connectionId }),
-  }).catch((e) => console.error("self-invoke failed:", e));
+// ------------ Self-invoke helper (fixed: awaited with retry) ------------
+async function triggerContinue(connectionId: string) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(INVOKE_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${SERVICE_ROLE}`,
+        },
+        body: JSON.stringify({ action: "continue_sync", connection_id: connectionId }),
+      });
+      if (res.ok) return;
+      console.warn(`self-invoke attempt ${attempt + 1} got status ${res.status}`);
+    } catch (e) {
+      console.error(`self-invoke attempt ${attempt + 1} failed:`, e);
+    }
+    await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+  }
+  console.error("self-invoke failed after 3 attempts — cron will rescue");
 }
 
 // ------------ Stage handlers ------------
 
-// Returns true if more pages remain — caller must self-chain
 async function syncProducts(supabase: any, conn: any, log: any, totalRef: { n: number }): Promise<boolean> {
   const domain = normalizeDomain(conn.shop_domain);
   const pageInfo: string | null = log.current_stage === "products" ? log.cursor : null;
   const page: number = log.current_stage === "products" ? (log.current_page ?? 0) : 0;
 
-  const path = pageInfo
-    ? `/products.json?limit=50&page_info=${encodeURIComponent(pageInfo)}`
-    : `/products.json?limit=50`;
+const path = pageInfo
+  ? `/orders.json?limit=50&page_info=${encodeURIComponent(pageInfo)}`
+  : `/orders.json?limit=50&status=any`;
   const res = await shopifyFetch(domain, conn.access_token, path);
   if (!res.ok) throw new Error(`products [${res.status}]: ${(await res.text()).slice(0, 200)}`);
 
@@ -217,151 +224,194 @@ async function syncProducts(supabase: any, conn: any, log: any, totalRef: { n: n
   return nextPageInfo !== null;
 }
 
-async function syncCollections(supabase: any, conn: any, log: any, totalRef: { n: number }) {
+// FIXED: uses /collects.json bulk endpoint — no nested per-collection API calls
+async function syncCollections(supabase: any, conn: any, log: any, totalRef: { n: number }): Promise<boolean> {
   const domain = normalizeDomain(conn.shop_domain);
 
-  for (const kind of ["custom_collections", "smart_collections"] as const) {
-    let pageInfo: string | null = (log.current_stage === "collections" && log.cursor?.startsWith(kind)) ? log.cursor.slice(kind.length + 1) : null;
-    let page = 0;
-    do {
-      const path = pageInfo
-        ? `/${kind}.json?limit=50&page_info=${encodeURIComponent(pageInfo)}`
-        : `/${kind}.json?limit=50`;
-      const res = await shopifyFetch(domain, conn.access_token, path);
-      if (!res.ok) break;
+  // Phase 1: sync collection metadata (custom + smart), one page per invocation
+  // Cursor format: "meta:custom:PAGE_INFO", "meta:smart:PAGE_INFO", "collects:PAGE_INFO", or null
+  const savedCursor: string | null = log.cursor ?? null;
+
+  // --- Phase 1a: custom_collections metadata ---
+  if (!savedCursor || savedCursor.startsWith("meta:custom:")) {
+    const pageInfo = savedCursor?.startsWith("meta:custom:") ? savedCursor.slice("meta:custom:".length) : null;
+    const path = pageInfo
+      ? `/custom_collections.json?limit=50&page_info=${encodeURIComponent(pageInfo)}`
+      : `/custom_collections.json?limit=50`;
+    const res = await shopifyFetch(domain, conn.access_token, path);
+    if (res.ok) {
       const json = await res.json();
-      const collections = json[kind] ?? [];
-
-      for (const c of collections) {
-        const { data: existing } = await supabase
-          .from("collections").select("id").eq("shopify_collection_id", String(c.id)).maybeSingle();
-        let collectionId: string;
-        if (existing?.id) {
-          await supabase.from("collections").update({ name: c.title }).eq("id", existing.id);
-          collectionId = existing.id;
-        } else {
-          const { data: ins, error } = await supabase.from("collections")
-            .insert({ name: c.title, shopify_collection_id: String(c.id) }).select("id").single();
-          if (error) continue;
-          collectionId = ins.id;
-        }
-
-        const linkRes = await shopifyFetch(domain, conn.access_token, `/collections/${c.id}/products.json?limit=250`);
-        if (linkRes.ok) {
-          const linkJson = await linkRes.json();
-          for (const lp of linkJson.products ?? []) {
-            const { data: prod } = await supabase.from("products").select("id")
-              .eq("shopify_product_id", String(lp.id)).maybeSingle();
-            if (prod?.id) {
-              await supabase.from("product_collections")
-                .upsert({ product_id: prod.id, collection_id: collectionId }, { onConflict: "product_id,collection_id" });
-            }
-          }
-        }
+      for (const c of json.custom_collections ?? []) {
+        await upsertCollection(supabase, c);
         totalRef.n++;
-        await new Promise((r) => setTimeout(r, 100));
       }
-
-      page++;
       const link = res.headers.get("Link") ?? res.headers.get("link");
-      pageInfo = parseNextPageInfo(link);
+      const next = parseNextPageInfo(link);
+      if (next) {
+        await updateLog(supabase, log.id, { current_stage: "collections", cursor: `meta:custom:${next}`, records_synced: totalRef.n });
+        return true;
+      }
+    }
+    // custom done or failed — move to smart
+    await updateLog(supabase, log.id, { current_stage: "collections", cursor: "meta:smart:", records_synced: totalRef.n });
+    return true;
+  }
 
-      await updateLog(supabase, log.id, {
-        current_stage: "collections",
-        current_page: page,
-        cursor: pageInfo ? `${kind}:${pageInfo}` : null,
-        records_synced: totalRef.n,
-      });
+  // --- Phase 1b: smart_collections metadata ---
+  if (savedCursor.startsWith("meta:smart:")) {
+    const pageInfo = savedCursor.slice("meta:smart:".length) || null;
+    const path = pageInfo
+      ? `/smart_collections.json?limit=50&page_info=${encodeURIComponent(pageInfo)}`
+      : `/smart_collections.json?limit=50`;
+    const res = await shopifyFetch(domain, conn.access_token, path);
+    if (res.ok) {
+      const json = await res.json();
+      for (const c of json.smart_collections ?? []) {
+        await upsertCollection(supabase, c);
+        totalRef.n++;
+      }
+      const link = res.headers.get("Link") ?? res.headers.get("link");
+      const next = parseNextPageInfo(link);
+      if (next) {
+        await updateLog(supabase, log.id, { current_stage: "collections", cursor: `meta:smart:${next}`, records_synced: totalRef.n });
+        return true;
+      }
+    }
+    // smart done — move to collects phase
+    await updateLog(supabase, log.id, { current_stage: "collections", cursor: "collects:", records_synced: totalRef.n });
+    return true;
+  }
 
-      await new Promise((r) => setTimeout(r, 300));
-    } while (pageInfo);
+  // --- Phase 2: bulk collects (product↔collection links) via /collects.json ---
+  if (savedCursor.startsWith("collects:")) {
+    const pageInfo = savedCursor.slice("collects:".length) || null;
+    const path = pageInfo
+      ? `/collects.json?limit=250&page_info=${encodeURIComponent(pageInfo)}`
+      : `/collects.json?limit=250`;
+    const res = await shopifyFetch(domain, conn.access_token, path);
+    if (res.ok) {
+      const json = await res.json();
+      for (const collect of json.collects ?? []) {
+        const { data: prod } = await supabase.from("products").select("id")
+          .eq("shopify_product_id", String(collect.product_id)).maybeSingle();
+        const { data: coll } = await supabase.from("collections").select("id")
+          .eq("shopify_collection_id", String(collect.collection_id)).maybeSingle();
+        if (prod?.id && coll?.id) {
+          await supabase.from("product_collections")
+            .upsert({ product_id: prod.id, collection_id: coll.id }, { onConflict: "product_id,collection_id" });
+          totalRef.n++;
+        }
+      }
+      const link = res.headers.get("Link") ?? res.headers.get("link");
+      const next = parseNextPageInfo(link);
+      if (next) {
+        await updateLog(supabase, log.id, { current_stage: "collections", cursor: `collects:${next}`, records_synced: totalRef.n });
+        return true;
+      }
+    }
+    // collects done
+    await updateLog(supabase, log.id, { current_stage: "collections", cursor: null, records_synced: totalRef.n });
+    return false;
+  }
+
+  return false;
+}
+
+async function upsertCollection(supabase: any, c: any) {
+  const { data: existing } = await supabase
+    .from("collections").select("id").eq("shopify_collection_id", String(c.id)).maybeSingle();
+  if (existing?.id) {
+    await supabase.from("collections").update({ name: c.title }).eq("id", existing.id);
+  } else {
+    await supabase.from("collections").insert({ name: c.title, shopify_collection_id: String(c.id) });
   }
 }
 
-async function syncOrders(supabase: any, conn: any, log: any, totalRef: { n: number }) {
+// FIXED: single page per invocation (was: all pages in one invocation)
+async function syncOrders(supabase: any, conn: any, log: any, totalRef: { n: number }): Promise<boolean> {
   const domain = normalizeDomain(conn.shop_domain);
-  let pageInfo: string | null = log.current_stage === "orders" ? log.cursor : null;
-  let page = log.current_stage === "orders" ? (log.current_page ?? 0) : 0;
+  const pageInfo: string | null = log.current_stage === "orders" ? log.cursor : null;
+  const page: number = log.current_stage === "orders" ? (log.current_page ?? 0) : 0;
 
-  do {
-    const path = pageInfo
-      ? `/orders.json?limit=50&status=any&page_info=${encodeURIComponent(pageInfo)}`
-      : `/orders.json?limit=50&status=any`;
-    const res = await shopifyFetch(domain, conn.access_token, path);
-    if (!res.ok) throw new Error(`orders [${res.status}]: ${(await res.text()).slice(0, 200)}`);
+  const path = pageInfo
+    ? `/orders.json?limit=50&page_info=${encodeURIComponent(pageInfo)}`
+    : `/orders.json?limit=50&status=any`;
+  const res = await shopifyFetch(domain, conn.access_token, path);
+  if (!res.ok) throw new Error(`orders [${res.status}]: ${(await res.text()).slice(0, 200)}`);
 
-    const json = await res.json();
-    const orders = json.orders ?? [];
+  const json = await res.json();
+  const orders = json.orders ?? [];
 
-    for (const o of orders) {
-      const orderRow = {
-        order_number: String(o.name || o.order_number || o.id),
-        status: o.financial_status || o.fulfillment_status || "unknown",
-        shopify_order_id: String(o.id),
-        store_id: conn.store_id,
-      };
-      const { data: existing } = await supabase
-        .from("orders").select("id").eq("shopify_order_id", String(o.id)).maybeSingle();
-      let orderId: string;
-      if (existing?.id) {
-        await supabase.from("orders").update(orderRow).eq("id", existing.id);
-        orderId = existing.id;
-        await supabase.from("order_items").delete().eq("order_id", orderId);
-      } else {
-        const { data: ins, error } = await supabase.from("orders").insert(orderRow).select("id").single();
-        if (error) continue;
-        orderId = ins.id;
-      }
-
-      for (const li of o.line_items ?? []) {
-        if (!li.variant_id) continue;
-        const { data: variant } = await supabase.from("variants").select("id, product_id")
-          .eq("shopify_variant_id", String(li.variant_id)).maybeSingle();
-        if (!variant?.id) continue;
-        await supabase.from("order_items").insert({
-          order_id: orderId,
-          variant_id: variant.id,
-          product_id: variant.product_id,
-          quantity: Number(li.quantity ?? 0),
-          unit_price: Number(li.price ?? 0),
-          store_id: conn.store_id,
-        });
-      }
-      totalRef.n++;
+  for (const o of orders) {
+    const orderRow = {
+      order_number: String(o.name || o.order_number || o.id),
+      status: o.financial_status || o.fulfillment_status || "unknown",
+      shopify_order_id: String(o.id),
+      store_id: conn.store_id,
+    };
+    const { data: existing } = await supabase
+      .from("orders").select("id").eq("shopify_order_id", String(o.id)).maybeSingle();
+    let orderId: string;
+    if (existing?.id) {
+      await supabase.from("orders").update(orderRow).eq("id", existing.id);
+      orderId = existing.id;
+      await supabase.from("order_items").delete().eq("order_id", orderId);
+    } else {
+      const { data: ins, error } = await supabase.from("orders").insert(orderRow).select("id").single();
+      if (error) continue;
+      orderId = ins.id;
     }
 
-    page++;
-    const link = res.headers.get("Link") ?? res.headers.get("link");
-    pageInfo = parseNextPageInfo(link);
+    for (const li of o.line_items ?? []) {
+      if (!li.variant_id) continue;
+      const { data: variant } = await supabase.from("variants").select("id, product_id")
+        .eq("shopify_variant_id", String(li.variant_id)).maybeSingle();
+      if (!variant?.id) continue;
+      await supabase.from("order_items").insert({
+        order_id: orderId,
+        variant_id: variant.id,
+        product_id: variant.product_id,
+        quantity: Number(li.quantity ?? 0),
+        unit_price: Number(li.price ?? 0),
+        store_id: conn.store_id,
+      });
+    }
+    totalRef.n++;
+  }
 
-    await updateLog(supabase, log.id, {
-      current_stage: "orders",
-      current_page: page,
-      cursor: pageInfo,
-      records_synced: totalRef.n,
-    });
+  const link = res.headers.get("Link") ?? res.headers.get("link");
+  const nextPageInfo = parseNextPageInfo(link);
 
-    await new Promise((r) => setTimeout(r, 300));
-  } while (pageInfo);
+  await updateLog(supabase, log.id, {
+    current_stage: "orders",
+    current_page: page + 1,
+    cursor: nextPageInfo,
+    records_synced: totalRef.n,
+  });
+
+  return nextPageInfo !== null;
 }
 
-async function syncInventory(supabase: any, conn: any, log: any, totalRef: { n: number }) {
+// FIXED: saves cursor so it can resume if interrupted
+async function syncInventory(supabase: any, conn: any, log: any, totalRef: { n: number }): Promise<boolean> {
   const domain = normalizeDomain(conn.shop_domain);
+  const startOffset = log.current_stage === "inventory" ? (log.current_page ?? 0) * 50 : 0;
+
   const { data: variants } = await supabase.from("variants")
     .select("id, shopify_inventory_item_id")
     .eq("store_id", conn.store_id)
     .not("shopify_inventory_item_id", "is", null)
-    .limit(5000);
+    .range(startOffset, startOffset + 49);
 
-  const ids = (variants ?? []).map((v: any) => v.shopify_inventory_item_id);
-  for (let i = 0; i < ids.length; i += 50) {
-    const chunk = ids.slice(i, i + 50);
-    const path = `/inventory_levels.json?inventory_item_ids=${chunk.join(",")}&limit=250`;
-    const res = await shopifyFetch(domain, conn.access_token, path);
-    if (!res.ok) break;
+  if (!variants || variants.length === 0) return false;
+
+  const ids = variants.map((v: any) => v.shopify_inventory_item_id);
+  const path = `/inventory_levels.json?inventory_item_ids=${ids.join(",")}&limit=250`;
+  const res = await shopifyFetch(domain, conn.access_token, path);
+
+  if (res.ok) {
     const json = await res.json();
     const levels = json.inventory_levels ?? [];
-
     const totals: Record<string, number> = {};
     for (const lvl of levels) {
       const k = String(lvl.inventory_item_id);
@@ -372,14 +422,17 @@ async function syncInventory(supabase: any, conn: any, log: any, totalRef: { n: 
         .eq("shopify_inventory_item_id", iid);
       totalRef.n++;
     }
-
-    await updateLog(supabase, log.id, {
-      current_stage: "inventory",
-      current_page: Math.floor(i / 50) + 1,
-      records_synced: totalRef.n,
-    });
-    await new Promise((r) => setTimeout(r, 300));
   }
+
+  const page = (log.current_page ?? 0) + 1;
+  await updateLog(supabase, log.id, {
+    current_stage: "inventory",
+    current_page: page,
+    records_synced: totalRef.n,
+  });
+
+  // If we got a full batch, there may be more
+  return variants.length === 50;
 }
 
 // ------------ Orchestrator ------------
@@ -400,37 +453,32 @@ async function syncShopifyData(supabase: any, connectionId: string) {
     const currentStage = (log.current_stage as Stage) || "products";
     const currentIdx = STAGES.indexOf(currentStage as any);
 
-    // Run only the current stage (products: one page per invocation)
     let hasMore = false;
     if (currentStage === "products") {
       hasMore = await syncProducts(supabase, conn, log, totalRef);
     } else if (currentStage === "collections") {
-      await syncCollections(supabase, conn, log, totalRef);
+      hasMore = await syncCollections(supabase, conn, log, totalRef);
     } else if (currentStage === "orders") {
-      await syncOrders(supabase, conn, log, totalRef);
+      hasMore = await syncOrders(supabase, conn, log, totalRef);
     } else if (currentStage === "inventory") {
-      await syncInventory(supabase, conn, log, totalRef);
+      hasMore = await syncInventory(supabase, conn, log, totalRef);
     }
 
     if (hasMore) {
-      // Same stage, next page — self-invoke immediately
-      triggerContinue(connectionId);
+      await triggerContinue(connectionId);
       return;
     }
 
     const nextStage = STAGES[currentIdx + 1];
-
     if (nextStage) {
-      // Advance to next stage and self-invoke
       await updateLog(supabase, log.id, {
         current_stage: nextStage,
         current_page: 0,
         cursor: null,
         records_synced: totalRef.n,
       });
-      triggerContinue(connectionId);
+      await triggerContinue(connectionId);
     } else {
-      // All stages complete
       await updateLog(supabase, log.id, {
         status: "success",
         completed_at: new Date().toISOString(),
@@ -497,7 +545,7 @@ Deno.serve(async (req) => {
       }).select("*").single();
       if (insErr) throw new Error(insErr.message);
 
-      // @ts-ignore EdgeRuntime provided by Supabase
+      // @ts-ignore
       EdgeRuntime.waitUntil(syncShopifyData(supabase, conn.id));
       return json(200, { ok: true, connection: conn, sync: { status: "queued" } });
     }
