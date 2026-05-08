@@ -22,6 +22,22 @@ import { Progress } from "@/components/ui/progress";
 
 const STAGE_ORDER = ["products", "collections", "orders", "inventory", "complete"];
 
+function formatChannel(source: string | null): string {
+  if (!source) return "Online Store";
+  const map: Record<string, string> = {
+    web: "Online Store",
+    pos: "Point of Sale",
+    shopify_draft_orders: "Draft Order",
+    android: "Shop App",
+    iphone: "Shop App",
+    shop: "Shop App",
+    wholesale: "Wholesale",
+    exchange: "Exchange",
+    subscription: "Subscription",
+  };
+  return map[source.toLowerCase()] ?? source;
+}
+
 function useKPIs(storeId: string | null) {
   return useQuery({
     queryKey: ["dashboard-kpis", storeId],
@@ -63,7 +79,7 @@ function usePendingOrders(storeId: string | null, enabled: boolean) {
     queryFn: async () => {
       let q = (supabase as any)
         .from("orders")
-        .select("id, order_number, financial_status, fulfillment_status, order_status, shopify_order_id, shopify_created_at, total_price")
+        .select("id, order_number, financial_status, fulfillment_status, order_status, shopify_order_id, shopify_created_at, total_price, source_name")
         .eq("financial_status", "paid")
         .is("fulfillment_status", null)
         .is("cancelled_at", null)
@@ -98,6 +114,7 @@ function PendingOrdersModal({ storeId, open, onClose }: { storeId: string | null
                 <TableRow>
                   <TableHead>Order #</TableHead>
                   <TableHead>Order Date</TableHead>
+                  <TableHead>Sales Channel</TableHead>
                   <TableHead>Payment</TableHead>
                   <TableHead>Fulfillment</TableHead>
                   <TableHead className="text-right">Total</TableHead>
@@ -109,6 +126,11 @@ function PendingOrdersModal({ storeId, open, onClose }: { storeId: string | null
                     <TableCell className="font-mono font-medium">{o.order_number}</TableCell>
                     <TableCell className="text-muted-foreground text-xs">
                       {o.shopify_created_at ? format(new Date(o.shopify_created_at), "dd MMM yyyy") : "—"}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline" className="text-xs capitalize" style={{ background: "#f0f4ff", color: "#3b5bdb", borderColor: "#c5d0fa" }}>
+                        {formatChannel(o.source_name)}
+                      </Badge>
                     </TableCell>
                     <TableCell>
                       <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-xs capitalize">
