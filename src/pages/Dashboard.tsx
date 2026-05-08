@@ -157,24 +157,43 @@ function useSellThrough(storeId: string | null) {
       const now = new Date();
       const uaeNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Dubai" }));
       const startOfMonth = new Date(uaeNow.getFullYear(), uaeNow.getMonth(), 1);
-      const startISO = startOfMonth.toISOString();
-      let oiQ = supabase
+      const startISO = startOfMonth.toISOString().split("T")[0]; // YYYY-MM-DD for snapshot lookup
+
+      // Units sold this month — use shopify_created_at and financial_status
+      let oiQ = (supabase as any)
         .from("order_items")
-        .select("quantity, order_id, orders!inner(status, created_at)")
-        .gte("orders.created_at", startISO)
-        .filter("orders.status", "in", '("paid","fulfilled")');
+        .select("quantity, orders!inner(financial_status, shopify_created_at)")
+        .eq("orders.financial_status", "paid")
+        .gte("orders.shopify_created_at", startOfMonth.toISOString());
       if (storeId) oiQ = oiQ.eq("store_id", storeId);
       const { data: orderItems, error: oiErr } = await oiQ;
       if (oiErr) throw oiErr;
-      const unitsSold = (orderItems ?? []).reduce((s, oi) => s + oi.quantity, 0);
-      let invQ = supabase.from("variants").select("inventory_quantity");
-      if (storeId) invQ = invQ.eq("store_id", storeId);
-      const { data: inv, error: invErr } = await invQ;
-      if (invErr) throw invErr;
-      const currentInventory = (inv ?? []).reduce((s, v) => s + v.inventory_quantity, 0);
-      const openingInventory = currentInventory + unitsSold;
-      const ratio = openingInventory > 0 ? Math.round((unitsSold / openingInventory) * 1000) / 10 : 0;
-      return { ratio, unitsSold, openingInventory, currentInventory };
+      const unitsSold = (orderItems ?? []).reduce((s: number, oi: any) => s + (oi.quantity ?? 0), 0);
+
+      // Opening stock: try snapshot for Day 1 of this month (per-store)
+      let snapQ = (supabase as any)
+        .from("inventory_snapshots")
+        .select("total_units")
+        .eq("snapshot_date", startISO);
+      if (storeId) snapQ = snapQ.eq("store_id", storeId);
+      else snapQ = snapQ.is("store_id", null);
+      const { data: snapRows } = await snapQ;
+
+      let openingStock: number;
+      if (snapRows && snapRows.length > 0) {
+        // Sum across all stores if global, or single store
+        openingStock = snapRows.reduce((s: number, r: any) => s + (r.total_units ?? 0), 0);
+      } else {
+        // Fallback: approximate opening stock (current + sold) until next snapshot
+        let invQ = (supabase as any).from("variants").select("inventory_quantity");
+        if (storeId) invQ = invQ.eq("store_id", storeId);
+        const { data: inv } = await invQ;
+        const currentInventory = (inv ?? []).reduce((s: number, v: any) => s + (v.inventory_quantity ?? 0), 0);
+        openingStock = currentInventory + unitsSold;
+      }
+
+      const ratio = openingStock > 0 ? Math.round((unitsSold / openingStock) * 1000) / 10 : 0;
+      return { ratio, unitsSold, openingStock };
     },
   });
 }
