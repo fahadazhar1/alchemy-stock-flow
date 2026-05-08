@@ -92,6 +92,7 @@ async function testCredentials(domain: string, token: string) {
 
 // ------------ Sync log helpers ------------
 async function createOrResumeLog(supabase: any, connectionId: string, storeId: string | null) {
+  // Resume an in-progress log first
   const { data: existing } = await supabase
     .from("shopify_sync_logs")
     .select("*")
@@ -102,6 +103,27 @@ async function createOrResumeLog(supabase: any, connectionId: string, storeId: s
     .maybeSingle();
   if (existing) return existing;
 
+  // Resume from the last failed log so we don't restart from scratch
+  const { data: failed } = await supabase
+    .from("shopify_sync_logs")
+    .select("*")
+    .eq("connection_id", connectionId)
+    .eq("status", "failed")
+    .not("current_stage", "is", null)
+    .order("sync_time", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (failed) {
+    const { data: resumed } = await supabase
+      .from("shopify_sync_logs")
+      .update({ status: "in_progress", error_message: null, metadata: { heartbeat_at: new Date().toISOString() } })
+      .eq("id", failed.id)
+      .select("*")
+      .single();
+    return resumed;
+  }
+
+  // No resumable log — start fresh
   const { data: created } = await supabase.from("shopify_sync_logs").insert({
     connection_id: connectionId,
     store_id: storeId,
@@ -150,9 +172,9 @@ async function syncProducts(supabase: any, conn: any, log: any, totalRef: { n: n
   const pageInfo: string | null = log.current_stage === "products" ? log.cursor : null;
   const page: number = log.current_stage === "products" ? (log.current_page ?? 0) : 0;
 
-const path = pageInfo
-  ? `/orders.json?limit=50&page_info=${encodeURIComponent(pageInfo)}`
-  : `/orders.json?limit=50&status=any`;
+  const path = pageInfo
+    ? `/products.json?limit=50&page_info=${encodeURIComponent(pageInfo)}`
+    : `/products.json?limit=50`;
   const res = await shopifyFetch(domain, conn.access_token, path);
   if (!res.ok) throw new Error(`products [${res.status}]: ${(await res.text()).slice(0, 200)}`);
 
