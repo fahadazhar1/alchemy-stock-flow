@@ -9,8 +9,10 @@ const corsHeaders = {
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-const STAGES = ["products", "variants", "collections", "tags", "orders", "inventory"] as const;
+const STAGES = ["products", "collections", "orders", "inventory"] as const;
 type Stage = typeof STAGES[number];
+
+const INVOKE_URL = `${Deno.env.get("SUPABASE_URL")}/functions/v1/shopify-sync`;
 
 function normalizeDomain(d: string) {
   return d.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/+$/, "");
@@ -92,7 +94,6 @@ async function testCredentials(domain: string, token: string) {
 
 // ------------ Sync log helpers ------------
 async function createOrResumeLog(supabase: any, connectionId: string, storeId: string | null) {
-  // Look for an existing in-progress log to resume
   const { data: existing } = await supabase
     .from("shopify_sync_logs")
     .select("*")
@@ -116,92 +117,104 @@ async function createOrResumeLog(supabase: any, connectionId: string, storeId: s
 }
 
 async function updateLog(supabase: any, logId: string, patch: Record<string, unknown>) {
-  await supabase.from("shopify_sync_logs").update(patch).eq("id", logId);
+  await supabase.from("shopify_sync_logs").update({
+    ...patch,
+    metadata: { heartbeat_at: new Date().toISOString() },
+  }).eq("id", logId);
+}
+
+// ------------ Self-invoke helper ------------
+function triggerContinue(connectionId: string) {
+  fetch(INVOKE_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${SERVICE_ROLE}`,
+    },
+    body: JSON.stringify({ action: "continue_sync", connection_id: connectionId }),
+  }).catch((e) => console.error("self-invoke failed:", e));
 }
 
 // ------------ Stage handlers ------------
-async function syncProducts(supabase: any, conn: any, log: any, totalRef: { n: number }) {
+
+// Returns true if more pages remain — caller must self-chain
+async function syncProducts(supabase: any, conn: any, log: any, totalRef: { n: number }): Promise<boolean> {
   const domain = normalizeDomain(conn.shop_domain);
-  let pageInfo: string | null = log.current_stage === "products" ? log.cursor : null;
-  let page = log.current_stage === "products" ? (log.current_page ?? 0) : 0;
+  const pageInfo: string | null = log.current_stage === "products" ? log.cursor : null;
+  const page: number = log.current_stage === "products" ? (log.current_page ?? 0) : 0;
 
-  do {
-    const path = pageInfo
-      ? `/products.json?limit=50&page_info=${encodeURIComponent(pageInfo)}`
-      : `/products.json?limit=50`;
-    const res = await shopifyFetch(domain, conn.access_token, path);
-    if (!res.ok) throw new Error(`products [${res.status}]: ${(await res.text()).slice(0, 200)}`);
+  const path = pageInfo
+    ? `/products.json?limit=50&page_info=${encodeURIComponent(pageInfo)}`
+    : `/products.json?limit=50`;
+  const res = await shopifyFetch(domain, conn.access_token, path);
+  if (!res.ok) throw new Error(`products [${res.status}]: ${(await res.text()).slice(0, 200)}`);
 
-    const json = await res.json();
-    const products = json.products ?? [];
+  const json = await res.json();
+  const products = json.products ?? [];
 
-    for (const p of products) {
-      const productSku = p.variants?.[0]?.sku || `shopify-${p.id}`;
-      const productRow = {
-        name: p.title,
-        sku: productSku,
-        slug: p.handle,
-        product_type: p.product_type || null,
-        status: p.status || "active",
-        shopify_product_id: String(p.id),
-        store_id: conn.store_id,
-      };
-      const { data: existing } = await supabase
-        .from("products").select("id").eq("shopify_product_id", String(p.id)).maybeSingle();
+  for (const p of products) {
+    const productSku = p.variants?.[0]?.sku || `shopify-${p.id}`;
+    const productRow = {
+      name: p.title,
+      sku: productSku,
+      slug: p.handle,
+      product_type: p.product_type || null,
+      status: p.status || "active",
+      shopify_product_id: String(p.id),
+      store_id: conn.store_id,
+    };
+    const { data: existing } = await supabase
+      .from("products").select("id").eq("shopify_product_id", String(p.id)).maybeSingle();
 
-      let productId: string;
-      if (existing?.id) {
-        await supabase.from("products").update(productRow).eq("id", existing.id);
-        productId = existing.id;
-      } else {
-        const { data: ins, error } = await supabase.from("products").insert(productRow).select("id").single();
-        if (error) continue;
-        productId = ins.id;
-      }
-
-      // Variants (inline with products)
-      for (const v of p.variants ?? []) {
-        const variantRow = {
-          product_id: productId,
-          variant_sku: v.sku || `shopify-v-${v.id}`,
-          size: v.option1 || v.title || "Default",
-          price: Number(v.price ?? 0),
-          compare_at_price: v.compare_at_price ? Number(v.compare_at_price) : null,
-          inventory_quantity: Number(v.inventory_quantity ?? 0),
-          shopify_variant_id: String(v.id),
-          shopify_inventory_item_id: v.inventory_item_id ? String(v.inventory_item_id) : null,
-          store_id: conn.store_id,
-        };
-        const { data: existV } = await supabase
-          .from("variants").select("id").eq("shopify_variant_id", String(v.id)).maybeSingle();
-        if (existV?.id) await supabase.from("variants").update(variantRow).eq("id", existV.id);
-        else await supabase.from("variants").insert(variantRow);
-        totalRef.n++;
-      }
-
-      // Tags inline
-      const tags: string[] = (p.tags ? String(p.tags).split(",").map((t: string) => t.trim()).filter(Boolean) : []);
-      for (const tagName of tags) {
-        const { data: tag } = await supabase.from("tags").upsert({ name: tagName }, { onConflict: "name" }).select("id").single();
-        if (tag?.id) {
-          await supabase.from("product_tags").upsert({ product_id: productId, tag_id: tag.id }, { onConflict: "product_id,tag_id" });
-        }
-      }
+    let productId: string;
+    if (existing?.id) {
+      await supabase.from("products").update(productRow).eq("id", existing.id);
+      productId = existing.id;
+    } else {
+      const { data: ins, error } = await supabase.from("products").insert(productRow).select("id").single();
+      if (error) continue;
+      productId = ins.id;
     }
 
-    page++;
-    const link = res.headers.get("Link") ?? res.headers.get("link");
-    pageInfo = parseNextPageInfo(link);
+    for (const v of p.variants ?? []) {
+      const variantRow = {
+        product_id: productId,
+        variant_sku: v.sku || `shopify-v-${v.id}`,
+        size: v.option1 || v.title || "Default",
+        price: Number(v.price ?? 0),
+        compare_at_price: v.compare_at_price ? Number(v.compare_at_price) : null,
+        inventory_quantity: Number(v.inventory_quantity ?? 0),
+        shopify_variant_id: String(v.id),
+        shopify_inventory_item_id: v.inventory_item_id ? String(v.inventory_item_id) : null,
+        store_id: conn.store_id,
+      };
+      const { data: existV } = await supabase
+        .from("variants").select("id").eq("shopify_variant_id", String(v.id)).maybeSingle();
+      if (existV?.id) await supabase.from("variants").update(variantRow).eq("id", existV.id);
+      else await supabase.from("variants").insert(variantRow);
+      totalRef.n++;
+    }
 
-    await updateLog(supabase, log.id, {
-      current_stage: "products",
-      current_page: page,
-      cursor: pageInfo,
-      records_synced: totalRef.n,
-    });
+    const tags: string[] = (p.tags ? String(p.tags).split(",").map((t: string) => t.trim()).filter(Boolean) : []);
+    for (const tagName of tags) {
+      const { data: tag } = await supabase.from("tags").upsert({ name: tagName }, { onConflict: "name" }).select("id").single();
+      if (tag?.id) {
+        await supabase.from("product_tags").upsert({ product_id: productId, tag_id: tag.id }, { onConflict: "product_id,tag_id" });
+      }
+    }
+  }
 
-    await new Promise((r) => setTimeout(r, 300));
-  } while (pageInfo);
+  const link = res.headers.get("Link") ?? res.headers.get("link");
+  const nextPageInfo = parseNextPageInfo(link);
+
+  await updateLog(supabase, log.id, {
+    current_stage: "products",
+    current_page: page + 1,
+    cursor: nextPageInfo,
+    records_synced: totalRef.n,
+  });
+
+  return nextPageInfo !== null;
 }
 
 async function syncCollections(supabase: any, conn: any, log: any, totalRef: { n: number }) {
@@ -215,7 +228,7 @@ async function syncCollections(supabase: any, conn: any, log: any, totalRef: { n
         ? `/${kind}.json?limit=50&page_info=${encodeURIComponent(pageInfo)}`
         : `/${kind}.json?limit=50`;
       const res = await shopifyFetch(domain, conn.access_token, path);
-      if (!res.ok) break; // some shops don't expose smart collections
+      if (!res.ok) break;
       const json = await res.json();
       const collections = json[kind] ?? [];
 
@@ -233,7 +246,6 @@ async function syncCollections(supabase: any, conn: any, log: any, totalRef: { n
           collectionId = ins.id;
         }
 
-        // Fetch product links for this collection
         const linkRes = await shopifyFetch(domain, conn.access_token, `/collections/${c.id}/products.json?limit=250`);
         if (linkRes.ok) {
           const linkJson = await linkRes.json();
@@ -335,7 +347,6 @@ async function syncOrders(supabase: any, conn: any, log: any, totalRef: { n: num
 
 async function syncInventory(supabase: any, conn: any, log: any, totalRef: { n: number }) {
   const domain = normalizeDomain(conn.shop_domain);
-  // Pull inventory_item_ids from variants we already have
   const { data: variants } = await supabase.from("variants")
     .select("id, shopify_inventory_item_id")
     .eq("store_id", conn.store_id)
@@ -351,7 +362,6 @@ async function syncInventory(supabase: any, conn: any, log: any, totalRef: { n: 
     const json = await res.json();
     const levels = json.inventory_levels ?? [];
 
-    // Aggregate available per inventory_item_id (sum across locations)
     const totals: Record<string, number> = {};
     for (const lvl of levels) {
       const k = String(lvl.inventory_item_id);
@@ -387,40 +397,53 @@ async function syncShopifyData(supabase: any, connectionId: string) {
   await supabase.from("shopify_connections").update({ last_sync_status: "in_progress" }).eq("id", connectionId);
 
   try {
-    const startStage = (log.current_stage as Stage) || "products";
-    const startIdx = STAGES.indexOf(startStage);
-    for (let i = startIdx; i < STAGES.length; i++) {
-      const stage = STAGES[i];
-      // Reset cursor when entering a new stage (not the resumed one)
-      if (i !== startIdx) {
-        await updateLog(supabase, log.id, { current_stage: stage, current_page: 0, cursor: null });
-        log.current_stage = stage; log.cursor = null; log.current_page = 0;
-      }
+    const currentStage = (log.current_stage as Stage) || "products";
+    const currentIdx = STAGES.indexOf(currentStage as any);
 
-      if (stage === "products" || stage === "variants" || stage === "tags") {
-        // products stage handles all three inline
-        if (stage === "products") await syncProducts(supabase, conn, log, totalRef);
-      } else if (stage === "collections") {
-        await syncCollections(supabase, conn, log, totalRef);
-      } else if (stage === "orders") {
-        await syncOrders(supabase, conn, log, totalRef);
-      } else if (stage === "inventory") {
-        await syncInventory(supabase, conn, log, totalRef);
-      }
+    // Run only the current stage (products: one page per invocation)
+    let hasMore = false;
+    if (currentStage === "products") {
+      hasMore = await syncProducts(supabase, conn, log, totalRef);
+    } else if (currentStage === "collections") {
+      await syncCollections(supabase, conn, log, totalRef);
+    } else if (currentStage === "orders") {
+      await syncOrders(supabase, conn, log, totalRef);
+    } else if (currentStage === "inventory") {
+      await syncInventory(supabase, conn, log, totalRef);
     }
 
-    await updateLog(supabase, log.id, {
-      status: "success",
-      completed_at: new Date().toISOString(),
-      records_synced: totalRef.n,
-      current_stage: "complete",
-      cursor: null,
-    });
-    await supabase.from("shopify_connections").update({
-      last_sync_at: new Date().toISOString(),
-      last_sync_status: "success",
-      last_sync_records: totalRef.n,
-    }).eq("id", connectionId);
+    if (hasMore) {
+      // Same stage, next page — self-invoke immediately
+      triggerContinue(connectionId);
+      return;
+    }
+
+    const nextStage = STAGES[currentIdx + 1];
+
+    if (nextStage) {
+      // Advance to next stage and self-invoke
+      await updateLog(supabase, log.id, {
+        current_stage: nextStage,
+        current_page: 0,
+        cursor: null,
+        records_synced: totalRef.n,
+      });
+      triggerContinue(connectionId);
+    } else {
+      // All stages complete
+      await updateLog(supabase, log.id, {
+        status: "success",
+        completed_at: new Date().toISOString(),
+        records_synced: totalRef.n,
+        current_stage: "complete",
+        cursor: null,
+      });
+      await supabase.from("shopify_connections").update({
+        last_sync_at: new Date().toISOString(),
+        last_sync_status: "success",
+        last_sync_records: totalRef.n,
+      }).eq("id", connectionId);
+    }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("sync failed:", msg);
@@ -486,7 +509,6 @@ Deno.serve(async (req) => {
         is_active: false, access_token: null, auto_sync_enabled: false,
         last_sync_status: null, last_sync_at: null, last_sync_records: 0,
       }).eq("id", id);
-      // Mark in-progress logs as cancelled
       await supabase.from("shopify_sync_logs").update({ status: "cancelled" })
         .eq("connection_id", id).eq("status", "in_progress");
       return json(200, { ok: true });
@@ -498,6 +520,14 @@ Deno.serve(async (req) => {
       // @ts-ignore
       EdgeRuntime.waitUntil(syncShopifyData(supabase, id));
       return json(200, { ok: true, status: "queued" });
+    }
+
+    if (action === "continue_sync") {
+      const id = String(body.connection_id || "");
+      if (!id) return json(400, { ok: false, error: "Missing connection_id" });
+      // @ts-ignore
+      EdgeRuntime.waitUntil(syncShopifyData(supabase, id));
+      return json(200, { ok: true, status: "continuing" });
     }
 
     if (action === "auto_sync_tick") {
