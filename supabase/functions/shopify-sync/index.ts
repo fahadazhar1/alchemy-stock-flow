@@ -410,6 +410,9 @@ async function syncOrders(supabase: any, conn: any, log: any, totalRef: { n: num
     const orderRow = {
       order_number: String(o.name || o.order_number || o.id),
       status: o.financial_status || o.fulfillment_status || "unknown",
+      financial_status: o.financial_status || null,
+      fulfillment_status: o.fulfillment_status || null,
+      order_status: o.status || "open",
       shopify_order_id: String(o.id),
       store_id: conn.store_id,
     };

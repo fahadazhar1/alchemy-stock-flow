@@ -31,20 +31,20 @@ function useKPIs(storeId: string | null) {
         const { data: viewData, error: viewError } = await supabase.from("v_dashboard_kpis").select("*").single();
         if (viewError) throw viewError;
 
-        // If a store is selected, we override the pending orders metric with store-specific data
-        // because the global view doesn't support filtering by store_id and may miss 'paid' status.
+        // Count orders that are: paid, open (not cancelled), and not yet fulfilled
         let pendingQuery = supabase
-          .from("order_items")
-          .select("quantity, orders!inner(status)")
-          .filter("orders.status", "in", '("pending","unfulfilled","paid")');
+          .from("orders")
+          .select("*", { count: "exact", head: true })
+          .eq("financial_status", "paid")
+          .or("order_status.eq.open,order_status.is.null")
+          .or("fulfillment_status.is.null,fulfillment_status.eq.partial");
 
-        if (storeId) pendingQuery = pendingQuery.eq("store_id", storeId);
+        if (storeId) pendingQuery = (pendingQuery as any).eq("store_id", storeId);
 
-        const { data: pendingItems, error: pendingErr } = await pendingQuery;
+        const { count: pendingCount, error: pendingErr } = await (pendingQuery as any);
 
         if (!pendingErr) {
-          const storePendingCount = (pendingItems ?? []).reduce((sum, item) => sum + (item.quantity || 0), 0);
-          return { ...viewData, pending_order_inventory: storePendingCount };
+          return { ...viewData, pending_order_inventory: pendingCount ?? 0 };
         }
 
         return viewData;
