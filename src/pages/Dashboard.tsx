@@ -56,6 +56,87 @@ function useKPIs(storeId: string | null) {
   });
 }
 
+function usePendingOrders(storeId: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ["pending-orders-detail", storeId],
+    enabled,
+    queryFn: async () => {
+      let q = (supabase as any)
+        .from("orders")
+        .select("id, order_number, financial_status, fulfillment_status, order_status, shopify_order_id, shopify_created_at, total_price")
+        .eq("financial_status", "paid")
+        .or("order_status.eq.open,order_status.is.null")
+        .or("fulfillment_status.is.null,fulfillment_status.eq.partial")
+        .order("shopify_created_at", { ascending: false });
+      if (storeId) q = q.eq("store_id", storeId);
+      const { data, error } = await q;
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+}
+
+function PendingOrdersModal({ storeId, open, onClose }: { storeId: string | null; open: boolean; onClose: () => void }) {
+  const { data: orders, isLoading } = usePendingOrders(storeId, open);
+  return (
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="max-w-4xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Clock className="h-4 w-4 text-amber-600" />
+            Pending Orders — Paid, Open &amp; Unfulfilled
+          </DialogTitle>
+        </DialogHeader>
+        <ScrollArea className="max-h-[60vh]">
+          {isLoading ? (
+            <div className="space-y-2 p-2">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}</div>
+          ) : !orders?.length ? (
+            <p className="text-center text-muted-foreground py-8 text-sm">No pending orders found.</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Order #</TableHead>
+                  <TableHead>Order Date</TableHead>
+                  <TableHead>Payment</TableHead>
+                  <TableHead>Fulfillment</TableHead>
+                  <TableHead className="text-right">Total</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {orders.map((o) => (
+                  <TableRow key={o.id}>
+                    <TableCell className="font-mono font-medium">{o.order_number}</TableCell>
+                    <TableCell className="text-muted-foreground text-xs">
+                      {o.shopify_created_at ? format(new Date(o.shopify_created_at), "dd MMM yyyy") : "—"}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-xs capitalize">
+                        {o.financial_status ?? "—"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-xs">
+                        {o.fulfillment_status ?? "Unfulfilled"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-right font-medium">
+                      {o.total_price != null ? formatCurrency(Number(o.total_price)) : "—"}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </ScrollArea>
+        {orders?.length ? (
+          <p className="text-xs text-muted-foreground text-right">{orders.length} order{orders.length !== 1 ? "s" : ""}</p>
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function useStockValue(storeId: string | null) {
   return useQuery({
     queryKey: ["total-stock-value", storeId],
@@ -346,6 +427,7 @@ export default function Dashboard() {
   const [expandedSection, setExpandedSection] = useState<string | null>(null);
   const [losersModalOpen, setLosersModalOpen] = useState(false);
   const [loserPage, setLoserPage] = useState(0);
+  const [pendingOrdersOpen, setPendingOrdersOpen] = useState(false);
 
   const [filterDates, setFilterDates] = useState<Date[]>([]);
   const [filterMonths, setFilterMonths] = useState<number[]>([]);
@@ -468,7 +550,9 @@ export default function Dashboard() {
           <KPICard title="On-Hand Inventory" value={k.on_hand_inventory ?? 0} icon={Package} color="text-primary" subtitle="Total units in stock" />
           <KPICard title="Total Stock Value" value={stockValue != null ? formatCurrency(stockValue) : "—"} icon={DollarSign} color="text-emerald-600" subtitle="At current prices" />
           <KPICard title="Available Units" value={k.available_units ?? 0} icon={ShoppingCart} color="text-primary" subtitle="Sellable inventory" />
-          <KPICard title="Pending Orders" value={k.pending_order_inventory ?? 0} icon={Clock} color="text-amber-600" subtitle="Awaiting fulfillment" />
+          <div className="cursor-pointer" onClick={() => setPendingOrdersOpen(true)}>
+            <KPICard title="Pending Orders" value={k.pending_order_inventory ?? 0} icon={Clock} color="text-amber-600" subtitle="Click to view details" />
+          </div>
           <KPICard title="Sell-Through %" value={`${sellThroughValue}%`} icon={TrendingUp} color="text-violet-600" subtitle="Current month (corrected)" />
         </div>
       </div>
@@ -691,6 +775,8 @@ export default function Dashboard() {
           </ScrollArea>
         </DialogContent>
       </Dialog>
+
+      <PendingOrdersModal storeId={storeId} open={pendingOrdersOpen} onClose={() => setPendingOrdersOpen(false)} />
     </div>
   );
 }

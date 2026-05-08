@@ -395,11 +395,12 @@ async function syncOrders(supabase: any, conn: any, log: any, totalRef: { n: num
   const pageInfo: string | null = log.current_stage === "orders" ? log.cursor : null;
   const page: number = log.current_stage === "orders" ? (log.current_page ?? 0) : 0;
 
+  const currentYearStart = `${new Date().getFullYear()}-01-01T00:00:00Z`;
   const path = pageInfo
     ? `/orders.json?limit=50&page_info=${encodeURIComponent(pageInfo)}`
     : syncSince
       ? `/orders.json?limit=50&status=any&updated_at_min=${encodeURIComponent(syncSince)}`
-      : `/orders.json?limit=50&status=any`;
+      : `/orders.json?limit=50&status=any&created_at_min=${encodeURIComponent(currentYearStart)}`;
   const res = await shopifyFetch(domain, conn.access_token, path);
   if (!res.ok) throw new Error(`orders [${res.status}]: ${(await res.text()).slice(0, 200)}`);
 
@@ -413,6 +414,8 @@ async function syncOrders(supabase: any, conn: any, log: any, totalRef: { n: num
       financial_status: o.financial_status || null,
       fulfillment_status: o.fulfillment_status || null,
       order_status: o.status || "open",
+      shopify_created_at: o.created_at || null,
+      total_price: o.total_price ? Number(o.total_price) : null,
       shopify_order_id: String(o.id),
       store_id: conn.store_id,
     };
