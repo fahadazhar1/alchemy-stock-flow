@@ -642,7 +642,9 @@ Deno.serve(async (req) => {
       const id = String(body.connection_id || "");
       if (!id) return json(400, { ok: false, error: "Missing connection_id" });
       await registerWebhooks(supabase, id);
-      return json(200, { ok: true });
+      // @ts-ignore
+      EdgeRuntime.waitUntil(syncShopifyData(supabase, id));
+      return json(200, { ok: true, status: "webhooks_registered_sync_queued" });
     }
 
     if (action === "disconnect") {
