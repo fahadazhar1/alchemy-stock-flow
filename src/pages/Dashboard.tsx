@@ -314,12 +314,13 @@ function SyncHealthBadge({ storeId }: { storeId: string | null }) {
   const isSyncing = health.status === "in_progress" || syncing;
   const isFailed = health.status === "failed" || health.latestLog?.status === "failed";
   
-  // Detect stalled syncs using heartbeat or start time (5 minute threshold)
+  // Stall detection: only applies when the log itself is in_progress (not a stale old completed log)
+  const logIsInProgress = health.latestLog?.status === "in_progress";
   const metadata = (health.latestLog?.metadata ?? {}) as SyncMetadata;
-  const lastActiveTime = metadata.heartbeat_at 
-    ? new Date(metadata.heartbeat_at).getTime() 
+  const lastActiveTime = metadata.heartbeat_at
+    ? new Date(metadata.heartbeat_at).getTime()
     : (health.latestLog?.sync_time ? new Date(health.latestLog.sync_time).getTime() : null);
-  const isStale = isSyncing && lastActiveTime && (Date.now() - lastActiveTime) > 300000;
+  const isStale = isSyncing && logIsInProgress && lastActiveTime && (Date.now() - lastActiveTime) > 300000;
 
   const stageIndex = STAGE_ORDER.indexOf(String(health.latestLog?.current_stage ?? "products"));
   const progressValue = Math.min(100, ((stageIndex + 1) / STAGE_ORDER.length) * 100);
