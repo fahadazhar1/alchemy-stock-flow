@@ -167,14 +167,16 @@ async function triggerContinue(connectionId: string) {
 
 // ------------ Stage handlers ------------
 
-async function syncProducts(supabase: any, conn: any, log: any, totalRef: { n: number }): Promise<boolean> {
+async function syncProducts(supabase: any, conn: any, log: any, totalRef: { n: number }, syncSince: string | null): Promise<boolean> {
   const domain = normalizeDomain(conn.shop_domain);
   const pageInfo: string | null = log.current_stage === "products" ? log.cursor : null;
   const page: number = log.current_stage === "products" ? (log.current_page ?? 0) : 0;
 
   const path = pageInfo
     ? `/products.json?limit=50&page_info=${encodeURIComponent(pageInfo)}`
-    : `/products.json?limit=50`;
+    : syncSince
+      ? `/products.json?limit=50&updated_at_min=${encodeURIComponent(syncSince)}`
+      : `/products.json?limit=50`;
   const res = await shopifyFetch(domain, conn.access_token, path);
   if (!res.ok) throw new Error(`products [${res.status}]: ${(await res.text()).slice(0, 200)}`);
 
@@ -350,14 +352,16 @@ async function upsertCollection(supabase: any, c: any) {
 }
 
 // FIXED: single page per invocation (was: all pages in one invocation)
-async function syncOrders(supabase: any, conn: any, log: any, totalRef: { n: number }): Promise<boolean> {
+async function syncOrders(supabase: any, conn: any, log: any, totalRef: { n: number }, syncSince: string | null): Promise<boolean> {
   const domain = normalizeDomain(conn.shop_domain);
   const pageInfo: string | null = log.current_stage === "orders" ? log.cursor : null;
   const page: number = log.current_stage === "orders" ? (log.current_page ?? 0) : 0;
 
   const path = pageInfo
     ? `/orders.json?limit=50&page_info=${encodeURIComponent(pageInfo)}`
-    : `/orders.json?limit=50&status=any`;
+    : syncSince
+      ? `/orders.json?limit=50&status=any&updated_at_min=${encodeURIComponent(syncSince)}`
+      : `/orders.json?limit=50&status=any`;
   const res = await shopifyFetch(domain, conn.access_token, path);
   if (!res.ok) throw new Error(`orders [${res.status}]: ${(await res.text()).slice(0, 200)}`);
 
@@ -468,6 +472,8 @@ async function syncShopifyData(supabase: any, connectionId: string) {
 
   const log = await createOrResumeLog(supabase, connectionId, conn.store_id);
   const totalRef = { n: log.records_synced ?? 0 };
+  // Use last successful sync time as incremental filter — only changed records
+  const syncSince: string | null = conn.last_sync_at ?? null;
 
   await supabase.from("shopify_connections").update({ last_sync_status: "in_progress" }).eq("id", connectionId);
 
@@ -477,11 +483,11 @@ async function syncShopifyData(supabase: any, connectionId: string) {
 
     let hasMore = false;
     if (currentStage === "products") {
-      hasMore = await syncProducts(supabase, conn, log, totalRef);
+      hasMore = await syncProducts(supabase, conn, log, totalRef, syncSince);
     } else if (currentStage === "collections") {
       hasMore = await syncCollections(supabase, conn, log, totalRef);
     } else if (currentStage === "orders") {
-      hasMore = await syncOrders(supabase, conn, log, totalRef);
+      hasMore = await syncOrders(supabase, conn, log, totalRef, syncSince);
     } else if (currentStage === "inventory") {
       hasMore = await syncInventory(supabase, conn, log, totalRef);
     }
