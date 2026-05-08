@@ -46,7 +46,7 @@ async function shopifyFetch(domain: string, token: string, path: string): Promis
   throw new Error("Shopify fetch retries exhausted");
 }
 
-async function shopifyMutate(domain: string, token: string, method: "POST" | "PUT", path: string, requestBody: unknown): Promise<Response> {
+async function shopifyMutate(domain: string, token: string, method: "POST" | "PUT" | "DELETE", path: string, requestBody?: unknown): Promise<Response> {
   const url = `https://${domain}/admin/api/2024-01${path}`;
   for (let attempt = 0; attempt < 3; attempt++) {
     const ctrl = new AbortController();
@@ -55,7 +55,7 @@ async function shopifyMutate(domain: string, token: string, method: "POST" | "PU
       const res = await fetch(url, {
         method,
         headers: { "X-Shopify-Access-Token": token, "Content-Type": "application/json" },
-        body: JSON.stringify(requestBody),
+        body: requestBody !== undefined ? JSON.stringify(requestBody) : undefined,
         signal: ctrl.signal,
       });
       clearTimeout(timer);
@@ -88,6 +88,44 @@ async function testCredentials(domain: string, token: string) {
   }
   const data = await res.json();
   return { ok: true, shop: data.shop };
+}
+
+const WEBHOOK_TOPICS = [
+  "products/create", "products/update", "products/delete",
+  "orders/create", "orders/updated",
+  "inventory_levels/update",
+  "collections/create", "collections/update",
+];
+
+async function registerWebhooks(supabase: any, connectionId: string) {
+  const { data: conn } = await supabase.from("shopify_connections")
+    .select("shop_domain, access_token").eq("id", connectionId).single();
+  if (!conn?.access_token) return;
+
+  const domain = normalizeDomain(conn.shop_domain);
+  const secret = crypto.randomUUID().replace(/-/g, "");
+  await supabase.from("shopify_connections").update({ webhook_secret: secret }).eq("id", connectionId);
+
+  const webhookBase = `${SUPABASE_URL}/functions/v1/shopify-sync`;
+
+  // Remove any existing webhooks pointing to this function
+  const listRes = await shopifyFetch(domain, conn.access_token, "/webhooks.json?limit=250");
+  if (listRes.ok) {
+    const { webhooks } = await listRes.json();
+    for (const wh of webhooks ?? []) {
+      if (String(wh.address).includes("shopify-sync")) {
+        await shopifyMutate(domain, conn.access_token, "DELETE", `/webhooks/${wh.id}.json`);
+      }
+    }
+  }
+
+  // Register fresh webhooks for all change topics
+  for (const topic of WEBHOOK_TOPICS) {
+    await shopifyMutate(domain, conn.access_token, "POST", "/webhooks.json", {
+      webhook: { topic, address: `${webhookBase}?action=webhook&token=${secret}`, format: "json" },
+    });
+  }
+  console.log(`Registered ${WEBHOOK_TOPICS.length} webhooks for connection ${connectionId}`);
 }
 
 // ------------ Sync log helpers ------------
@@ -544,6 +582,19 @@ Deno.serve(async (req) => {
 
   try {
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE);
+
+    // Shopify webhook receiver — identified by ?action=webhook&token=SECRET in URL
+    const reqUrl = new URL(req.url);
+    if (reqUrl.searchParams.get("action") === "webhook") {
+      const token = reqUrl.searchParams.get("token") ?? "";
+      const { data: conn } = await supabase.from("shopify_connections")
+        .select("id").eq("webhook_secret", token).eq("is_active", true).maybeSingle();
+      if (!conn?.id) return json(401, { ok: false, error: "Invalid webhook token" });
+      // @ts-ignore
+      EdgeRuntime.waitUntil(syncShopifyData(supabase, conn.id));
+      return json(200, { ok: true });
+    }
+
     const body = await req.json().catch(() => ({}));
     const action = String(body.action || "");
 
@@ -574,8 +625,18 @@ Deno.serve(async (req) => {
       if (insErr) throw new Error(insErr.message);
 
       // @ts-ignore
-      EdgeRuntime.waitUntil(syncShopifyData(supabase, conn.id));
+      EdgeRuntime.waitUntil((async () => {
+        await registerWebhooks(supabase, conn.id);
+        await syncShopifyData(supabase, conn.id);
+      })());
       return json(200, { ok: true, connection: conn, sync: { status: "queued" } });
+    }
+
+    if (action === "register_webhooks") {
+      const id = String(body.connection_id || "");
+      if (!id) return json(400, { ok: false, error: "Missing connection_id" });
+      await registerWebhooks(supabase, id);
+      return json(200, { ok: true });
     }
 
     if (action === "disconnect") {
