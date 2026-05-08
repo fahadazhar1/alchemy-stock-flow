@@ -23,7 +23,7 @@ import { Progress } from "@/components/ui/progress";
 const STAGE_ORDER = ["products", "collections", "orders", "inventory", "complete"];
 
 function formatChannel(source: string | null): string {
-  if (!source) return "Online Store";
+  if (!source) return "—";
   const map: Record<string, string> = {
     web: "Online Store",
     pos: "Point of Sale",
