@@ -35,9 +35,9 @@ function useKPIs(storeId: string | null) {
         let pendingQuery = supabase
           .from("orders")
           .select("*", { count: "exact", head: true })
-          .eq("order_status", "open")
           .eq("financial_status", "paid")
-          .is("fulfillment_status", null);
+          .is("fulfillment_status", null)
+          .is("cancelled_at", null);
 
         if (storeId) pendingQuery = (pendingQuery as any).eq("store_id", storeId);
 
@@ -64,9 +64,9 @@ function usePendingOrders(storeId: string | null, enabled: boolean) {
       let q = (supabase as any)
         .from("orders")
         .select("id, order_number, financial_status, fulfillment_status, order_status, shopify_order_id, shopify_created_at, total_price")
-        .eq("order_status", "open")
         .eq("financial_status", "paid")
         .is("fulfillment_status", null)
+        .is("cancelled_at", null)
         .order("shopify_created_at", { ascending: false });
       if (storeId) q = q.eq("store_id", storeId);
       const { data, error } = await q;

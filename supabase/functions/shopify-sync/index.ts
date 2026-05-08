@@ -414,6 +414,7 @@ async function syncOrders(supabase: any, conn: any, log: any, totalRef: { n: num
       financial_status: o.financial_status || null,
       fulfillment_status: o.fulfillment_status || null,
       order_status: o.cancelled_at ? "cancelled" : o.closed_at ? "closed" : "open",
+      cancelled_at: o.cancelled_at || null,
       shopify_created_at: o.created_at || null,
       total_price: o.total_price ? Number(o.total_price) : null,
       shopify_order_id: String(o.id),
