@@ -136,19 +136,26 @@ function DonutChart({ data, centerLabel, centerValue, size = 140, showLegend = t
 
 // ─── Trend chart tooltip ─────────────────────────────────────────────────────
 
+// REPLACE WITH:
 function TrendTooltip({ active, payload, label }: { active?: boolean; payload?: { name: string; value: number; color: string }[]; label?: string }) {
   if (!active || !payload?.length) return null;
+  const labelMap: Record<string, string> = {
+    revenue:     "Revenue (current)",
+    orders:      "Orders (current)",
+    prevRevenue: "Revenue (prev period)",
+    prevOrders:  "Orders (prev period)",
+  };
   return (
-    <div className="rounded-lg border bg-card p-2.5 shadow-lg text-xs min-w-[140px]">
+    <div className="rounded-lg border bg-card p-2.5 shadow-lg text-xs min-w-[160px]">
       <p className="font-semibold mb-1.5">{label}</p>
       {payload.map((p, i) => (
         <div key={i} className="flex justify-between gap-4">
           <span className="text-muted-foreground flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-sm inline-block" style={{ background: p.color }} />
-            {p.name === "revenue" ? "Revenue" : "Orders"}
+            {labelMap[p.name] ?? p.name}
           </span>
           <span className="font-medium tabular-nums">
-            {p.name === "revenue" ? fmtGBP(p.value) : p.value}
+            {p.name === "revenue" || p.name === "prevRevenue" ? fmtGBP(p.value) : p.value}
           </span>
         </div>
       ))}
@@ -425,9 +432,10 @@ function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing }: {
                   <span className="text-muted-foreground font-normal ml-1.5">{bounds.label}</span>
                 </h3>
                 <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                  <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-0.5 bg-indigo-500 rounded" />Revenue</span>
-                  <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-0.5 bg-violet-400 rounded border-t border-dashed" />Orders</span>
-                </div>
+  <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-0.5 bg-indigo-500 rounded" />Revenue</span>
+  <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-0.5 bg-indigo-300 rounded" style={{ borderTop: "2px dashed #a5b4fc" }} />Prev Revenue</span>
+  <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-0.5 bg-violet-400 rounded" style={{ borderTop: "2px dashed #c4b5fd" }} />Orders</span>
+</div>
               </div>
               <button className="text-muted-foreground hover:text-foreground"><MoreHorizontal size={14} /></button>
             </div>
@@ -456,8 +464,11 @@ function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing }: {
                   <YAxis yAxisId="left" tickFormatter={fmtAxisGBP} tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} width={40} />
                   <YAxis yAxisId="right" orientation="right" hide />
                   <Tooltip content={<TrendTooltip />} />
-                  <Area yAxisId="left" type="monotone" dataKey="revenue" fill="url(#trendGrad)" stroke="#6366f1" strokeWidth={2} dot={false} isAnimationActive={false} />
-                  <Line yAxisId="right" type="monotone" dataKey="orders" stroke="#8b5cf6" strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} />
+                  // REPLACE WITH:
+<Area yAxisId="left" type="monotone" dataKey="revenue" fill="url(#trendGrad)" stroke="#6366f1" strokeWidth={2} dot={false} isAnimationActive={false} />
+<Line yAxisId="left" type="monotone" dataKey="prevRevenue" stroke="#a5b4fc" strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} />
+<Line yAxisId="right" type="monotone" dataKey="orders" stroke="#8b5cf6" strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} />
+<Line yAxisId="right" type="monotone" dataKey="prevOrders" stroke="#c4b5fd" strokeWidth={1} strokeDasharray="2 4" dot={false} isAnimationActive={false} />
                 </ComposedChart>
               </ResponsiveContainer>
             )}
