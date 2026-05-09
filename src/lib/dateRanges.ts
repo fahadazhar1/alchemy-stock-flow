@@ -40,29 +40,31 @@ export function getDateBounds(range: DateRangeKey): DateBounds {
       prevEnd = new Date(today.getTime() - 7 * DAY + DAY - 1);
       break;
     }
-    case "MTD": {
+        case "MTD": {
       start = new Date(now.getFullYear(), now.getMonth(), 1);
       prevStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      prevEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+      prevEnd = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate(), 23, 59, 59, 999); // ✅ same day last month
       break;
     }
     case "QTD": {
       const q = Math.floor(now.getMonth() / 3);
       start = new Date(now.getFullYear(), q * 3, 1);
       prevStart = new Date(now.getFullYear(), q * 3 - 3, 1);
-      prevEnd = new Date(now.getFullYear(), q * 3, 0, 23, 59, 59, 999);
+      const elapsed = now.getDate() - 1; // days elapsed since quarter start
+      const prevQStart = new Date(now.getFullYear(), q * 3 - 3, 1);
+      prevEnd = new Date(prevQStart.getTime() + elapsed * DAY + DAY - 1); // ✅ same elapsed days last quarter
       break;
     }
     case "YTD": {
       start = new Date(now.getFullYear(), 0, 1);
       prevStart = new Date(now.getFullYear() - 1, 0, 1);
-      prevEnd = new Date(now.getFullYear() - 1, 11, 31, 23, 59, 59, 999);
+      prevEnd = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate(), 23, 59, 59, 999); // ✅ same calendar date last year
       break;
     }
     default: {
       start = new Date(now.getFullYear(), now.getMonth(), 1);
       prevStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      prevEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+      prevEnd = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate(), 23, 59, 59, 999);
     }
   }
 
