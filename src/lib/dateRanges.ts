@@ -1,4 +1,4 @@
-export type DateRangeKey = "Today" | "WTD" | "MTD" | "QTD" | "YTD";
+export type DateRangeKey = "Today" | "WTD" | "MTD" | "QTD" | "YTD" | "Custom";
 
 export interface DateBounds {
   startISO: string;
@@ -91,6 +91,23 @@ export function comparePeriodLabel(range: DateRangeKey): string {
     MTD: "vs last month",
     QTD: "vs last quarter",
     YTD: "vs last year",
+    Custom: "vs prev period",
   };
   return map[range];
+}
+
+export function getCustomDateBounds(from: Date, to: Date): DateBounds {
+  const fmt = (d: Date) => d.toLocaleDateString("en-GB", { month: "short", day: "numeric" });
+  const DAY = 86_400_000;
+  const days = Math.max(1, Math.ceil((to.getTime() - from.getTime()) / DAY));
+  const prevEnd = new Date(from.getTime() - 1);
+  const prevStart = new Date(from.getTime() - days * DAY);
+  return {
+    startISO:    from.toISOString(),
+    endISO:      to.toISOString(),
+    days,
+    label:       `${fmt(from)} – ${fmt(to)}`,
+    prevStartISO: prevStart.toISOString(),
+    prevEndISO:   prevEnd.toISOString(),
+  };
 }
