@@ -4,31 +4,88 @@ import {
   AlertTriangle, Megaphone, Plus, Search, Share2, Save, Play,
   Pause, MoreHorizontal, Calendar, Download, LayoutTemplate,
   SlidersHorizontal, Table2, PieChart as PieIcon, LineChart as LineIcon, Hash,
-  GripVertical, X, ChevronRight,
+  GripVertical, X, ChevronRight, ArrowLeft,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import {
-  ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
-  LineChart, Line, PieChart, Pie, Cell,
-} from "recharts";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
-import { fmtGBP, fmtNum, reportTemplates, salesTrend, channels } from "./mockData";
+import { reportTemplates } from "./mockData";
 import { useSavedReports, useReportSchedules, type SavedReport, type ReportSchedule } from "@/hooks/useReports";
 
-// ─── Icon map (for dynamic icon lookup) ─────────────────────────────────────
+import FunctionalCustomBuilder from "./components/FunctionalCustomBuilder";
+import {
+  SalesOverviewReport,
+  TopProductsReport,
+  InventoryHealthReport,
+  FulfillmentReport,
+  CollectionPerformanceReport,
+} from "./components/ReportPanels";
+
+// ─── Template → report panel mapping ─────────────────────────────────────────
+
+type ReportKey = "sales-overview" | "top-products" | "inventory-health" | "fulfillment" | "collection-performance";
+
+const TEMPLATE_REPORT_MAP: Record<string, ReportKey> = {
+  "sales-overview":           "sales-overview",
+  "revenue-by-channel":       "sales-overview",
+  "sales-by-channel":         "sales-overview",
+  "top-products":             "top-products",
+  "products-by-revenue":      "top-products",
+  "best-sellers":             "top-products",
+  "inventory-health":         "inventory-health",
+  "inventory":                "inventory-health",
+  "stock-levels":             "inventory-health",
+  "fulfillment":              "fulfillment",
+  "fulfillment-report":       "fulfillment",
+  "order-fulfillment":        "fulfillment",
+  "collection-performance":   "collection-performance",
+  "collections":              "collection-performance",
+};
+
+function resolveReportKey(tpl: typeof reportTemplates[number]): ReportKey | null {
+  const slug = tpl.id?.toLowerCase().replace(/\s+/g, "-") ?? "";
+  const name = tpl.name?.toLowerCase().replace(/\s+/g, "-") ?? "";
+  const cat  = tpl.category?.toLowerCase() ?? "";
+  return (
+    TEMPLATE_REPORT_MAP[slug] ??
+    TEMPLATE_REPORT_MAP[name] ??
+    (cat === "inventory"  ? "inventory-health" :
+     cat === "sales"      ? "sales-overview" :
+     cat === "vendors"    ? "top-products" :
+     cat === "customers"  ? "sales-overview" :
+     cat === "marketing"  ? "collection-performance" : null)
+  );
+}
+
+function ReportPanel({ reportKey, onBack }: { reportKey: ReportKey; onBack: () => void }) {
+  return (
+    <div className="space-y-4">
+      <button onClick={onBack}
+        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors">
+        <ArrowLeft size={13} /> Back to templates
+      </button>
+      {reportKey === "sales-overview"         && <SalesOverviewReport />}
+      {reportKey === "top-products"           && <TopProductsReport />}
+      {reportKey === "inventory-health"       && <InventoryHealthReport />}
+      {reportKey === "fulfillment"            && <FulfillmentReport />}
+      {reportKey === "collection-performance" && <CollectionPerformanceReport />}
+    </div>
+  );
+}
+
+// ─── Icon map ─────────────────────────────────────────────────────────────────
 
 const iconMap: Record<string, LucideIcon> = {
   BarChart2, Clock, Truck, Globe, TrendingDown, Award, Users, AlertTriangle, Megaphone,
 };
 
-// ─── Template card ───────────────────────────────────────────────────────────
+// ─── Template card ────────────────────────────────────────────────────────────
 
-function TemplateCard({ tpl }: { tpl: typeof reportTemplates[number] }) {
+function TemplateCard({ tpl, onRun }: { tpl: typeof reportTemplates[number]; onRun: () => void }) {
   const Icon = iconMap[tpl.icon] ?? BarChart2;
   return (
     <Card className="cursor-pointer transition-all hover:shadow-md hover:border-border/80 group">
@@ -53,279 +110,18 @@ function TemplateCard({ tpl }: { tpl: typeof reportTemplates[number] }) {
           <span className="flex items-center gap-1 text-muted-foreground">
             <Clock size={11} />Last run {tpl.lastRun}
           </span>
-          <span className="font-medium flex items-center gap-0.5" style={{ color: tpl.color }}>
+          <button onClick={onRun}
+            className="font-medium flex items-center gap-0.5 hover:underline"
+            style={{ color: tpl.color }}>
             Run report <ChevronRight size={11} strokeWidth={2.5} />
-          </span>
+          </button>
         </div>
       </CardContent>
     </Card>
   );
 }
 
-// ─── Custom builder ──────────────────────────────────────────────────────────
-
-type FieldType = "Metric" | "Dimension" | "Filter";
-type ChartType = "bar" | "line" | "pie" | "table" | "kpi";
-
-const fieldTypeCls: Record<FieldType, string> = {
-  Metric:    "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400",
-  Dimension: "bg-violet-50 text-violet-700 dark:bg-violet-950/40 dark:text-violet-400",
-  Filter:    "bg-cyan-50 text-cyan-700 dark:bg-cyan-950/40 dark:text-cyan-400",
-};
-const slotAccent: Record<"metrics" | "dimensions" | "filters", string> = {
-  metrics: "#10b981", dimensions: "#8b5cf6", filters: "#06b6d4",
-};
-
-const fieldLibrary: Record<FieldType, string[]> = {
-  Metric:    ["Revenue","Orders","AOV","Units sold","Refunds","Margin","Sell-through %","Inventory units","Stock value","Days on shelf","Conversion %"],
-  Dimension: ["Channel","Collection","Vendor","Store","Customer cohort","Day","Week","Month","Country","SKU"],
-  Filter:    ["Date range","Status","Channel","Store","Tag","Vendor"],
-};
-
-function FieldChip({ name, type, onAdd }: { name: string; type: FieldType; onAdd: () => void }) {
-  return (
-    <button onClick={onAdd} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border bg-card hover:bg-muted text-xs transition-colors text-left w-full">
-      <GripVertical size={11} className="text-muted-foreground shrink-0" />
-      <span className="flex-1">{name}</span>
-      <span className={cn("text-[9px] font-semibold px-1.5 py-0.5 rounded", fieldTypeCls[type])}>{type}</span>
-    </button>
-  );
-}
-
-function Slot({ label, items, kind, onRemove }:
-  { label: string; items: string[]; kind: "metrics" | "dimensions" | "filters"; onRemove: (i: number) => void }) {
-  const color = slotAccent[kind];
-  return (
-    <div>
-      <p className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground mb-1.5">{label}</p>
-      <div className={cn("min-h-16 rounded-lg p-2 flex flex-wrap gap-1.5 items-start",
-        items.length ? "border bg-muted/50" : "border-2 border-dashed")}>
-        {items.length === 0 && (
-          <p className="text-xs text-muted-foreground m-auto">Drop {label.toLowerCase()} here</p>
-        )}
-        {items.map((it, i) => (
-          <span key={i} className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] text-white font-medium"
-            style={{ background: color }}>
-            {it}
-            <button className="hover:opacity-70" onClick={() => onRemove(i)}><X size={10} strokeWidth={2.5} /></button>
-          </span>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// Simplified tooltip for preview charts
-function PreviewTooltip({ active, payload, label }: { active?: boolean; payload?: { name: string; value: number }[]; label?: string }) {
-  if (!active || !payload?.length) return null;
-  return (
-    <div className="rounded-lg border bg-card px-2.5 py-1.5 shadow-lg text-xs">
-      <p className="font-medium mb-1">{label}</p>
-      {payload.map((p, i) => (
-        <div key={i} className="flex justify-between gap-3">
-          <span className="text-muted-foreground">{p.name === "revenue" ? "Revenue" : p.name}</span>
-          <span className="font-medium">{p.name === "revenue" ? fmtGBP(p.value) : fmtNum(p.value)}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function CustomBuilder() {
-  const [metrics, setMetrics] = useState(["Revenue", "Orders"]);
-  const [dimensions, setDimensions] = useState(["Channel"]);
-  const [filters, setFilters] = useState(["Date: Last 30 days"]);
-  const [chartType, setChartType] = useState<ChartType>("bar");
-
-  const add = (type: FieldType, name: string) => {
-    if (type === "Metric"    && !metrics.includes(name))    setMetrics([...metrics, name]);
-    if (type === "Dimension" && !dimensions.includes(name)) setDimensions([...dimensions, name]);
-    if (type === "Filter"    && !filters.includes(name))    setFilters([...filters, name]);
-  };
-  const rm = (kind: "metrics" | "dimensions" | "filters") => (i: number) => {
-    if (kind === "metrics")    setMetrics(s => s.filter((_, k) => k !== i));
-    if (kind === "dimensions") setDimensions(s => s.filter((_, k) => k !== i));
-    if (kind === "filters")    setFilters(s => s.filter((_, k) => k !== i));
-  };
-
-  const chartButtons: { id: ChartType; icon: LucideIcon; label: string }[] = [
-    { id: "bar",   icon: BarChart2,        label: "Bar" },
-    { id: "line",  icon: LineIcon,         label: "Line" },
-    { id: "pie",   icon: PieIcon,          label: "Donut" },
-    { id: "table", icon: Table2,           label: "Pivot" },
-    { id: "kpi",   icon: Hash,             label: "KPI" },
-  ];
-
-  const barData = channels.map(c => ({ label: c.name.split(" ")[0], value: c.revenue, color: c.color }));
-
-  return (
-    <div className="grid gap-3.5" style={{ gridTemplateColumns: "256px 1fr" }}>
-      {/* Field library */}
-      <Card>
-        <CardHeader className="pb-2 pt-4 px-4">
-          <h3 className="text-sm font-semibold">Fields</h3>
-        </CardHeader>
-        <CardContent className="px-3 pb-4 space-y-4 overflow-y-auto max-h-[600px]">
-          {(Object.entries(fieldLibrary) as [FieldType, string[]][]).map(([type, list]) => (
-            <div key={type}>
-              <p className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground mb-1.5 px-1">{type}s</p>
-              <div className="space-y-1">
-                {list.map(f => <FieldChip key={f} name={f} type={type} onAdd={() => add(type, f)} />)}
-              </div>
-            </div>
-          ))}
-        </CardContent>
-      </Card>
-
-      {/* Canvas */}
-      <div className="space-y-3.5">
-        <Card>
-          <CardContent className="p-4 space-y-3">
-            <div className="grid grid-cols-3 gap-3">
-              <Slot label="Metrics"    items={metrics}    kind="metrics"    onRemove={rm("metrics")} />
-              <Slot label="Dimensions" items={dimensions} kind="dimensions" onRemove={rm("dimensions")} />
-              <Slot label="Filters"    items={filters}    kind="filters"    onRemove={rm("filters")} />
-            </div>
-            <div className="flex items-center gap-2 pt-1">
-              <span className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground mr-1">Chart</span>
-              {chartButtons.map(({ id, icon: Icon, label }) => (
-                <Button key={id} size="sm" variant={chartType === id ? "default" : "outline"}
-                  className="h-7 text-xs gap-1.5" onClick={() => setChartType(id)}>
-                  <Icon size={12} /> {label}
-                </Button>
-              ))}
-              <div className="flex-1" />
-              <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5"><Save size={12} /> Save</Button>
-              <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5"><Calendar size={12} /> Schedule</Button>
-              <Button size="sm" className="h-7 text-xs gap-1.5"><Play size={12} /> Run</Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Preview */}
-        <Card>
-          <CardHeader className="pb-2 pt-4 px-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold">
-                Preview <span className="text-muted-foreground font-normal">
-                  {metrics.join(", ") || "no metrics"} by {dimensions.join(", ") || "—"}
-                </span>
-              </h3>
-              <div className="flex gap-1.5">
-                <Button size="sm" variant="ghost" className="h-7 text-xs gap-1"><Download size={12} /> CSV</Button>
-                <Button size="sm" variant="ghost" className="h-7 text-xs gap-1"><Download size={12} /> PDF</Button>
-                <Button size="sm" variant="ghost" className="h-7 text-xs gap-1"><Share2 size={12} /> Share</Button>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent className="px-4 pb-4">
-            {chartType === "bar" && (
-              <ResponsiveContainer width="100%" height={260}>
-                <BarChart data={barData} margin={{ top: 4, right: 12, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
-                  <XAxis dataKey="label" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
-                  <YAxis tickFormatter={v => `£${Math.round(v/1000)}k`} tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} width={42} />
-                  <Tooltip content={<PreviewTooltip />} />
-                  <Bar dataKey="value" name="revenue" radius={[3, 3, 0, 0]} isAnimationActive={false}>
-                    {barData.map((d, i) => <Cell key={i} fill={d.color} />)}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-            {chartType === "line" && (
-              <ResponsiveContainer width="100%" height={260}>
-                <LineChart data={salesTrend} margin={{ top: 4, right: 12, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
-                  <XAxis dataKey="label" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} minTickGap={40} axisLine={false} tickLine={false} />
-                  <YAxis tickFormatter={v => `£${Math.round(v/1000)}k`} tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} width={42} />
-                  <Tooltip content={<PreviewTooltip />} />
-                  <Line type="monotone" dataKey="revenue" stroke="#6366f1" strokeWidth={2} dot={false} isAnimationActive={false} />
-                </LineChart>
-              </ResponsiveContainer>
-            )}
-            {chartType === "pie" && (
-              <div className="flex items-center justify-center py-4">
-                <div className="relative" style={{ width: 200, height: 200 }}>
-                  <PieChart width={200} height={200}>
-                    <Pie data={channels.map(c => ({ name: c.name, value: c.revenue, color: c.color }))}
-                      cx={100} cy={100} innerRadius={60} outerRadius={88} strokeWidth={0} paddingAngle={1.5} dataKey="value">
-                      {channels.map((c, i) => <Cell key={i} fill={c.color} />)}
-                    </Pie>
-                  </PieChart>
-                  <div className="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-none">
-                    <span className="text-[9px] uppercase tracking-wider font-semibold text-muted-foreground">Revenue</span>
-                    <span className="text-lg font-semibold tabular-nums">{fmtGBP(channels.reduce((s, c) => s + c.revenue, 0))}</span>
-                  </div>
-                </div>
-                <div className="space-y-2 ml-6">
-                  {channels.map((c, i) => (
-                    <div key={i} className="flex items-center gap-2 text-xs">
-                      <span className="w-2 h-2 rounded-sm" style={{ background: c.color }} />
-                      <span className="text-muted-foreground w-24 truncate">{c.name}</span>
-                      <span className="font-medium tabular-nums">{fmtGBP(c.revenue)}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            {chartType === "table" && (
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b">
-                    <th className="py-2 text-left font-medium text-muted-foreground">{dimensions[0] ?? "Dimension"}</th>
-                    {metrics.map(m => <th key={m} className="py-2 text-right font-medium text-muted-foreground">{m}</th>)}
-                    <th className="py-2 text-left font-medium text-muted-foreground pl-4">Trend</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {channels.map((c, ci) => (
-                    <tr key={c.key} className="border-b last:border-b-0 hover:bg-muted/40">
-                      <td className="py-2.5">
-                        <div className="flex items-center gap-2">
-                          <span className="w-2 h-2 rounded-sm" style={{ background: c.color }} />
-                          {c.name}
-                        </div>
-                      </td>
-                      {metrics.map(m => (
-                        <td key={m} className="py-2.5 text-right tabular-nums">
-                          {m === "Revenue" ? fmtGBP(c.revenue) :
-                           m === "Orders"  ? fmtNum(c.orders) :
-                           m === "AOV"     ? fmtGBP(c.revenue / c.orders) :
-                           m === "Units sold" ? fmtNum(Math.round(c.orders * 1.6)) :
-                           m === "Sell-through %" ? (c.share / 4).toFixed(1) + "%" : "—"}
-                        </td>
-                      ))}
-                      <td className="py-2.5 pl-4">
-                        <div className="flex h-1.5 w-24 bg-muted rounded-full overflow-hidden">
-                          <div className="h-full rounded-full" style={{ width: `${c.share}%`, background: c.color }} />
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-            {chartType === "kpi" && (
-              <div className="grid grid-cols-3 gap-3 pt-2">
-                {metrics.map((m, i) => (
-                  <div key={m} className="border-2 border-dashed rounded-lg p-4">
-                    <p className="text-xs text-muted-foreground mb-1">{m}</p>
-                    <p className="text-2xl font-semibold tabular-nums">
-                      {i === 0 ? fmtGBP(403000) : i === 1 ? fmtNum(3829) : fmtGBP(105)}
-                    </p>
-                    <p className="text-xs text-emerald-600 mt-1">↑ {(8 + i * 3).toFixed(1)}% vs prev</p>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-    </div>
-  );
-}
-
-// ─── Saved reports tab ───────────────────────────────────────────────────────
+// ─── Saved reports ────────────────────────────────────────────────────────────
 
 function SavedRowSkeleton() {
   return (
@@ -340,11 +136,12 @@ function SavedRowSkeleton() {
   );
 }
 
-function SavedReportsTab({ reports, isLoading, search, onSearch }: {
+function SavedReportsTab({ reports, isLoading, search, onSearch, onRunReport }: {
   reports: SavedReport[];
   isLoading: boolean;
   search: string;
   onSearch: (s: string) => void;
+  onRunReport: (r: SavedReport) => void;
 }) {
   return (
     <Card>
@@ -372,7 +169,7 @@ function SavedReportsTab({ reports, isLoading, search, onSearch }: {
         <table className="w-full text-xs">
           <thead>
             <tr className="border-b">
-              {["Name","Template","Owner","Last updated","Schedule",""].map((h, i) => (
+              {["Name", "Template", "Owner", "Last updated", "Schedule", ""].map((h, i) => (
                 <th key={i} className="px-4 py-2.5 font-medium text-muted-foreground text-left">{h}</th>
               ))}
             </tr>
@@ -418,7 +215,10 @@ function SavedReportsTab({ reports, isLoading, search, onSearch }: {
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-1 justify-end">
-                            <button className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"><Play size={13} /></button>
+                            <button onClick={() => onRunReport(r)}
+                              className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground">
+                              <Play size={13} />
+                            </button>
                             <button className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"><Share2 size={13} /></button>
                             <button className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"><MoreHorizontal size={13} /></button>
                           </div>
@@ -433,7 +233,7 @@ function SavedReportsTab({ reports, isLoading, search, onSearch }: {
   );
 }
 
-// ─── Scheduled tab ───────────────────────────────────────────────────────────
+// ─── Scheduled tab ────────────────────────────────────────────────────────────
 
 function ScheduleSkeleton() {
   return (
@@ -506,13 +306,15 @@ function ScheduledTab({ schedules, isLoading }: {
   );
 }
 
-// ─── Page ────────────────────────────────────────────────────────────────────
+// ─── Page ─────────────────────────────────────────────────────────────────────
 
-const CATEGORIES = ["All","Sales","Inventory","Vendors","Customers","Marketing"];
+const CATEGORIES = ["All", "Sales", "Inventory", "Vendors", "Customers", "Marketing"];
 
 export default function Reports() {
   const [categoryFilter, setCategoryFilter] = useState("All");
   const [savedSearch, setSavedSearch] = useState("");
+  const [activeTab, setActiveTab] = useState("templates");
+  const [activeReport, setActiveReport] = useState<ReportKey | null>(null);
 
   const savedQ = useSavedReports(savedSearch);
   const scheduledQ = useReportSchedules();
@@ -520,6 +322,24 @@ export default function Reports() {
   const filteredTemplates = categoryFilter === "All"
     ? reportTemplates
     : reportTemplates.filter(t => t.category === categoryFilter);
+
+  const handleRunTemplate = (tpl: typeof reportTemplates[number]) => {
+    const key = resolveReportKey(tpl);
+    if (key) {
+      setActiveReport(key);
+    } else {
+      // Fallback: open sales overview for unmapped templates
+      setActiveReport("sales-overview");
+    }
+  };
+
+  const handleRunSaved = (r: SavedReport) => {
+    // Map saved report template name to a panel
+    const slug = r.templateName?.toLowerCase().replace(/\s+/g, "-") ?? "";
+    const key = TEMPLATE_REPORT_MAP[slug] ?? "sales-overview";
+    setActiveReport(key);
+    setActiveTab("templates");
+  };
 
   return (
     <div className="p-6 space-y-4 max-w-[1600px]">
@@ -535,7 +355,7 @@ export default function Reports() {
         </div>
       </div>
 
-      <Tabs defaultValue="templates">
+      <Tabs value={activeTab} onValueChange={v => { setActiveTab(v); setActiveReport(null); }}>
         <TabsList className="h-9 gap-1">
           <TabsTrigger value="templates" className="gap-1.5 text-xs">
             <LayoutTemplate size={13} /> Templates
@@ -560,40 +380,53 @@ export default function Reports() {
           </TabsTrigger>
         </TabsList>
 
+        {/* Templates tab */}
         <TabsContent value="templates" className="mt-4 space-y-4">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex rounded-md border overflow-hidden">
-              {CATEGORIES.map(c => (
-                <button key={c} onClick={() => setCategoryFilter(c)}
-                  className={cn("px-3 py-1.5 text-xs font-medium transition-colors border-r last:border-r-0",
-                    categoryFilter === c ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground")}>
-                  {c}
-                </button>
-              ))}
-            </div>
-            <div className="relative">
-              <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
-              <Input placeholder="Search templates…" className="pl-8 h-8 w-52 text-xs" />
-            </div>
-          </div>
-          <div className="grid grid-cols-3 gap-3.5">
-            {filteredTemplates.map(t => <TemplateCard key={t.id} tpl={t} />)}
-          </div>
+          {activeReport ? (
+            <ReportPanel reportKey={activeReport} onBack={() => setActiveReport(null)} />
+          ) : (
+            <>
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex rounded-md border overflow-hidden">
+                  {CATEGORIES.map(c => (
+                    <button key={c} onClick={() => setCategoryFilter(c)}
+                      className={cn("px-3 py-1.5 text-xs font-medium transition-colors border-r last:border-r-0",
+                        categoryFilter === c ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground")}>
+                      {c}
+                    </button>
+                  ))}
+                </div>
+                <div className="relative">
+                  <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                  <Input placeholder="Search templates…" className="pl-8 h-8 w-52 text-xs" />
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-3.5">
+                {filteredTemplates.map(t => (
+                  <TemplateCard key={t.id} tpl={t} onRun={() => handleRunTemplate(t)} />
+                ))}
+              </div>
+            </>
+          )}
         </TabsContent>
 
+        {/* Custom builder tab */}
         <TabsContent value="builder" className="mt-4">
-          <CustomBuilder />
+          <FunctionalCustomBuilder />
         </TabsContent>
 
+        {/* Saved tab */}
         <TabsContent value="saved" className="mt-4">
           <SavedReportsTab
             reports={savedQ.data ?? []}
             isLoading={savedQ.isLoading}
             search={savedSearch}
             onSearch={setSavedSearch}
+            onRunReport={handleRunSaved}
           />
         </TabsContent>
 
+        {/* Scheduled tab */}
         <TabsContent value="scheduled" className="mt-4">
           <ScheduledTab
             schedules={scheduledQ.data ?? []}
