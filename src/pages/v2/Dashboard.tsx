@@ -25,7 +25,7 @@ import { useChannelPerformance } from "@/hooks/useChannelPerformance";
 import { useInventoryDashboard } from "@/hooks/useInventoryDashboard";
 import { useSalesKPIs, useCollectionSales } from "@/hooks/useSalesKPIs";
 import { supabase } from "@/integrations/supabase/client";
-import { type DateRangeKey, type DateBounds, getDateBounds, comparePeriodLabel } from "@/lib/dateRanges";
+import { type DateRangeKey, type DateBounds, getDateBounds, getCustomDateBounds, comparePeriodLabel } from "@/lib/dateRanges";
 
 // ─── Sparkline ───────────────────────────────────────────────────────────────
 
@@ -307,12 +307,19 @@ function TopProductsSkeleton() {
   );
 }
 
-function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing }: {
+function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing,
+  showDatePicker, setShowDatePicker, customFrom, customTo, setCustomFrom, setCustomTo }: {
   bounds: DateBounds;
   range: DateRangeKey;
   onRangeChange: (r: DateRangeKey) => void;
   onSyncStart: () => void;
   syncing: boolean;
+  showDatePicker: boolean;
+  setShowDatePicker: (v: boolean) => void;
+  customFrom: Date | null;
+  customTo: Date | null;
+  setCustomFrom: (d: Date | null) => void;
+  setCustomTo: (d: Date | null) => void;
 }) {
   const navigate = useNavigate();
   const { data: liveProducts, isLoading: productsLoading, error: productsError } = useTopProducts(6, bounds);
@@ -371,14 +378,51 @@ function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing }: {
           <span className="text-xs text-muted-foreground">{bounds.label} · {comparePeriodLabel(range)}</span>
         </div>
         <div className="flex items-center gap-2">
-          <div className="flex rounded-md border overflow-hidden">
-            {(["Today","WTD","MTD","QTD","YTD"] as DateRangeKey[]).map(r => (
-              <button key={r} onClick={() => onRangeChange(r)}
-                className={cn("px-2.5 py-1 text-xs font-medium transition-colors",
-                  range === r ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground")}>
-                {r}
+// REPLACE WITH:
+          <div className="flex items-center gap-2">
+            <div className="flex rounded-md border overflow-hidden">
+              {(["Today","WTD","MTD","QTD","YTD"] as DateRangeKey[]).map(r => (
+                <button key={r} onClick={() => onRangeChange(r)}
+                  className={cn("px-2.5 py-1 text-xs font-medium transition-colors",
+                    range === r ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground")}>
+                  {r}
+                </button>
+              ))}
+              <button
+                onClick={() => { onRangeChange("Custom"); setShowDatePicker(true); }}
+                className={cn("px-2.5 py-1 text-xs font-medium transition-colors border-l",
+                  range === "Custom" ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground")}>
+                Custom
               </button>
-            ))}
+            </div>
+            {(range === "Custom" || showDatePicker) && (
+              <div className="flex items-center gap-1.5 border rounded-md px-2 py-1 bg-background text-xs">
+                <input
+                  type="date"
+                  value={customFrom ? customFrom.toISOString().slice(0, 10) : ""}
+                  max={customTo ? customTo.toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10)}
+                  onChange={e => {
+                    const d = e.target.value ? new Date(e.target.value) : null;
+                    setCustomFrom(d);
+                    if (d && customTo) { onRangeChange("Custom"); setShowDatePicker(false); }
+                  }}
+                  className="text-xs border-0 outline-none bg-transparent text-foreground"
+                />
+                <span className="text-muted-foreground">→</span>
+                <input
+                  type="date"
+                  value={customTo ? customTo.toISOString().slice(0, 10) : ""}
+                  min={customFrom ? customFrom.toISOString().slice(0, 10) : ""}
+                  max={new Date().toISOString().slice(0, 10)}
+                  onChange={e => {
+                    const d = e.target.value ? new Date(e.target.value) : null;
+                    setCustomTo(d);
+                    if (customFrom && d) { onRangeChange("Custom"); setShowDatePicker(false); }
+                  }}
+                  className="text-xs border-0 outline-none bg-transparent text-foreground"
+                />
+              </div>
+            )}
           </div>
           <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" onClick={handleExport}
             disabled={!salesKPIs && !liveProducts}>
@@ -1088,8 +1132,13 @@ type SyncLogRow = { current_stage: string | null; records_synced: number; status
 
 export default function Dashboard() {
   const [showBanner, setShowBanner] = useState(true);
-  const [range, setRange]           = useState<DateRangeKey>("MTD");
-  const bounds                      = getDateBounds(range);
+   const [range, setRange]           = useState<DateRangeKey>("MTD");
+  const [customFrom, setCustomFrom] = useState<Date | null>(null);
+  const [customTo, setCustomTo]     = useState<Date | null>(null);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const bounds = range === "Custom" && customFrom && customTo
+    ? getCustomDateBounds(customFrom, customTo)
+    : getDateBounds(range as Exclude<DateRangeKey, "Custom">);
   const queryClient                 = useQueryClient();
   const { data: inventoryData }     = useInventoryDashboard();
   const { data: globalKPIs }        = useSalesKPIs();
@@ -1217,9 +1266,15 @@ export default function Dashboard() {
       <SalesSection
         bounds={bounds}
         range={range}
-        onRangeChange={setRange}
+        onRangeChange={(r) => { setRange(r); if (r !== "Custom") setShowDatePicker(false); }}
         onSyncStart={handleSync}
         syncing={syncing}
+        showDatePicker={showDatePicker}
+        setShowDatePicker={setShowDatePicker}
+        customFrom={customFrom}
+        customTo={customTo}
+        setCustomFrom={setCustomFrom}
+        setCustomTo={setCustomTo}
       />
       <div className="border-t border-dashed" />
       <InventorySection onSyncStart={handleSync} syncing={syncing} />
