@@ -27,6 +27,7 @@ import { useTopProducts } from "@/hooks/useTopProducts";
 import { useSalesTrend } from "@/hooks/useSalesTrend";
 import { useChannelPerformance } from "@/hooks/useChannelPerformance";
 import { useInventoryDashboard } from "@/hooks/useInventoryDashboard";
+import { OutOfStockWidget } from "./components/OutOfStockWidget";
 import { useSalesKPIs, useCollectionSales, useCustomerMetrics, useFulfillmentMetrics } from "@/hooks/useSalesKPIs";
 import { supabase } from "@/integrations/supabase/client";
 import { type DateRangeKey, type DateBounds, getDateBounds, getCustomDateBounds, comparePeriodLabel } from "@/lib/dateRanges";
@@ -1094,6 +1095,8 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
           )}
         </CardContent>
       </Card>
+
+      <OutOfStockWidget />
 
       <div className="grid grid-cols-3 gap-3.5">
         <Card className="col-span-2">
