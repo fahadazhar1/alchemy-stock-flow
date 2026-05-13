@@ -12,9 +12,12 @@ export interface SalesKPIs {
   aov: number;
   sellThrough: number;
   refundRate: number;
+  refundAmountRate: number;
+  refundedRevenue: number;
   pendingOrders: number;
   pendingApprovals: number;
-  // deltas vs previous period (null if no prev data)
+  prevRevenue: number;
+  prevOrders: number;
   revenueDelta: number | null;
   ordersDelta: number | null;
 }
@@ -38,7 +41,6 @@ export function useSalesKPIs(bounds?: DateBounds) {
   return useQuery({
     queryKey: ["sales-kpis", storeId, b.startISO],
     queryFn: async (): Promise<SalesKPIs> => {
-      // Current period orders (non-cancelled)
       let mtdQ = (supabase as any)
         .from("orders")
         .select("total_price, cancelled_at, financial_status")
@@ -46,7 +48,6 @@ export function useSalesKPIs(bounds?: DateBounds) {
         .lte("shopify_created_at", b.endISO);
       if (storeId) mtdQ = mtdQ.eq("store_id", storeId);
 
-      // Previous period orders
       let prevQ = (supabase as any)
         .from("orders")
         .select("total_price, cancelled_at")
@@ -54,7 +55,6 @@ export function useSalesKPIs(bounds?: DateBounds) {
         .lte("shopify_created_at", b.prevEndISO);
       if (storeId) prevQ = prevQ.eq("store_id", storeId);
 
-      // Pending fulfillment count (all-time, not range-filtered — represents current backlog)
       let pendingQ = (supabase as any)
         .from("orders")
         .select("id", { count: "exact", head: true })
@@ -63,7 +63,6 @@ export function useSalesKPIs(bounds?: DateBounds) {
         .is("cancelled_at", null);
       if (storeId) pendingQ = pendingQ.eq("store_id", storeId);
 
-      // Sell-through + pending approvals from KPI view
       const kpiQ = supabase
         .from("v_dashboard_kpis")
         .select("sell_through_ratio_current_month, pending_approvals_count")
@@ -78,11 +77,17 @@ export function useSalesKPIs(bounds?: DateBounds) {
       const rows     = ((mtdRes.data ?? []) as any[]).filter((r: any) => !r.cancelled_at);
       const prevRows = ((prevRes.data ?? []) as any[]).filter((r: any) => !r.cancelled_at);
 
-      const revenueMTD  = rows.reduce((s: number, r: any) => s + Number(r.total_price ?? 0), 0);
-      const ordersMTD   = rows.length;
-      const aov         = ordersMTD > 0 ? revenueMTD / ordersMTD : 0;
-      const refunded    = rows.filter((r: any) => r.financial_status === "refunded").length;
-      const refundRate  = ordersMTD > 0 ? Math.round((refunded / ordersMTD) * 1000) / 10 : 0;
+      const revenueMTD = rows.reduce((s: number, r: any) => s + Number(r.total_price ?? 0), 0);
+      const ordersMTD  = rows.length;
+      const aov        = ordersMTD > 0 ? revenueMTD / ordersMTD : 0;
+
+      // Refund calculations — includes both fully and partially refunded
+      const refundedRows    = rows.filter((r: any) =>
+        r.financial_status === "refunded" || r.financial_status === "partially_refunded"
+      );
+      const refundedRevenue  = refundedRows.reduce((s: number, r: any) => s + Number(r.total_price ?? 0), 0);
+      const refundRate       = ordersMTD > 0 ? Math.round((refundedRows.length / ordersMTD) * 1000) / 10 : 0;
+      const refundAmountRate = revenueMTD > 0 ? Math.round((refundedRevenue / revenueMTD) * 1000) / 10 : 0;
 
       const prevRevenue = prevRows.reduce((s: number, r: any) => s + Number(r.total_price ?? 0), 0);
       const prevOrders  = prevRows.length;
@@ -100,12 +105,97 @@ export function useSalesKPIs(bounds?: DateBounds) {
         revenueMTD,
         ordersMTD,
         aov,
-        sellThrough: Number(kpiRow?.sell_through_ratio_current_month ?? 0),
+        sellThrough:      Number(kpiRow?.sell_through_ratio_current_month ?? 0),
         refundRate,
+        refundAmountRate,
+        refundedRevenue,
         pendingOrders:    pendingRes.count ?? 0,
         pendingApprovals: Number(kpiRow?.pending_approvals_count ?? 0),
+        prevRevenue,
+        prevOrders,
         revenueDelta,
         ordersDelta,
+      };
+    },
+  });
+}
+
+// ─── Customer metrics ──────────────────────────────────────────────────────────
+
+export interface CustomerMetrics {
+  uniqueCustomers: number;
+  repeatCustomers: number;
+  retentionRate: number;
+  ltv: number;
+}
+
+export function useCustomerMetrics(bounds?: DateBounds) {
+  const { storeId } = useStoreFilter();
+  const b = bounds ?? getDateBounds("MTD");
+
+  return useQuery({
+    queryKey: ["customer-metrics", storeId, b.startISO, b.endISO],
+    queryFn: async (): Promise<CustomerMetrics> => {
+      const { data, error } = await (supabase as any).rpc("get_customer_metrics", {
+        p_start_iso: b.startISO,
+        p_end_iso:   b.endISO,
+        p_store_id:  storeId ?? null,
+      });
+
+      if (error) throw error;
+
+      const row = (Array.isArray(data) ? data[0] : data) as any;
+      return {
+        uniqueCustomers: Number(row?.unique_customers ?? 0),
+        repeatCustomers: Number(row?.repeat_customers ?? 0),
+        retentionRate:   Number(row?.retention_rate   ?? 0),
+        ltv:             Number(row?.ltv              ?? 0),
+      };
+    },
+  });
+}
+
+// ─── Fulfillment metrics ───────────────────────────────────────────────────────
+
+export interface FulfillmentMetrics {
+  avgLagHours: number;
+  ordersAnalyzed: number;
+}
+
+export function useFulfillmentMetrics(bounds?: DateBounds) {
+  const { storeId } = useStoreFilter();
+  const b = bounds ?? getDateBounds("MTD");
+
+  return useQuery({
+    queryKey: ["fulfillment-metrics", storeId, b.startISO, b.endISO],
+    queryFn: async (): Promise<FulfillmentMetrics> => {
+      let q = (supabase as any)
+        .from("orders")
+        .select("shopify_created_at, updated_at")
+        .eq("fulfillment_status", "fulfilled")
+        .gte("shopify_created_at", b.startISO)
+        .lte("shopify_created_at", b.endISO)
+        .is("cancelled_at", null);
+      if (storeId) q = q.eq("store_id", storeId);
+
+      const { data, error } = await q;
+      if (error) throw error;
+
+      const rows = (data ?? []) as any[];
+      const lags: number[] = [];
+      for (const r of rows) {
+        if (!r.shopify_created_at || !r.updated_at) continue;
+        const lagMs = new Date(r.updated_at).getTime() - new Date(r.shopify_created_at).getTime();
+        if (lagMs > 0 && lagMs < 30 * 86_400_000) lags.push(lagMs / 3_600_000);
+      }
+
+      const avgLagHours = lags.length > 0
+        ? lags.reduce((s, v) => s + v, 0) / lags.length
+        : 0;
+
+      return {
+        avgLagHours: Math.round(avgLagHours * 10) / 10,
+        ordersAnalyzed: lags.length,
       };
     },
   });
@@ -118,7 +208,6 @@ export function useCollectionSales(bounds?: DateBounds) {
   return useQuery({
     queryKey: ["collection-sales", storeId, b.startISO, b.endISO],
     queryFn: async (): Promise<CollectionSale[]> => {
-      // ── Step 1: order IDs in the date window ─────────────────────────────
       let ordQ = (supabase as any)
         .from("orders")
         .select("id")
@@ -134,7 +223,6 @@ export function useCollectionSales(bounds?: DateBounds) {
       const orderIds: string[] = (ordRows ?? []).map((r: any) => r.id as string);
       if (!orderIds.length) return [];
 
-      // ── Step 2: order_items → aggregate revenue per product_id ───────────
       const { data: items, error: iErr } = await (supabase as any)
         .from("order_items")
         .select("product_id, quantity, unit_price")
@@ -149,28 +237,21 @@ export function useCollectionSales(bounds?: DateBounds) {
       const productIds = Array.from(productRevMap.keys());
       if (!productIds.length) return [];
 
-      // ── Step 3: collection attribution via product_collections junction ──
-      const collectionMap = new Map<string, string>(); // product_id → collection name
+      const collectionMap = new Map<string, string>();
 
-      // Fetch product_collections rows for our product IDs
       const { data: pcRows, error: pcErr } = await (supabase as any)
         .from("product_collections")
         .select("product_id, collection_id")
         .in("product_id", productIds);
 
       if (!pcErr && pcRows?.length) {
-        // Fetch collection names separately
         const collectionIds = [...new Set((pcRows as any[]).map((r: any) => r.collection_id))];
         const { data: collRows } = await (supabase as any)
           .from("collections")
           .select("id, name")
           .in("id", collectionIds);
-
         const collIdToName = new Map<string, string>();
-        for (const c of (collRows ?? []) as any[]) {
-          collIdToName.set(c.id, c.name);
-        }
-
+        for (const c of (collRows ?? []) as any[]) collIdToName.set(c.id, c.name);
         for (const r of (pcRows as any[])) {
           if (!collectionMap.has(r.product_id)) {
             const name = collIdToName.get(r.collection_id);
@@ -179,7 +260,6 @@ export function useCollectionSales(bounds?: DateBounds) {
         }
       }
 
-      // Fallback: product_type for anything still unmapped
       const unmapped = productIds.filter(id => !collectionMap.has(id));
       if (unmapped.length > 0) {
         const { data: prodRows } = await (supabase as any)
@@ -191,7 +271,6 @@ export function useCollectionSales(bounds?: DateBounds) {
         }
       }
 
-      // ── Step 4: aggregate by collection name ──────────────────────────────
       const revenueByCollection = new Map<string, number>();
       for (const [productId, revenue] of productRevMap.entries()) {
         const name = collectionMap.get(productId) ?? "Other";

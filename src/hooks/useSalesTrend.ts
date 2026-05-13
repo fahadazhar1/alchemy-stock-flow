@@ -9,8 +9,10 @@ export interface TrendPoint {
   label: string;
   revenue: number;
   orders: number;
-  prevRevenue: number;  // add
-  prevOrders: number;   // add
+  prevRevenue: number;
+  prevOrders: number;
+  projected?: number;
+  isProjected?: boolean;
 }
 
 export function useSalesTrend(days = 30, bounds?: DateBounds) {

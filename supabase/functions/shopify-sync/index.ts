@@ -493,6 +493,7 @@ async function syncOrders(supabase: any, conn: any, log: any, totalRef: { n: num
       total_price: o.total_price ? Number(o.total_price) : null,
       shopify_order_id: String(o.id),
       store_id: conn.store_id,
+      customer_email: o.email || o.customer?.email || null,
     };
     const { data: existing } = await supabase
       .from("orders").select("id").eq("shopify_order_id", String(o.id)).maybeSingle();

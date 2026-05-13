@@ -23,14 +23,37 @@ const CHANNEL_META: Record<string, { name: string; color: string }> = {
   wholesale:            { name: "Wholesale",     color: "#3B82F6" },
   exchange:             { name: "Exchange",      color: "#6B7280" },
   subscription:         { name: "Subscription",  color: "#8B5CF6" },
+  amazon:               { name: "Amazon",        color: "#FF9900" },
+  ebay:                 { name: "eBay",          color: "#E53238" },
+  google:               { name: "Google",        color: "#4285F4" },
+  facebook:             { name: "Facebook",      color: "#1877F2" },
+  instagram:            { name: "Instagram",     color: "#E1306C" },
+  tiktok:               { name: "TikTok",        color: "#69C9D0" },
+  etsy:                 { name: "Etsy",          color: "#F56400" },
+  walmart:              { name: "Walmart",       color: "#0071CE" },
+  admin:                { name: "Admin",         color: "#6B7280" },
   unknown:              { name: "Other",         color: "#9CA3AF" },
 };
 
 function normalizeKey(source: string | null): string {
-  const k = (source ?? "unknown").toLowerCase();
-  if (k === "" || k === "null") return "web"; // Shopify web orders often have null source
-  if (k === "android" || k === "iphone") return "shop";
-  return CHANNEL_META[k] ? k : "unknown";
+  const k = (source ?? "").toLowerCase().trim();
+  if (k === "" || k === "null") return "admin";
+  if (k === "web" || k.includes("online_store") || k.includes("online store")) return "web";
+  if (k === "pos" || k.includes("point_of_sale") || k.includes("point of sale")) return "pos";
+  if (k === "android" || k === "iphone" || k === "shop") return "shop";
+  if (k.includes("amazon")) return "amazon";
+  if (k.includes("ebay")) return "ebay";
+  if (k.includes("google")) return "google";
+  if (k.includes("facebook") || k === "fb") return "facebook";
+  if (k.includes("instagram") || k === "ig") return "instagram";
+  if (k.includes("tiktok") || k.includes("tik_tok") || k.includes("tik tok")) return "tiktok";
+  if (k.includes("etsy")) return "etsy";
+  if (k.includes("walmart")) return "walmart";
+  if (k.includes("wholesale")) return "wholesale";
+  if (k.includes("subscription")) return "subscription";
+  if (k.includes("draft")) return "shopify_draft_orders";
+  if (CHANNEL_META[k]) return k;
+  return "unknown";
 }
 
 function toDateKey(d: Date): string {

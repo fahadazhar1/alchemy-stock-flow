@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
@@ -11,19 +11,23 @@ import {
   Boxes, XCircle, Award, TrendingDown, AlertTriangle, Download,
   RefreshCw, Filter, MoreHorizontal, Warehouse, Truck, Package,
   Clock, Layers, ArrowUp, ArrowDown, ChevronRight, Eye, X,
-  CheckSquare, Loader2,
+  CheckSquare, Loader2, ReceiptText, CalendarDays,
+  Users, Repeat2, Target,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Calendar } from "@/components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { format } from "date-fns";
 import { fmtGBP, fmtNum, fmtAxisGBP } from "./mockData";
 import { useTopProducts } from "@/hooks/useTopProducts";
 import { useSalesTrend } from "@/hooks/useSalesTrend";
 import { useChannelPerformance } from "@/hooks/useChannelPerformance";
 import { useInventoryDashboard } from "@/hooks/useInventoryDashboard";
-import { useSalesKPIs, useCollectionSales } from "@/hooks/useSalesKPIs";
+import { useSalesKPIs, useCollectionSales, useCustomerMetrics, useFulfillmentMetrics } from "@/hooks/useSalesKPIs";
 import { supabase } from "@/integrations/supabase/client";
 import { type DateRangeKey, type DateBounds, getDateBounds, getCustomDateBounds, comparePeriodLabel } from "@/lib/dateRanges";
 
@@ -44,13 +48,14 @@ function Sparkline({ data, color = "#6366f1" }: { data: number[]; color?: string
 interface KpiCardProps {
   label: string; value: string | number; unit?: string;
   delta?: number; deltaUp?: boolean; deltaLabel?: string; footer?: string;
+  prevValue?: string;
   icon?: LucideIcon; iconColor?: string; iconBg?: string;
   sparkData?: number[]; sparkColor?: string;
   progress?: number; progressColor?: string;
   onClick?: () => void;
 }
 
-function KpiCard({ label, value, unit, delta, deltaUp, deltaLabel, footer,
+function KpiCard({ label, value, unit, delta, deltaUp, deltaLabel, footer, prevValue,
   icon: Icon, iconColor, iconBg, sparkData, sparkColor, progress, progressColor, onClick }: KpiCardProps) {
   return (
     <Card className={cn("relative overflow-hidden", onClick && "cursor-pointer")} onClick={onClick}>
@@ -79,6 +84,11 @@ function KpiCard({ label, value, unit, delta, deltaUp, deltaLabel, footer,
             <span className="text-muted-foreground truncate">{deltaLabel ?? footer}</span>
           )}
         </div>
+        {prevValue && (
+          <div className="text-[10px] text-muted-foreground/70 mt-0.5 truncate">
+            {prevValue}
+          </div>
+        )}
         {progress != null && (
           <div className="mt-2 h-1 bg-muted rounded-full overflow-hidden">
             <div className="h-full rounded-full transition-all" style={{ width: `${progress}%`, background: progressColor }} />
@@ -136,26 +146,35 @@ function DonutChart({ data, centerLabel, centerValue, size = 140, showLegend = t
 
 // ─── Trend chart tooltip ─────────────────────────────────────────────────────
 
-// REPLACE WITH:
-function TrendTooltip({ active, payload, label }: { active?: boolean; payload?: { name: string; value: number; color: string }[]; label?: string }) {
+function TrendTooltip({ active, payload, label }: { active?: boolean; payload?: any[]; label?: string }) {
   if (!active || !payload?.length) return null;
+  const isProjected = payload[0]?.payload?.isProjected === true;
   const labelMap: Record<string, string> = {
-    revenue:     "Revenue (current)",
-    orders:      "Orders (current)",
-    prevRevenue: "Revenue (prev period)",
-    prevOrders:  "Orders (prev period)",
+    revenue:     "Revenue",
+    orders:      "Orders",
+    prevRevenue: "Prev Revenue",
+    prevOrders:  "Prev Orders",
+    projected:   "Projected (run rate)",
   };
+  const toShow = isProjected
+    ? payload.filter((p: any) => p.name === "projected")
+    : payload.filter((p: any) => p.name !== "projected");
   return (
     <div className="rounded-lg border bg-card p-2.5 shadow-lg text-xs min-w-[160px]">
-      <p className="font-semibold mb-1.5">{label}</p>
-      {payload.map((p, i) => (
+      <p className="font-semibold mb-1.5">
+        {label}
+        {isProjected && <span className="text-amber-500 ml-1.5 font-normal">· forecast</span>}
+      </p>
+      {toShow.map((p: any, i: number) => (
         <div key={i} className="flex justify-between gap-4">
           <span className="text-muted-foreground flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-sm inline-block" style={{ background: p.color }} />
             {labelMap[p.name] ?? p.name}
           </span>
           <span className="font-medium tabular-nums">
-            {p.name === "revenue" || p.name === "prevRevenue" ? fmtGBP(p.value) : p.value}
+            {p.name === "revenue" || p.name === "prevRevenue" || p.name === "projected"
+              ? fmtGBP(p.value)
+              : p.value}
           </span>
         </div>
       ))}
@@ -283,6 +302,70 @@ function SyncProgressBanner({ stage, recordsSynced, status }: {
   );
 }
 
+// ─── Date range picker ───────────────────────────────────────────────────────
+
+function DateRangePicker({ from, to, isActive, onChange, onOpen }: {
+  from: Date | null;
+  to: Date | null;
+  isActive: boolean;
+  onChange: (from: Date | null, to: Date | null) => void;
+  onOpen: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  const label = from && to
+    ? `${format(from, "dd MMM")} – ${format(to, "dd MMM")}`
+    : from
+    ? `${format(from, "dd MMM")} – …`
+    : "Custom";
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          onClick={() => { onOpen(); setOpen(true); }}
+          className={cn(
+            "px-2.5 py-1 text-xs font-medium transition-colors border-l flex items-center gap-1",
+            isActive ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground"
+          )}>
+          {isActive && from ? <CalendarDays size={10} strokeWidth={2.2} /> : null}
+          {label}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-auto p-0" align="end" sideOffset={8}>
+        <Calendar
+          mode="range"
+          selected={
+            from && to ? { from, to }
+            : from ? { from, to: undefined }
+            : undefined
+          }
+          onSelect={(range) => {
+            onChange(range?.from ?? null, range?.to ?? null);
+            if (range?.from && range?.to) setOpen(false);
+          }}
+          numberOfMonths={2}
+          disabled={{ after: new Date() }}
+          initialFocus
+        />
+        {from && !to && (
+          <p className="text-[11px] text-muted-foreground text-center pb-3">
+            Click a second date to complete the range
+          </p>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function fmtLag(hours: number): string {
+  if (hours <= 0) return "—";
+  if (hours < 24) return `${Math.round(hours * 10) / 10}h`;
+  return `${Math.round((hours / 24) * 10) / 10}d`;
+}
+
 // ─── Sales section ───────────────────────────────────────────────────────────
 
 function TopProductsSkeleton() {
@@ -308,14 +391,12 @@ function TopProductsSkeleton() {
 }
 
 function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing,
-  showDatePicker, setShowDatePicker, customFrom, customTo, setCustomFrom, setCustomTo }: {
+  customFrom, customTo, setCustomFrom, setCustomTo }: {
   bounds: DateBounds;
   range: DateRangeKey;
   onRangeChange: (r: DateRangeKey) => void;
   onSyncStart: () => void;
   syncing: boolean;
-  showDatePicker: boolean;
-  setShowDatePicker: (v: boolean) => void;
   customFrom: Date | null;
   customTo: Date | null;
   setCustomFrom: (d: Date | null) => void;
@@ -326,12 +407,45 @@ function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing,
   const { data: trendData,    isLoading: trendLoading }    = useSalesTrend(30, bounds);
   const { data: channelData,  isLoading: channelLoading }  = useChannelPerformance(30, bounds);
   const { data: salesKPIs,    isLoading: kpisLoading }     = useSalesKPIs(bounds);
+  const { data: mtdKPIs }                                  = useSalesKPIs();
   const { data: collectionData, isLoading: collectionsLoading } = useCollectionSales(bounds);
+  const { data: customerMetrics, isLoading: customerLoading }   = useCustomerMetrics(bounds);
+  const { data: fulfillmentMetrics, isLoading: fulfillmentLoading } = useFulfillmentMetrics(bounds);
   const sparkRev = trendData ? trendData.slice(-14).map(d => d.revenue) : [];
   const sparkOrd = trendData ? trendData.slice(-14).map(d => d.orders) : [];
   const totalChannelRevenue = channelData ? channelData.reduce((s, c) => s + c.revenue, 0) : 0;
 
-  // CSV export of current view
+  // Projected month-end (always MTD-based regardless of selected range)
+  const today = new Date();
+  const daysElapsed  = Math.max(1, today.getDate());
+  const daysInMonth  = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+  const daysRemaining = daysInMonth - today.getDate();
+  const mtdRevenue   = mtdKPIs?.revenueMTD ?? 0;
+  const runRatePerDay = mtdRevenue / daysElapsed;
+  const projectedMonthEnd = runRatePerDay * daysInMonth;
+
+  // Extend trend with projected future days (only for MTD range)
+  const extendedTrendData = useMemo(() => {
+    if (!trendData?.length) return trendData ?? [];
+    if (range !== "MTD" || daysRemaining <= 0) return trendData;
+    const result = [...trendData];
+    for (let d = 1; d <= daysRemaining; d++) {
+      const date = new Date(today.getFullYear(), today.getMonth(), today.getDate() + d);
+      result.push({
+        date,
+        label: date.toLocaleDateString("en-GB", { month: "short", day: "numeric" }),
+        revenue: 0,
+        orders: 0,
+        prevRevenue: 0,
+        prevOrders: 0,
+        projected: runRatePerDay,
+        isProjected: true,
+      });
+    }
+    return result;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trendData, range, runRatePerDay, daysRemaining]);
+
   const handleExport = useCallback(() => {
     const rows: string[][] = [];
     rows.push(["Sales Dashboard Export", bounds.label]);
@@ -343,7 +457,9 @@ function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing,
       rows.push(["Orders", String(salesKPIs.ordersMTD)]);
       rows.push(["AOV", salesKPIs.aov.toFixed(2)]);
       rows.push(["Sell-Through %", salesKPIs.sellThrough.toFixed(1)]);
-      rows.push(["Refund Rate %", String(salesKPIs.refundRate)]);
+      rows.push(["Refund Rate (orders) %", String(salesKPIs.refundRate)]);
+      rows.push(["Refund Rate (£) %", String(salesKPIs.refundAmountRate)]);
+      rows.push(["Refunded Revenue", salesKPIs.refundedRevenue.toFixed(2)]);
       rows.push(["Pending Orders", String(salesKPIs.pendingOrders)]);
     }
     rows.push([]);
@@ -378,7 +494,6 @@ function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing,
           <span className="text-xs text-muted-foreground">{bounds.label} · {comparePeriodLabel(range)}</span>
         </div>
         <div className="flex items-center gap-2">
-// REPLACE WITH:
           <div className="flex items-center gap-2">
             <div className="flex rounded-md border overflow-hidden">
               {(["Today","WTD","MTD","QTD","YTD"] as DateRangeKey[]).map(r => (
@@ -388,41 +503,18 @@ function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing,
                   {r}
                 </button>
               ))}
-              <button
-                onClick={() => { onRangeChange("Custom"); setShowDatePicker(true); }}
-                className={cn("px-2.5 py-1 text-xs font-medium transition-colors border-l",
-                  range === "Custom" ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground")}>
-                Custom
-              </button>
+              <DateRangePicker
+                from={customFrom}
+                to={customTo}
+                isActive={range === "Custom"}
+                onOpen={() => onRangeChange("Custom")}
+                onChange={(from, to) => {
+                  setCustomFrom(from);
+                  setCustomTo(to);
+                  if (from && to) onRangeChange("Custom");
+                }}
+              />
             </div>
-            {(range === "Custom" || showDatePicker) && (
-              <div className="flex items-center gap-1.5 border rounded-md px-2 py-1 bg-background text-xs">
-                <input
-                  type="date"
-                  value={customFrom ? customFrom.toISOString().slice(0, 10) : ""}
-                  max={customTo ? customTo.toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10)}
-                  onChange={e => {
-                    const d = e.target.value ? new Date(e.target.value) : null;
-                    setCustomFrom(d);
-                    if (d && customTo) { onRangeChange("Custom"); setShowDatePicker(false); }
-                  }}
-                  className="text-xs border-0 outline-none bg-transparent text-foreground"
-                />
-                <span className="text-muted-foreground">→</span>
-                <input
-                  type="date"
-                  value={customTo ? customTo.toISOString().slice(0, 10) : ""}
-                  min={customFrom ? customFrom.toISOString().slice(0, 10) : ""}
-                  max={new Date().toISOString().slice(0, 10)}
-                  onChange={e => {
-                    const d = e.target.value ? new Date(e.target.value) : null;
-                    setCustomTo(d);
-                    if (customFrom && d) { onRangeChange("Custom"); setShowDatePicker(false); }
-                  }}
-                  className="text-xs border-0 outline-none bg-transparent text-foreground"
-                />
-              </div>
-            )}
           </div>
           <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" onClick={handleExport}
             disabled={!salesKPIs && !liveProducts}>
@@ -435,24 +527,26 @@ function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing,
         </div>
       </div>
 
-      {/* KPI grid */}
+      {/* KPI grid — 6 cols */}
       {kpisLoading ? (
-        <div className="grid grid-cols-5 gap-3.5">
-          {Array.from({ length: 5 }).map((_, i) => <KpiSkeleton key={i} />)}
+        <div className="grid grid-cols-6 gap-3.5">
+          {Array.from({ length: 6 }).map((_, i) => <KpiSkeleton key={i} />)}
         </div>
       ) : (
-        <div className="grid grid-cols-5 gap-3.5">
+        <div className="grid grid-cols-6 gap-3.5">
           <KpiCard icon={PoundSterling} iconColor="#4f46e5" iconBg="#eef2ff"
             label={`Revenue (${range})`} value={fmtGBP(salesKPIs?.revenueMTD ?? 0)}
             delta={salesKPIs?.revenueDelta ?? undefined}
             deltaUp={(salesKPIs?.revenueDelta ?? 0) >= 0}
             deltaLabel={comparePeriodLabel(range)}
+            prevValue={salesKPIs ? `prev ${fmtGBP(salesKPIs.prevRevenue)}` : undefined}
             sparkData={sparkRev} sparkColor="#6366f1" />
           <KpiCard icon={ShoppingCart} iconColor="#7c3aed" iconBg="#ede9fe"
             label={`Orders (${range})`} value={fmtNum(salesKPIs?.ordersMTD ?? 0)}
             delta={salesKPIs?.ordersDelta ?? undefined}
             deltaUp={(salesKPIs?.ordersDelta ?? 0) >= 0}
             deltaLabel={comparePeriodLabel(range)}
+            prevValue={salesKPIs ? `prev ${fmtNum(salesKPIs.prevOrders)}` : undefined}
             sparkData={sparkOrd} sparkColor="#8b5cf6" />
           <KpiCard icon={CreditCard} iconColor="#0891b2" iconBg="#cffafe"
             label="Avg. Order Value" value={fmtGBP(salesKPIs?.aov ?? 0)}
@@ -461,8 +555,43 @@ function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing,
             label="Sell-Through %" value={salesKPIs ? salesKPIs.sellThrough.toFixed(1) : "—"} unit="%"
             footer="current month" />
           <KpiCard icon={Activity} iconColor="#db2777" iconBg="#fce7f3"
-            label="Refund rate" value={salesKPIs ? `${salesKPIs.refundRate}%` : "—"}
-            footer={salesKPIs ? `${fmtNum(salesKPIs.pendingOrders)} pending fulfillment` : "—"} />
+            label="Refund rate (orders)"
+            value={salesKPIs ? `${salesKPIs.refundRate}%` : "—"}
+            footer={salesKPIs ? `${fmtNum(salesKPIs.ordersMTD > 0 ? Math.round(salesKPIs.refundRate * salesKPIs.ordersMTD / 100) : 0)} orders refunded` : "—"} />
+          <KpiCard icon={ReceiptText} iconColor="#7c3aed" iconBg="#ede9fe"
+            label="Refund rate (£)"
+value={salesKPIs ? `${salesKPIs.refundAmountRate ?? 0}%` : "—"}
+footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"} />
+        </div>
+      )}
+
+      {/* CEO insights row — 4 cols */}
+      {(customerLoading || fulfillmentLoading || kpisLoading) ? (
+        <div className="grid grid-cols-4 gap-3.5">
+          {Array.from({ length: 4 }).map((_, i) => <KpiSkeleton key={i} />)}
+        </div>
+      ) : (
+        <div className="grid grid-cols-4 gap-3.5">
+          <KpiCard icon={Users} iconColor="#0891b2" iconBg="#cffafe"
+            label="Customer LTV"
+            value={customerMetrics?.uniqueCustomers ? fmtGBP(customerMetrics.ltv) : "—"}
+            footer={customerMetrics?.uniqueCustomers ? `${fmtNum(customerMetrics.uniqueCustomers)} unique customers` : "Sync to populate"} />
+          <KpiCard icon={Repeat2} iconColor="#7c3aed" iconBg="#ede9fe"
+            label="Retention rate"
+            value={customerMetrics?.uniqueCustomers ? `${customerMetrics.retentionRate}%` : "—"}
+            footer={customerMetrics?.uniqueCustomers ? `${fmtNum(customerMetrics.repeatCustomers)} repeat buyers` : "Sync to populate"}
+            progress={customerMetrics?.uniqueCustomers ? customerMetrics.retentionRate : 0}
+            progressColor="#7c3aed" />
+          <KpiCard icon={Clock} iconColor="#d97706" iconBg="#fef3c7"
+            label="Avg. fulfillment time"
+            value={fulfillmentMetrics ? fmtLag(fulfillmentMetrics.avgLagHours) : "—"}
+            footer={fulfillmentMetrics ? `${fmtNum(fulfillmentMetrics.ordersAnalyzed)} orders analysed` : "—"} />
+          <KpiCard icon={Target} iconColor="#059669" iconBg="#d1fae5"
+            label="Projected month-end"
+            value={fmtGBP(projectedMonthEnd)}
+            footer={`at current run rate · ${fmtNum(daysRemaining)}d remaining`}
+            progress={Math.round((daysElapsed / daysInMonth) * 100)}
+            progressColor="#059669" />
         </div>
       )}
 
@@ -476,10 +605,13 @@ function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing,
                   <span className="text-muted-foreground font-normal ml-1.5">{bounds.label}</span>
                 </h3>
                 <div className="flex items-center gap-3 text-xs text-muted-foreground">
-  <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-0.5 bg-indigo-500 rounded" />Revenue</span>
-  <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-0.5 bg-indigo-300 rounded" style={{ borderTop: "2px dashed #a5b4fc" }} />Prev Revenue</span>
-  <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-0.5 bg-violet-400 rounded" style={{ borderTop: "2px dashed #c4b5fd" }} />Orders</span>
-</div>
+                  <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-0.5 bg-indigo-500 rounded" />Revenue</span>
+                  <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-0.5 bg-indigo-300 rounded" style={{ borderTop: "2px dashed #a5b4fc" }} />Prev Revenue</span>
+                  <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-0.5 bg-violet-400 rounded" style={{ borderTop: "2px dashed #c4b5fd" }} />Orders</span>
+                  {range === "MTD" && daysRemaining > 0 && (
+                    <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-0.5 rounded" style={{ borderTop: "2px dashed #f59e0b" }} />Projected</span>
+                  )}
+                </div>
               </div>
               <button className="text-muted-foreground hover:text-foreground"><MoreHorizontal size={14} /></button>
             </div>
@@ -496,7 +628,7 @@ function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing,
               </div>
             ) : (
               <ResponsiveContainer width="100%" height={220}>
-                <ComposedChart data={trendData ?? []} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+                <ComposedChart data={extendedTrendData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
                   <defs>
                     <linearGradient id="trendGrad" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor="#6366f1" stopOpacity={0.18} />
@@ -508,11 +640,11 @@ function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing,
                   <YAxis yAxisId="left" tickFormatter={fmtAxisGBP} tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} width={40} />
                   <YAxis yAxisId="right" orientation="right" hide />
                   <Tooltip content={<TrendTooltip />} />
-                  // REPLACE WITH:
-<Area yAxisId="left" type="monotone" dataKey="revenue" fill="url(#trendGrad)" stroke="#6366f1" strokeWidth={2} dot={false} isAnimationActive={false} />
-<Line yAxisId="left" type="monotone" dataKey="prevRevenue" stroke="#a5b4fc" strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} />
-<Line yAxisId="right" type="monotone" dataKey="orders" stroke="#8b5cf6" strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} />
-<Line yAxisId="right" type="monotone" dataKey="prevOrders" stroke="#c4b5fd" strokeWidth={1} strokeDasharray="2 4" dot={false} isAnimationActive={false} />
+                  <Area yAxisId="left" type="monotone" dataKey="revenue" fill="url(#trendGrad)" stroke="#6366f1" strokeWidth={2} dot={false} isAnimationActive={false} />
+                  <Line yAxisId="left" type="monotone" dataKey="prevRevenue" stroke="#a5b4fc" strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} />
+                  <Line yAxisId="right" type="monotone" dataKey="orders" stroke="#8b5cf6" strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} />
+                  <Line yAxisId="right" type="monotone" dataKey="prevOrders" stroke="#c4b5fd" strokeWidth={1} strokeDasharray="2 4" dot={false} isAnimationActive={false} />
+                  <Line yAxisId="left" type="monotone" dataKey="projected" stroke="#f59e0b" strokeWidth={1.5} strokeDasharray="5 3" dot={false} isAnimationActive={false} connectNulls={false} />
                 </ComposedChart>
               </ResponsiveContainer>
             )}
@@ -552,7 +684,7 @@ function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing,
         </Card>
       </div>
 
-      {/* Top products + Collections + Customers */}
+      {/* Top products + Collections + Orders summary */}
       <div className="grid grid-cols-5 gap-3.5">
         <Card className="col-span-3">
           <CardHeader className="pb-2 pt-4 px-4">
@@ -652,7 +784,7 @@ function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing,
             <CardContent className="px-4 pb-4">
               {kpisLoading ? (
                 <div className="space-y-3">
-                  {Array.from({ length: 4 }).map((_, i) => (
+                  {Array.from({ length: 5 }).map((_, i) => (
                     <div key={i} className="flex items-center justify-between">
                       <div className="h-2.5 bg-muted animate-pulse rounded w-24" />
                       <div className="h-2.5 bg-muted animate-pulse rounded w-12" />
@@ -675,8 +807,12 @@ function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing,
                       <span className="font-semibold tabular-nums">{fmtGBP(salesKPIs?.aov ?? 0)}</span>
                     </div>
                     <div className="flex items-center justify-between text-xs">
-                      <span className="text-muted-foreground">Refund rate</span>
+                      <span className="text-muted-foreground">Refund rate (orders)</span>
                       <span className="font-semibold tabular-nums">{salesKPIs?.refundRate ?? 0}%</span>
+                    </div>
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-muted-foreground">Refund rate (£)</span>
+                      <span className="font-semibold tabular-nums text-red-500">{salesKPIs?.refundAmountRate ?? 0}%</span>
                     </div>
                   </div>
                   <div className="mt-3 h-1 bg-muted rounded-full overflow-hidden">
@@ -807,12 +943,12 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
   const navigate = useNavigate();
   const { data, isLoading } = useInventoryDashboard();
 
-  const onHand     = data?.kpis.onHand ?? 0;
-  const stockValue = data?.stockValue  ?? 0;
-  const oos        = data?.kpis.outOfStock ?? 0;
-  const winners    = data?.kpis.winners ?? 0;
+  const onHand      = data?.kpis.onHand ?? 0;
+  const stockValue  = data?.stockValue  ?? 0;
+  const oos         = data?.kpis.outOfStock ?? 0;
+  const winners     = data?.kpis.winners ?? 0;
   const losersCount = data?.kpis.losers ?? 0;
-  const sparkInv   = Array.from({ length: 14 }, (_, i) => Math.max(0, onHand - i * 80 + Math.sin(i) * 200));
+  const sparkInv    = Array.from({ length: 14 }, (_, i) => Math.max(0, onHand - i * 80 + Math.sin(i) * 200));
   const totalCategoryUnits = data?.categories.reduce((s, c) => s + c.units, 0) ?? 0;
 
   return (
@@ -832,7 +968,6 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
         </div>
       </div>
 
-      {/* KPI grid */}
       {isLoading ? (
         <div className="grid grid-cols-5 gap-3.5">
           {Array.from({ length: 5 }).map((_, i) => <KpiSkeleton key={i} />)}
@@ -857,7 +992,6 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
         </div>
       )}
 
-      {/* Aging chart + Category donut */}
       <div className="grid grid-cols-3 gap-3.5">
         <Card className="col-span-2">
           <CardHeader className="pb-2 pt-4 px-4">
@@ -929,7 +1063,6 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
         </Card>
       </div>
 
-      {/* Central WMS pool */}
       <Card>
         <CardHeader className="pb-1 pt-4 px-4">
           <div className="flex items-center gap-2">
@@ -962,7 +1095,6 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
         </CardContent>
       </Card>
 
-      {/* Losers + Replenishment + Expiry */}
       <div className="grid grid-cols-3 gap-3.5">
         <Card className="col-span-2">
           <CardHeader className="pb-2 pt-4 px-4">
@@ -1132,25 +1264,22 @@ type SyncLogRow = { current_stage: string | null; records_synced: number; status
 
 export default function Dashboard() {
   const [showBanner, setShowBanner] = useState(true);
-   const [range, setRange]           = useState<DateRangeKey>("MTD");
+  const [range, setRange]           = useState<DateRangeKey>("MTD");
   const [customFrom, setCustomFrom] = useState<Date | null>(null);
   const [customTo, setCustomTo]     = useState<Date | null>(null);
-  const [showDatePicker, setShowDatePicker] = useState(false);
   const bounds = range === "Custom" && customFrom && customTo
     ? getCustomDateBounds(customFrom, customTo)
     : getDateBounds(range as Exclude<DateRangeKey, "Custom">);
-  const queryClient                 = useQueryClient();
-  const { data: inventoryData }     = useInventoryDashboard();
-  const { data: globalKPIs }        = useSalesKPIs();
+  const queryClient             = useQueryClient();
+  const { data: inventoryData } = useInventoryDashboard();
+  const { data: globalKPIs }    = useSalesKPIs();
 
-  // Real-time sync state — driven by DB, not local React state
-  const [syncLog, setSyncLog]         = useState<SyncLogRow>(null);
+  const [syncLog, setSyncLog]             = useState<SyncLogRow>(null);
   const [buttonPending, setButtonPending] = useState(false);
-  const pendingTimerRef               = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const didInvalidateRef              = useRef(false);
+  const pendingTimerRef                   = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const didInvalidateRef                  = useRef(false);
 
   const isActivelySyncing = syncLog?.status === "in_progress";
-  // syncing = true while HTTP request is in flight (before DB log appears) OR while DB shows in_progress
   const syncing = buttonPending || isActivelySyncing;
 
   const invalidateAll = useCallback(async () => {
@@ -1162,11 +1291,8 @@ export default function Dashboard() {
     await queryClient.invalidateQueries({ queryKey: ["inventory-dashboard"] });
   }, [queryClient]);
 
-  // On mount: fetch latest log + subscribe to Realtime push updates
   useEffect(() => {
     let alive = true;
-
-    // Initial fetch — shows banner immediately if a sync is already running
     (supabase as any)
       .from("shopify_sync_logs")
       .select("current_stage, records_synced, status")
@@ -1177,7 +1303,6 @@ export default function Dashboard() {
         if (alive) setSyncLog(data ?? null);
       });
 
-    // Realtime subscription — push updates the moment the DB row changes
     const channel = (supabase as any)
       .channel("sync-progress-rt")
       .on(
@@ -1195,10 +1320,9 @@ export default function Dashboard() {
     };
   }, []);
 
-  // When sync completes → invalidate queries once, then let banner linger briefly
   useEffect(() => {
     if (syncLog?.status === "in_progress") {
-      didInvalidateRef.current = false; // reset for fresh sync
+      didInvalidateRef.current = false;
       return;
     }
     if (
@@ -1210,7 +1334,6 @@ export default function Dashboard() {
     }
   }, [syncLog?.status, syncLog?.current_stage, invalidateAll]);
 
-  // Once DB log appears as in_progress, clear the button-pending state
   useEffect(() => {
     if (buttonPending && isActivelySyncing) {
       if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current);
@@ -1222,7 +1345,6 @@ export default function Dashboard() {
     if (syncing) return;
     setButtonPending(true);
     didInvalidateRef.current = false;
-    // Fallback: clear pending after 20s if edge function never creates a log
     pendingTimerRef.current = setTimeout(() => setButtonPending(false), 20_000);
     try {
       const { data: conns } = await (supabase as any)
@@ -1238,7 +1360,6 @@ export default function Dashboard() {
           )
         );
       }
-      // Don't clear buttonPending — Realtime will push the in_progress log which clears it
     } catch {
       if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current);
       setButtonPending(false);
@@ -1266,11 +1387,9 @@ export default function Dashboard() {
       <SalesSection
         bounds={bounds}
         range={range}
-        onRangeChange={(r) => { setRange(r); if (r !== "Custom") setShowDatePicker(false); }}
+        onRangeChange={setRange}
         onSyncStart={handleSync}
         syncing={syncing}
-        showDatePicker={showDatePicker}
-        setShowDatePicker={setShowDatePicker}
         customFrom={customFrom}
         customTo={customTo}
         setCustomFrom={setCustomFrom}
