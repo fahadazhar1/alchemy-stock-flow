@@ -12,7 +12,7 @@ import {
   RefreshCw, Filter, MoreHorizontal, Warehouse, Truck, Package,
   Clock, Layers, ArrowUp, ArrowDown, ChevronRight, Eye, X,
   CheckSquare, Loader2, ReceiptText, CalendarDays,
-  Users, Repeat2, Target,
+  Users, Repeat2, Target, Tag, Globe,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -28,7 +28,7 @@ import { useSalesTrend } from "@/hooks/useSalesTrend";
 import { useChannelPerformance } from "@/hooks/useChannelPerformance";
 import { useInventoryDashboard } from "@/hooks/useInventoryDashboard";
 import { OutOfStockWidget } from "./components/OutOfStockWidget";
-import { useSalesKPIs, useCollectionSales, useCustomerMetrics, useFulfillmentMetrics } from "@/hooks/useSalesKPIs";
+import { useSalesKPIs, useCollectionSales, useCustomerMetrics, useFulfillmentMetrics, useDiscountUsage, useTrafficSources, useChannelConversion } from "@/hooks/useSalesKPIs";
 import { supabase } from "@/integrations/supabase/client";
 import { type DateRangeKey, type DateBounds, getDateBounds, getCustomDateBounds, comparePeriodLabel } from "@/lib/dateRanges";
 
@@ -412,6 +412,10 @@ function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing,
   const { data: collectionData, isLoading: collectionsLoading } = useCollectionSales(bounds);
   const { data: customerMetrics, isLoading: customerLoading }   = useCustomerMetrics(bounds);
   const { data: fulfillmentMetrics, isLoading: fulfillmentLoading } = useFulfillmentMetrics(bounds);
+  // ── new marketing cards ──────────────────────────────────────────────────────
+  const { data: discountData,    isLoading: discountLoading }    = useDiscountUsage(bounds);
+  const { data: trafficSources,  isLoading: trafficLoading }     = useTrafficSources(bounds);
+  const { data: conversionData,  isLoading: conversionLoading }  = useChannelConversion(bounds);
   const sparkRev = trendData ? trendData.slice(-14).map(d => d.revenue) : [];
   const sparkOrd = trendData ? trendData.slice(-14).map(d => d.orders) : [];
   const totalChannelRevenue = channelData ? channelData.reduce((s, c) => s + c.revenue, 0) : 0;
@@ -833,6 +837,120 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
           </Card>
         </div>
       </div>
+
+      {/* ── Marketing cards: Discount · Traffic · Channel conversion ─────────── */}
+      <div className="grid grid-cols-3 gap-3.5">
+
+        {/* Card 1 — Discount Usage Rate */}
+        <Card>
+          <CardHeader className="pb-2 pt-4 px-4">
+            <div className="flex items-center gap-2">
+              <Tag size={14} className="text-violet-500" />
+              <h3 className="text-sm font-semibold">Discount usage</h3>
+              <span className="text-xs text-muted-foreground">{bounds.label}</span>
+            </div>
+          </CardHeader>
+          <CardContent className="px-4 pb-4">
+            {discountLoading ? (
+              <div className="space-y-2">
+                <div className="h-8 bg-muted animate-pulse rounded w-24" />
+                <div className="h-3 bg-muted animate-pulse rounded w-48" />
+                <div className="h-1.5 bg-muted animate-pulse rounded-full mt-3" />
+              </div>
+            ) : (
+              <>
+                <div className="text-[28px] font-semibold tabular-nums tracking-tight">
+                  {discountData?.rate ?? 0}%
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {fmtNum(discountData?.discountedOrders ?? 0)} of {fmtNum(discountData?.totalOrders ?? 0)} orders used a discount
+                </p>
+                <div className="mt-3 h-1.5 bg-muted rounded-full overflow-hidden">
+                  <div className="h-full rounded-full bg-violet-500 transition-all"
+                    style={{ width: `${Math.min(100, discountData?.rate ?? 0)}%` }} />
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Card 2 — Traffic Sources */}
+        <Card>
+          <CardHeader className="pb-2 pt-4 px-4">
+            <div className="flex items-center gap-2">
+              <Globe size={14} className="text-muted-foreground" />
+              <h3 className="text-sm font-semibold">Traffic sources</h3>
+              <span className="text-xs text-muted-foreground">{bounds.label}</span>
+            </div>
+          </CardHeader>
+          <CardContent className="px-4 pb-4 space-y-2">
+            {trafficLoading ? (
+              Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <div className="w-20 h-2.5 bg-muted animate-pulse rounded" />
+                  <div className="flex-1 h-1.5 bg-muted animate-pulse rounded-full" />
+                  <div className="w-10 h-2.5 bg-muted animate-pulse rounded" />
+                </div>
+              ))
+            ) : !trafficSources?.length ? (
+              <p className="text-xs text-muted-foreground py-4 text-center">No referral data</p>
+            ) : (() => {
+              const maxOrders = Math.max(...(trafficSources ?? []).map(s => s.orders));
+              return (trafficSources ?? []).map(s => (
+                <div key={s.name} className="flex items-center gap-2 text-xs">
+                  <span className="w-20 text-muted-foreground truncate shrink-0">{s.name}</span>
+                  <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                    <div className="h-full rounded-full bg-indigo-500"
+                      style={{ width: `${maxOrders > 0 ? (s.orders / maxOrders) * 100 : 0}%` }} />
+                  </div>
+                  <span className="w-12 text-right tabular-nums font-medium shrink-0">{fmtNum(s.orders)}</span>
+                  <span className="w-9 text-right tabular-nums text-muted-foreground shrink-0">{s.share}%</span>
+                </div>
+              ));
+            })()}
+          </CardContent>
+        </Card>
+
+        {/* Card 3 — Conversion by Channel */}
+        <Card>
+          <CardHeader className="pb-2 pt-4 px-4">
+            <div className="flex items-center gap-2">
+              <Layers size={14} className="text-muted-foreground" />
+              <h3 className="text-sm font-semibold">Conversion by channel</h3>
+              <span className="text-xs text-muted-foreground">top 5</span>
+            </div>
+          </CardHeader>
+          <CardContent className="px-4 pb-4 space-y-2">
+            {conversionLoading ? (
+              Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <div className="w-20 h-2.5 bg-muted animate-pulse rounded" />
+                  <div className="flex-1 h-1.5 bg-muted animate-pulse rounded-full" />
+                  <div className="w-14 h-2.5 bg-muted animate-pulse rounded" />
+                </div>
+              ))
+            ) : !conversionData?.length ? (
+              <p className="text-xs text-muted-foreground py-4 text-center">No channel data</p>
+            ) : (() => {
+              const maxOrders = Math.max(...(conversionData ?? []).map(c => c.orders));
+              const CONV_COLORS = ["#5E5CE6","#EC4899","#10B981","#F59E0B","#06B6D4"];
+              return (conversionData ?? []).map((c, i) => (
+                <div key={c.name} className="flex items-center gap-2 text-xs">
+                  <span className="w-20 text-muted-foreground truncate shrink-0">{c.name}</span>
+                  <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                    <div className="h-full rounded-full"
+                      style={{ width: `${maxOrders > 0 ? (c.orders / maxOrders) * 100 : 0}%`, background: CONV_COLORS[i % CONV_COLORS.length] }} />
+                  </div>
+                  <span className="w-12 text-right tabular-nums font-medium shrink-0">{fmtNum(c.orders)}</span>
+                  <span className="w-14 text-right tabular-nums text-muted-foreground shrink-0">{fmtGBP(c.revenue)}</span>
+                </div>
+              ));
+            })()}
+          </CardContent>
+        </Card>
+
+      </div>
+      {/* ── end marketing cards ──────────────────────────────────────────────── */}
 
       {/* Channel performance table */}
       <Card>

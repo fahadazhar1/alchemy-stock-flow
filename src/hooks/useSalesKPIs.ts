@@ -201,6 +201,144 @@ export function useFulfillmentMetrics(bounds?: DateBounds) {
   });
 }
 
+// ─── Discount usage ───────────────────────────────────────────────────────────
+
+export interface DiscountUsage {
+  rate: number;
+  discountedOrders: number;
+  totalOrders: number;
+}
+
+export function useDiscountUsage(bounds?: DateBounds) {
+  const { storeId } = useStoreFilter();
+  const b = bounds ?? getDateBounds("MTD");
+
+  return useQuery({
+    queryKey: ["discount-usage", storeId, b.startISO, b.endISO],
+    queryFn: async (): Promise<DiscountUsage> => {
+      let q = (supabase as any)
+        .from("orders")
+        .select("discount_codes, cancelled_at")
+        .gte("shopify_created_at", b.startISO)
+        .lte("shopify_created_at", b.endISO);
+      if (storeId) q = q.eq("store_id", storeId);
+
+      const { data, error } = await q;
+      if (error) throw error;
+
+      const rows = ((data ?? []) as any[]).filter((r: any) => !r.cancelled_at);
+      const total = rows.length;
+      const discounted = rows.filter((r: any) => r.discount_codes != null).length;
+      const rate = total > 0 ? Math.round((discounted / total) * 1000) / 10 : 0;
+
+      return { rate, discountedOrders: discounted, totalOrders: total };
+    },
+  });
+}
+
+// ─── Traffic sources ──────────────────────────────────────────────────────────
+
+export interface TrafficSource {
+  name: string;
+  orders: number;
+  share: number;
+}
+
+function normalizeReferrer(site: string | null | undefined): string {
+  if (!site) return "Direct";
+  const s = site.toLowerCase();
+  if (s.includes("google"))    return "Google";
+  if (s.includes("facebook"))  return "Facebook";
+  if (s.includes("instagram")) return "Instagram";
+  if (s.includes("tiktok"))    return "TikTok";
+  if (s.includes("youtube"))   return "YouTube";
+  return "Other";
+}
+
+export function useTrafficSources(bounds?: DateBounds) {
+  const { storeId } = useStoreFilter();
+  const b = bounds ?? getDateBounds("MTD");
+
+  return useQuery({
+    queryKey: ["traffic-sources", storeId, b.startISO, b.endISO],
+    queryFn: async (): Promise<TrafficSource[]> => {
+      let q = (supabase as any)
+        .from("orders")
+        .select("referring_site, cancelled_at")
+        .gte("shopify_created_at", b.startISO)
+        .lte("shopify_created_at", b.endISO);
+      if (storeId) q = q.eq("store_id", storeId);
+
+      const { data, error } = await q;
+      if (error) throw error;
+
+      const rows = ((data ?? []) as any[]).filter((r: any) => !r.cancelled_at);
+      const sourceMap = new Map<string, number>();
+      for (const r of rows) {
+        const name = normalizeReferrer(r.referring_site);
+        sourceMap.set(name, (sourceMap.get(name) ?? 0) + 1);
+      }
+      const total = rows.length;
+      return Array.from(sourceMap.entries())
+        .sort((a, b) => b[1] - a[1])
+        .map(([name, orders]) => ({
+          name,
+          orders,
+          share: total > 0 ? Math.round((orders / total) * 1000) / 10 : 0,
+        }));
+    },
+  });
+}
+
+// ─── Conversion by channel ────────────────────────────────────────────────────
+
+export interface ChannelConversion {
+  name: string;
+  orders: number;
+  revenue: number;
+  share: number;
+}
+
+export function useChannelConversion(bounds?: DateBounds) {
+  const { storeId } = useStoreFilter();
+  const b = bounds ?? getDateBounds("MTD");
+
+  return useQuery({
+    queryKey: ["channel-conversion", storeId, b.startISO, b.endISO],
+    queryFn: async (): Promise<ChannelConversion[]> => {
+      let q = (supabase as any)
+        .from("orders")
+        .select("source_name, total_price, cancelled_at")
+        .gte("shopify_created_at", b.startISO)
+        .lte("shopify_created_at", b.endISO);
+      if (storeId) q = q.eq("store_id", storeId);
+
+      const { data, error } = await q;
+      if (error) throw error;
+
+      const rows = ((data ?? []) as any[]).filter((r: any) => !r.cancelled_at);
+      const map = new Map<string, { orders: number; revenue: number }>();
+      for (const r of rows) {
+        const name = (r.source_name as string | null) || "Unknown";
+        const e = map.get(name) ?? { orders: 0, revenue: 0 };
+        e.orders  += 1;
+        e.revenue += Number(r.total_price ?? 0);
+        map.set(name, e);
+      }
+      const totalOrders = rows.length;
+      return Array.from(map.entries())
+        .sort((a, b) => b[1].orders - a[1].orders)
+        .slice(0, 5)
+        .map(([name, { orders, revenue }]) => ({
+          name,
+          orders,
+          revenue,
+          share: totalOrders > 0 ? Math.round((orders / totalOrders) * 1000) / 10 : 0,
+        }));
+    },
+  });
+}
+
 export function useCollectionSales(bounds?: DateBounds) {
   const { storeId } = useStoreFilter();
   const b = bounds ?? getDateBounds("MTD");
