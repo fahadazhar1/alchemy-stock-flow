@@ -10,12 +10,19 @@ import { cn } from "@/lib/utils";
 import { fmtGBP, fmtNum } from "../mockData";
 import { useOutOfStockLast7Days, type OosProduct } from "@/hooks/useOutOfStockLast7Days";
 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function fmtDate(iso: string | null): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+}
+
 // ─── Skeleton ────────────────────────────────────────────────────────────────
 
 function OosRowSkeleton() {
   return (
     <tr className="border-b last:border-b-0">
-      {[80, 55, 48, 48, 48].map((w, i) => (
+      {[80, 40, 45, 55, 55, 45, 30].map((w, i) => (
         <td key={i} className="px-4 py-2.5">
           <div className="h-3 bg-muted animate-pulse rounded" style={{ width: `${w}%` }} />
         </td>
@@ -24,7 +31,7 @@ function OosRowSkeleton() {
   );
 }
 
-// ─── Table ───────────────────────────────────────────────────────────────────
+// ─── OOS badge ───────────────────────────────────────────────────────────────
 
 const OOS_BADGE = (
   <Badge variant="outline"
@@ -33,12 +40,16 @@ const OOS_BADGE = (
   </Badge>
 );
 
+// ─── Table ───────────────────────────────────────────────────────────────────
+
+const HEADERS = ["Product", "Price", "Sold 7d", "Revenue 7d", "Est. loss/day", "Last sold", "Current"];
+
 function OosTable({ rows }: { rows: OosProduct[] }) {
   return (
     <table className="w-full text-xs">
       <thead>
         <tr className="border-b">
-          {["Product", "Price", "Stock 7d ago", "Sold (7d)", "Current"].map((h, i) => (
+          {HEADERS.map((h, i) => (
             <th key={i} className={cn(
               "px-4 py-2 font-medium text-muted-foreground text-left",
               i >= 1 && "text-right",
@@ -50,12 +61,16 @@ function OosTable({ rows }: { rows: OosProduct[] }) {
         {rows.map(r => (
           <tr key={r.product_id} className="border-b last:border-b-0 hover:bg-muted/40 transition-colors">
             <td className="px-4 py-2.5">
-              <div className="font-medium truncate max-w-[200px]">{r.name}</div>
+              <div className="font-medium truncate max-w-[180px]">{r.name}</div>
               <div className="font-mono text-[10px] text-muted-foreground">{r.sku}</div>
             </td>
             <td className="px-4 py-2.5 text-right tabular-nums">{fmtGBP(r.price)}</td>
-            <td className="px-4 py-2.5 text-right tabular-nums">{fmtNum(r.initialInventory)}</td>
-            <td className="px-4 py-2.5 text-right tabular-nums font-medium">{fmtNum(r.salesLast7d)}</td>
+            <td className="px-4 py-2.5 text-right tabular-nums">{fmtNum(r.unitsSold7d)}</td>
+            <td className="px-4 py-2.5 text-right tabular-nums font-medium">{fmtGBP(r.revenue7d)}</td>
+            <td className="px-4 py-2.5 text-right tabular-nums text-red-600 dark:text-red-400 font-medium">
+              {fmtGBP(r.estimatedLostRevenuePerDay)}
+            </td>
+            <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">{fmtDate(r.lastSoldAt)}</td>
             <td className="px-4 py-2.5 text-right">{OOS_BADGE}</td>
           </tr>
         ))}
@@ -81,7 +96,7 @@ export function OutOfStockWidget() {
             <div className="flex items-center gap-2">
               <XCircle size={14} className="text-red-500" />
               <h3 className="text-sm font-semibold">Out of stock</h3>
-              <span className="text-xs text-muted-foreground">last 7 days</span>
+              <span className="text-xs text-muted-foreground">best sellers, last 7 days</span>
               {!isLoading && total > 0 && (
                 <Badge variant="outline"
                   className="text-[10px] px-1.5 py-0 text-red-500 border-red-200 bg-red-50 dark:bg-red-950/30 dark:border-red-800 dark:text-red-400">
@@ -105,7 +120,7 @@ export function OutOfStockWidget() {
             </table>
           ) : !preview.length ? (
             <div className="px-4 py-6 text-center text-xs text-muted-foreground">
-              No products went out of stock in the last 7 days
+              No recently sold products are currently out of stock.
             </div>
           ) : (
             <OosTable rows={preview} />
@@ -114,11 +129,11 @@ export function OutOfStockWidget() {
       </Card>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+        <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <XCircle size={16} className="text-red-500" />
-              Out of stock — last 7 days
+              Out of stock — best sellers, last 7 days
               <Badge variant="outline"
                 className="text-[10px] px-1.5 py-0 text-red-500 border-red-200 bg-red-50 dark:bg-red-950/30 dark:border-red-800 dark:text-red-400 ml-1">
                 {total}

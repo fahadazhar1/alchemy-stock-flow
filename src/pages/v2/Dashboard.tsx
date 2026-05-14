@@ -856,18 +856,29 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
                 <div className="h-8 bg-muted animate-pulse rounded w-24" />
                 <div className="h-3 bg-muted animate-pulse rounded w-48" />
                 <div className="h-1.5 bg-muted animate-pulse rounded-full mt-3" />
+                <div className="h-3 bg-muted animate-pulse rounded w-44 mt-4" />
+                <div className="h-1.5 bg-muted animate-pulse rounded-full mt-2" />
               </div>
             ) : (
               <>
                 <div className="text-[28px] font-semibold tabular-nums tracking-tight">
                   {discountData?.rate ?? 0}%
                 </div>
+                {/* Orders row */}
                 <p className="text-xs text-muted-foreground mt-1">
                   {fmtNum(discountData?.discountedOrders ?? 0)} of {fmtNum(discountData?.totalOrders ?? 0)} orders used a discount
                 </p>
-                <div className="mt-3 h-1.5 bg-muted rounded-full overflow-hidden">
+                <div className="mt-2 h-1.5 bg-muted rounded-full overflow-hidden">
                   <div className="h-full rounded-full bg-violet-500 transition-all"
                     style={{ width: `${Math.min(100, discountData?.rate ?? 0)}%` }} />
+                </div>
+                {/* Revenue row */}
+                <p className="text-xs text-muted-foreground mt-3">
+                  {fmtGBP(discountData?.discountedRevenue ?? 0)} of {fmtGBP(discountData?.totalRevenue ?? 0)} revenue from discounted orders
+                </p>
+                <div className="mt-2 h-1.5 bg-muted rounded-full overflow-hidden">
+                  <div className="h-full rounded-full bg-violet-400 transition-all"
+                    style={{ width: `${Math.min(100, discountData?.revenueRate ?? 0)}%` }} />
                 </div>
               </>
             )}

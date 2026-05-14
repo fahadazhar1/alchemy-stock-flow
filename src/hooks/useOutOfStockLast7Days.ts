@@ -7,8 +7,10 @@ export interface OosProduct {
   name: string;
   sku: string;
   price: number;
-  initialInventory: number;
-  salesLast7d: number;
+  unitsSold7d: number;
+  revenue7d: number;
+  estimatedLostRevenuePerDay: number;
+  lastSoldAt: string | null;
   currentInventory: number;
 }
 
@@ -23,13 +25,15 @@ export function useOutOfStockLast7Days() {
       });
       if (error) throw error;
       return ((data ?? []) as any[]).map((r: any) => ({
-        product_id:       String(r.product_id),
-        name:             String(r.name  ?? "—"),
-        sku:              String(r.sku   ?? "—"),
-        price:            Number(r.price ?? 0),
-        initialInventory: Number(r.initial_inventory ?? 0),
-        salesLast7d:      Number(r.sales_last_7d     ?? 0),
-        currentInventory: Number(r.current_inventory ?? 0),
+        product_id:                 String(r.product_id),
+        name:                       String(r.name  ?? "—"),
+        sku:                        String(r.sku   ?? "—"),
+        price:                      Number(r.price ?? 0),
+        unitsSold7d:                Number(r.units_sold_7d               ?? 0),
+        revenue7d:                  Number(r.revenue_7d                  ?? 0),
+        estimatedLostRevenuePerDay: Number(r.estimated_lost_revenue_per_day ?? 0),
+        lastSoldAt:                 r.last_sold_at ? String(r.last_sold_at) : null,
+        currentInventory:           Number(r.current_inventory           ?? 0),
       }));
     },
     staleTime: 5 * 60 * 1000,

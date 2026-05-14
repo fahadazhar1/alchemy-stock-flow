@@ -171,11 +171,12 @@ export function useFulfillmentMetrics(bounds?: DateBounds) {
     queryFn: async (): Promise<FulfillmentMetrics> => {
       let q = (supabase as any)
         .from("orders")
-        .select("shopify_created_at, updated_at")
+        .select("shopify_created_at, closed_at")
         .eq("fulfillment_status", "fulfilled")
         .gte("shopify_created_at", b.startISO)
         .lte("shopify_created_at", b.endISO)
-        .is("cancelled_at", null);
+        .is("cancelled_at", null)
+        .not("closed_at", "is", null);
       if (storeId) q = q.eq("store_id", storeId);
 
       const { data, error } = await q;
@@ -184,9 +185,10 @@ export function useFulfillmentMetrics(bounds?: DateBounds) {
       const rows = (data ?? []) as any[];
       const lags: number[] = [];
       for (const r of rows) {
-        if (!r.shopify_created_at || !r.updated_at) continue;
-        const lagMs = new Date(r.updated_at).getTime() - new Date(r.shopify_created_at).getTime();
-        if (lagMs > 0 && lagMs < 30 * 86_400_000) lags.push(lagMs / 3_600_000);
+        if (!r.shopify_created_at || !r.closed_at) continue;
+        const lagMs = new Date(r.closed_at).getTime() - new Date(r.shopify_created_at).getTime();
+        // Allow 0 ms lag (same-day fulfillment) and cap at 30 days
+        if (lagMs >= 0 && lagMs < 30 * 86_400_000) lags.push(lagMs / 3_600_000);
       }
 
       const avgLagHours = lags.length > 0
@@ -207,6 +209,9 @@ export interface DiscountUsage {
   rate: number;
   discountedOrders: number;
   totalOrders: number;
+  discountedRevenue: number;
+  totalRevenue: number;
+  revenueRate: number;
 }
 
 export function useDiscountUsage(bounds?: DateBounds) {
@@ -218,7 +223,7 @@ export function useDiscountUsage(bounds?: DateBounds) {
     queryFn: async (): Promise<DiscountUsage> => {
       let q = (supabase as any)
         .from("orders")
-        .select("discount_codes, cancelled_at")
+        .select("discount_codes, cancelled_at, total_price")
         .gte("shopify_created_at", b.startISO)
         .lte("shopify_created_at", b.endISO);
       if (storeId) q = q.eq("store_id", storeId);
@@ -228,10 +233,15 @@ export function useDiscountUsage(bounds?: DateBounds) {
 
       const rows = ((data ?? []) as any[]).filter((r: any) => !r.cancelled_at);
       const total = rows.length;
-      const discounted = rows.filter((r: any) => r.discount_codes != null).length;
+      const discountedRows = rows.filter((r: any) => r.discount_codes != null);
+      const discounted = discountedRows.length;
       const rate = total > 0 ? Math.round((discounted / total) * 1000) / 10 : 0;
 
-      return { rate, discountedOrders: discounted, totalOrders: total };
+      const totalRevenue = rows.reduce((s: number, r: any) => s + Number(r.total_price ?? 0), 0);
+      const discountedRevenue = discountedRows.reduce((s: number, r: any) => s + Number(r.total_price ?? 0), 0);
+      const revenueRate = totalRevenue > 0 ? Math.round((discountedRevenue / totalRevenue) * 1000) / 10 : 0;
+
+      return { rate, discountedOrders: discounted, totalOrders: total, discountedRevenue, totalRevenue, revenueRate };
     },
   });
 }
@@ -244,15 +254,75 @@ export interface TrafficSource {
   share: number;
 }
 
-function normalizeReferrer(site: string | null | undefined): string {
-  if (!site) return "Direct";
-  const s = site.toLowerCase();
-  if (s.includes("google"))    return "Google";
-  if (s.includes("facebook"))  return "Facebook";
-  if (s.includes("instagram")) return "Instagram";
-  if (s.includes("tiktok"))    return "TikTok";
-  if (s.includes("youtube"))   return "YouTube";
-  return "Other";
+function normalizeTrafficSource(
+  referringSite: string | null | undefined,
+  landingSite: string | null | undefined,
+  sourceName: string | null | undefined,
+): string {
+  let utmSource = "";
+  let utmMedium = "";
+  if (landingSite) {
+    try {
+      const url = new URL(landingSite.startsWith("http") ? landingSite : `https://placeholder.com${landingSite}`);
+      utmSource = url.searchParams.get("utm_source")?.toLowerCase() ?? "";
+      utmMedium = url.searchParams.get("utm_medium")?.toLowerCase() ?? "";
+    } catch { /* malformed URL */ }
+  }
+
+  const ref = referringSite?.toLowerCase() ?? "";
+  const sn  = sourceName?.toLowerCase()   ?? "";
+
+  // UTM source is explicit campaign tagging — highest confidence
+  if (utmSource) {
+    if (utmSource === "google" || utmSource === "google-ads" || utmSource === "googleads")
+      return "Search (Google UTM)";
+    if (utmSource === "bing" || utmSource === "yahoo" || utmSource === "duckduckgo")
+      return "Search (Organic)";
+    if (utmSource.includes("facebook") || utmSource === "fb")      return "Facebook";
+    if (utmSource.includes("instagram") || utmSource === "ig")     return "Instagram";
+    if (utmSource.includes("youtube")   || utmSource === "yt")     return "YouTube";
+    if (utmSource.includes("tiktok")    || utmSource === "tt")     return "TikTok";
+    if (utmSource.includes("twitter")   || utmSource === "x" || utmSource === "t.co") return "Twitter / X";
+    if (utmSource.includes("pinterest"))                            return "Pinterest";
+    if (utmSource.includes("linkedin"))                             return "LinkedIn";
+    if (utmSource.includes("shopify_email") || utmSource === "klaviyo" || utmMedium === "email")
+      return "Shopify Email";
+    if (utmSource.includes("chatgpt") || utmSource === "openai")   return "ChatGPT";
+    // Surface the raw utm_source so nothing is silently swallowed into "Direct"
+    return utmSource.charAt(0).toUpperCase() + utmSource.slice(1);
+  }
+
+  // Shopify source_name reveals the sales channel for social commerce & POS
+  if (sn && sn !== "web") {
+    if (sn === "email" || sn === "shopify_email")  return "Shopify Email";
+    if (sn.includes("facebook"))                   return "Facebook";
+    if (sn.includes("instagram"))                  return "Instagram";
+    if (sn.includes("google"))                     return "Search (Google UTM)";
+    if (sn === "pos")                              return "POS";
+  }
+
+  // HTTP referrer — no UTM, so this is organic/direct navigation
+  if (ref) {
+    if (ref.includes("chatgpt.com") || ref.includes("chat.openai.com")) return "ChatGPT";
+    if (ref.includes("google.")    || ref.includes("google.com"))  return "Search (Organic)";
+    if (ref.includes("bing.com")   || ref.includes("yahoo.com")   ||
+        ref.includes("duckduckgo.com") || ref.includes("baidu.com")) return "Search (Organic)";
+    if (ref.includes("facebook.com") || ref.includes("fb.com") || ref.includes("l.facebook"))
+      return "Facebook";
+    if (ref.includes("instagram.com") || ref.includes("l.instagram")) return "Instagram";
+    if (ref.includes("youtube.com")   || ref.includes("youtu.be"))    return "YouTube";
+    if (ref.includes("tiktok.com"))   return "TikTok";
+    if (ref.includes("twitter.com")   || ref.includes("t.co"))        return "Twitter / X";
+    if (ref.includes("pinterest.com")) return "Pinterest";
+    if (ref.includes("linkedin.com"))  return "LinkedIn";
+    if (ref.includes("reddit.com"))    return "Reddit";
+    // Unknown referrer — show the domain rather than hiding it as "Direct"
+    try {
+      return new URL(ref.startsWith("http") ? ref : `https://${ref}`).hostname.replace(/^www\./, "");
+    } catch { return "Other"; }
+  }
+
+  return "Direct / None";
 }
 
 export function useTrafficSources(bounds?: DateBounds) {
@@ -264,7 +334,7 @@ export function useTrafficSources(bounds?: DateBounds) {
     queryFn: async (): Promise<TrafficSource[]> => {
       let q = (supabase as any)
         .from("orders")
-        .select("referring_site, cancelled_at")
+        .select("referring_site, landing_site, source_name, cancelled_at")
         .gte("shopify_created_at", b.startISO)
         .lte("shopify_created_at", b.endISO);
       if (storeId) q = q.eq("store_id", storeId);
@@ -275,7 +345,7 @@ export function useTrafficSources(bounds?: DateBounds) {
       const rows = ((data ?? []) as any[]).filter((r: any) => !r.cancelled_at);
       const sourceMap = new Map<string, number>();
       for (const r of rows) {
-        const name = normalizeReferrer(r.referring_site);
+        const name = normalizeTrafficSource(r.referring_site, r.landing_site, r.source_name);
         sourceMap.set(name, (sourceMap.get(name) ?? 0) + 1);
       }
       const total = rows.length;

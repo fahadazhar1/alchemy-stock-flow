@@ -108,6 +108,18 @@ export default function Settings() {
     } finally { setBusy(false); }
   };
 
+  const handleForceResync = async () => {
+    if (!connection) return;
+    setBusy(true);
+    try {
+      await callShopify({ action: "force_resync", connection_id: connection.id });
+      toast.success("Full re-sync started — this may take a few minutes");
+      await refetchConn();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Re-sync failed");
+    } finally { setBusy(false); }
+  };
+
   const updateConn = async (patch: Record<string, unknown>) => {
     if (!connection) return;
     const { error } = await (supabase.from("shopify_connections" as never) as unknown as { update: (p: Record<string, unknown>) => { eq: (c: string, v: string) => Promise<{ error: unknown }> } }).update(patch).eq("id", (connection as { id: string }).id);
@@ -221,10 +233,16 @@ export default function Settings() {
                 </Select>
               </div>
 
-              <Button onClick={handleSyncNow} disabled={busy} className="w-full">
-                <RefreshCw className={`h-4 w-4 mr-2 ${busy ? "animate-spin" : ""}`} />
-                Sync Now
-              </Button>
+              <div className="flex gap-2">
+                <Button onClick={handleSyncNow} disabled={busy} className="flex-1">
+                  <RefreshCw className={`h-4 w-4 mr-2 ${busy ? "animate-spin" : ""}`} />
+                  Sync Now
+                </Button>
+                <Button onClick={handleForceResync} disabled={busy} variant="outline" className="flex-1">
+                  <RefreshCw className={`h-4 w-4 mr-2 ${busy ? "animate-spin" : ""}`} />
+                  Force Full Re-sync
+                </Button>
+              </div>
 
               <div className="text-xs text-muted-foreground border-t pt-3 space-y-1">
                 <div>Last sync: {connection.last_sync_at ? format(new Date(connection.last_sync_at as string), "PPpp") : "Never"}</div>

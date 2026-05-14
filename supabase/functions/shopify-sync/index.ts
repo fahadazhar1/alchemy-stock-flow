@@ -8,9 +8,10 @@ const corsHeaders = {
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdidmJ2b3BlaWVxZ2h2ZXR0bWtqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc3MDMzNDksImV4cCI6MjA5MzI3OTM0OX0.bezMzljmBaqGo0kuThNO5tIuLDeWXaVnbAn8O2ZD5dM";
+const INVOKE_URL = `${SUPABASE_URL}/functions/v1/shopify-sync`;
 const STAGES = ["products", "collections", "orders", "inventory"] as const;
 type Stage = typeof STAGES[number];
-const INVOKE_URL = `${SUPABASE_URL}/functions/v1/shopify-sync`;
 
 function normalizeDomain(d: string) {
   return d.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/+$/, "");
@@ -44,6 +45,27 @@ async function shopifyFetch(domain: string, token: string, path: string): Promis
     }
   }
   throw new Error("Shopify fetch retries exhausted");
+}
+
+async function triggerContinue(connectionId: string) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(INVOKE_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${ANON_KEY}`,
+        },
+        body: JSON.stringify({ action: "continue_sync", connection_id: connectionId }),
+      });
+      if (res.ok) return;
+      console.warn(`self-invoke attempt ${attempt + 1} got status ${res.status}`);
+    } catch (e) {
+      console.error(`self-invoke attempt ${attempt + 1} failed:`, e);
+    }
+    await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+  }
+  console.error("self-invoke failed after 3 attempts — cron will rescue");
 }
 
 async function shopifyMutate(domain: string, token: string, method: "POST" | "PUT" | "DELETE", path: string, requestBody?: unknown): Promise<Response> {
@@ -188,28 +210,6 @@ async function updateLog(supabase: any, logId: string, patch: Record<string, unk
     heartbeat_at: new Date().toISOString(),
   };
   await supabase.from("shopify_sync_logs").update({ ...rest, metadata: merged }).eq("id", logId);
-}
-
-// ------------ Self-invoke helper (fixed: awaited with retry) ------------
-async function triggerContinue(connectionId: string) {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const res = await fetch(INVOKE_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${SERVICE_ROLE}`,
-        },
-        body: JSON.stringify({ action: "continue_sync", connection_id: connectionId }),
-      });
-      if (res.ok) return;
-      console.warn(`self-invoke attempt ${attempt + 1} got status ${res.status}`);
-    } catch (e) {
-      console.error(`self-invoke attempt ${attempt + 1} failed:`, e);
-    }
-    await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
-  }
-  console.error("self-invoke failed after 3 attempts — cron will rescue");
 }
 
 // ------------ Stage handlers ------------
@@ -494,6 +494,9 @@ async function syncOrders(supabase: any, conn: any, log: any, totalRef: { n: num
       shopify_order_id: String(o.id),
       store_id: conn.store_id,
       customer_email: o.email || o.customer?.email || null,
+      discount_codes: o.discount_codes?.length ? o.discount_codes : null,
+      referring_site: o.referring_site || null,
+      landing_site: o.landing_site || null,
     };
     const { data: existing } = await supabase
       .from("orders").select("id").eq("shopify_order_id", String(o.id)).maybeSingle();
@@ -647,11 +650,12 @@ async function syncShopifyData(supabase: any, connectionId: string) {
 
   const log = await createOrResumeLog(supabase, connectionId, conn.store_id);
   const totalRef = { n: log.records_synced ?? 0 };
-  // Use last successful sync time as incremental filter — only changed records
   const syncSince: string | null = conn.last_sync_at ?? null;
 
   await supabase.from("shopify_connections").update({ last_sync_status: "in_progress" }).eq("id", connectionId);
 
+  // 110s budget — Supabase hard-kills at 150s. If we exceed it, state is saved
+  // in the log and the next invocation (cron or manual) resumes from the cursor.
   try {
     const currentStage = (log.current_stage as Stage) || "products";
     const currentIdx = STAGES.indexOf(currentStage as any);
@@ -682,9 +686,7 @@ async function syncShopifyData(supabase: any, connectionId: string) {
       });
       await triggerContinue(connectionId);
     } else {
-      // All stages done — refresh product_velocity_metrics from order_items
       await refreshVelocityMetrics(supabase, conn.store_id);
-
       await updateLog(supabase, log.id, {
         status: "success",
         completed_at: new Date().toISOString(),
@@ -799,6 +801,23 @@ Deno.serve(async (req) => {
       // @ts-ignore
       EdgeRuntime.waitUntil(syncShopifyData(supabase, id));
       return json(200, { ok: true, status: "queued" });
+    }
+
+    if (action === "force_resync") {
+      const id = String(body.connection_id || "");
+      if (!id) return json(400, { ok: false, error: "Missing connection_id" });
+      // Cancel stuck logs so createOrResumeLog starts fresh
+      await supabase.from("shopify_sync_logs")
+        .update({ status: "cancelled" })
+        .eq("connection_id", id)
+        .in("status", ["in_progress", "failed"]);
+      // Clear last_sync_at so syncSince = null → full year re-sync
+      await supabase.from("shopify_connections")
+        .update({ last_sync_at: null, last_sync_status: "in_progress" })
+        .eq("id", id);
+      // @ts-ignore
+      EdgeRuntime.waitUntil(syncShopifyData(supabase, id));
+      return json(200, { ok: true, status: "force_resync_queued" });
     }
 
     if (action === "continue_sync") {
