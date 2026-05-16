@@ -12,12 +12,11 @@ import {
   useFulfillmentSummary, useFulfillmentTrend,
   useCollectionPerformance, useRevenueKPIs,
 } from "../lib/useReportData";
+import { useCurrency } from "@/hooks/useCurrency";
 import type { DateRange } from "../lib/reportsEngine";
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
-const fmt = (n: number) =>
-  new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP", maximumFractionDigits: 0 }).format(n);
 const fmtN = (n: number) => new Intl.NumberFormat("en-GB").format(Math.round(n));
 const pct = (n: number | null) =>
   n == null ? "—" : `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`;
@@ -67,6 +66,7 @@ function Skeleton({ rows = 6 }: { rows?: number }) {
 
 function ReportTooltip({ active, payload, label, currency = true }:
   { active?: boolean; payload?: any[]; label?: string; currency?: boolean }) {
+  const { fmtCurrencyInt: fmt } = useCurrency();
   if (!active || !payload?.length) return null;
   return (
     <div className="rounded-lg border bg-card px-3 py-2 shadow-lg text-xs space-y-1">
@@ -109,6 +109,7 @@ export function RangePicker({ value, onChange }: { value: DateRange; onChange: (
 // ─── 1. Sales Overview ────────────────────────────────────────────────────────
 
 export function SalesOverviewReport() {
+  const { fmtCurrencyInt: fmt, symbol } = useCurrency();
   const [range, setRange] = useState<DateRange>("30d");
   const kpis = useRevenueKPIs(range);
   const trend = useSalesTrend(range);
@@ -151,7 +152,7 @@ export function SalesOverviewReport() {
               <LineChart data={trend.data ?? []} margin={{ top: 4, right: 12, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
                 <XAxis dataKey="label" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} minTickGap={40} axisLine={false} tickLine={false} />
-                <YAxis tickFormatter={v => `£${Math.round(v / 1000)}k`} tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} width={42} />
+                <YAxis tickFormatter={v => `${symbol}${Math.round(v / 1000)}k`} tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} width={42} />
                 <Tooltip content={<ReportTooltip />} />
                 <Line type="monotone" dataKey="revenue" name="Revenue" stroke="#6366f1" strokeWidth={2} dot={false} isAnimationActive={false} />
               </LineChart>
@@ -205,6 +206,7 @@ export function SalesOverviewReport() {
 // ─── 2. Top Products ──────────────────────────────────────────────────────────
 
 export function TopProductsReport() {
+  const { fmtCurrencyInt: fmt } = useCurrency();
   const [range, setRange] = useState<DateRange>("30d");
   const q = useTopProducts(range);
   const total = q.data?.reduce((s, r) => s + r.revenue, 0) ?? 0;
@@ -265,6 +267,7 @@ export function TopProductsReport() {
 // ─── 3. Inventory Health ──────────────────────────────────────────────────────
 
 export function InventoryHealthReport() {
+  const { fmtCurrencyInt: fmt } = useCurrency();
   const kpis = useInventoryKPIs();
   const items = useInventoryHealth();
   const [filter, setFilter] = useState<"all" | "low" | "out" | "expiring">("all");
@@ -465,6 +468,7 @@ export function FulfillmentReport() {
 // ─── 5. Collection Performance ────────────────────────────────────────────────
 
 export function CollectionPerformanceReport() {
+  const { fmtCurrencyInt: fmt } = useCurrency();
   const [range, setRange] = useState<DateRange>("30d");
   const q = useCollectionPerformance(range);
   const total = q.data?.reduce((s, r) => s + r.revenue, 0) ?? 0;

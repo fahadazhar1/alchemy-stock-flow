@@ -10,8 +10,10 @@ import { exportToCSV } from "@/lib/export";
 import { BarChart3, Download, Power, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { useStoreFilter } from "@/hooks/useStoreFilter";
+import { useCurrency } from "@/hooks/useCurrency";
 
 export default function CampaignPerformance() {
+  const { symbol } = useCurrency();
   const queryClient = useQueryClient();
   const { storeId } = useStoreFilter();
 
@@ -130,7 +132,7 @@ export default function CampaignPerformance() {
                     <TableCell className="text-xs">{c.created_at ? formatUAEDate(c.created_at) : '-'}</TableCell>
                     <TableCell className="text-xs">{c.started_at ? formatUAEDate(c.started_at) : '-'}</TableCell>
                     <TableCell className="text-xs">{c.ended_at ? formatUAEDate(c.ended_at) : '-'}</TableCell>
-                    <TableCell className="text-right font-mono">{c.discount_percent ? `${c.discount_percent}%` : c.fixed_price ? `£${c.fixed_price}` : '-'}</TableCell>
+                    <TableCell className="text-right font-mono">{c.discount_percent ? `${c.discount_percent}%` : c.fixed_price ? `${symbol}${c.fixed_price}` : '-'}</TableCell>
                     <TableCell className="text-right font-mono">{c.pre_campaign_inventory?.toLocaleString() || '-'}</TableCell>
                     <TableCell className="text-right font-mono">{c.post_campaign_inventory?.toLocaleString() || '-'}</TableCell>
                     <TableCell className="text-right font-mono">{c.inventory_reduction?.toLocaleString() || '-'}</TableCell>

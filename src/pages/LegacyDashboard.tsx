@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip as TooltipUI, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { toast } from "sonner";
 import { format } from "date-fns";
-import { formatCurrency } from "@/lib/timezone";
+import { useCurrency } from "@/hooks/useCurrency";
 import { exportToCSV } from "@/lib/export";
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line } from "recharts";
 import { DateRangeFilter, matchesDateFilter } from "@/components/DateRangeFilter";
@@ -93,6 +93,7 @@ function usePendingOrders(storeId: string | null, enabled: boolean) {
 }
 
 function PendingOrdersModal({ storeId, open, onClose }: { storeId: string | null; open: boolean; onClose: () => void }) {
+  const { formatCurrency } = useCurrency();
   const { data: orders, isLoading } = usePendingOrders(storeId, open);
   return (
     <Dialog open={open} onOpenChange={onClose}>
@@ -224,17 +225,11 @@ function useAllLosers(storeId: string | null) {
   return useQuery({
     queryKey: ["all-losers", storeId],
     queryFn: async () => {
-      // v_loser_products is a view joining products - need to filter by store_id via products
-      // Since the view doesn't have store_id, we join manually
       let q = supabase.from("v_loser_products").select("*").order("days_old", { ascending: false });
-      // Can't filter view by store_id directly; we'll do client-side with product lookup
+      if (storeId) q = (q as any).eq("store_id", storeId);
       const { data, error } = await q;
       if (error) throw error;
-      if (!storeId) return data ?? [];
-      // Get product_ids for this store
-      const { data: storeProducts } = await supabase.from("products").select("id").eq("store_id", storeId);
-      const storeProductIds = new Set((storeProducts ?? []).map(p => p.id));
-      return (data ?? []).filter(l => l.product_id && storeProductIds.has(l.product_id));
+      return data ?? [];
     },
   });
 }
@@ -246,13 +241,10 @@ function useInventoryActuals(storeId: string | null) {
       let q = supabase
         .from("v_product_inventory_summary")
         .select("product_id, collection_name, vendor_name, product_type, total_inventory, created_at, min_current_price, max_compare_at_price");
-      // View doesn't have store_id, filter by product_ids
+      if (storeId) q = (q as any).eq("store_id", storeId);
       const { data, error } = await q;
       if (error) throw error;
-      if (!storeId) return data ?? [];
-      const { data: storeProducts } = await supabase.from("products").select("id").eq("store_id", storeId);
-      const storeProductIds = new Set((storeProducts ?? []).map(p => p.id));
-      return (data ?? []).filter(r => r.product_id && storeProductIds.has(r.product_id));
+      return data ?? [];
     },
   });
 }
@@ -458,6 +450,7 @@ function SyncHealthBadge({ storeId }: { storeId: string | null }) {
 }
 
 export default function LegacyDashboard() {
+  const { formatCurrency } = useCurrency();
   const { storeId, isAllStores } = useStoreFilter();
   const { data: kpis, isLoading } = useKPIs(storeId);
   const { data: stockValue } = useStockValue(storeId);

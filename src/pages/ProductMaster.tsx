@@ -12,7 +12,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
-import { formatCurrency } from "@/lib/timezone";
+import { useCurrency } from "@/hooks/useCurrency";
 import { exportToCSV } from "@/lib/export";
 import { toast } from "sonner";
 import { Download, RotateCcw, Search, ExternalLink, XCircle, Warehouse, PackagePlus, Pencil, Check, X } from "lucide-react";
@@ -43,6 +43,7 @@ interface PriceEditData {
 }
 
 export default function ProductMaster() {
+  const { formatCurrency } = useCurrency();
   const { storeId } = useStoreFilter();
   const [page, setPage] = useState(0);
   const [search, setSearch] = useState("");
@@ -65,6 +66,7 @@ export default function ProductMaster() {
   const [adjustLocations, setAdjustLocations] = useState<Array<{ id: string; name: string }>>([]);
   const [adjustError, setAdjustError] = useState("");
   const [adjustLoading, setAdjustLoading] = useState(false);
+  const [resyncing, setResyncing] = useState(false);
 
   // Price edit state
   const [priceEditData, setPriceEditData] = useState<PriceEditData | null>(null);
@@ -96,19 +98,12 @@ export default function ProductMaster() {
     },
   });
 
-  const { data: storeProductIds } = useQuery({
-    queryKey: ["store-product-ids", storeId],
-    enabled: !!storeId,
-    queryFn: async () => {
-      const { data } = await supabase.from("products").select("id").eq("store_id", storeId!);
-      return new Set((data ?? []).map(p => p.id));
-    },
-  });
-
   const { data: productTypes } = useQuery({
-    queryKey: ["filter-product-types"],
+    queryKey: ["filter-product-types", storeId],
     queryFn: async () => {
-      const { data } = await supabase.from("v_product_inventory_summary").select("product_type");
+      let q = supabase.from("v_product_inventory_summary").select("product_type");
+      if (storeId) q = q.eq("store_id", storeId);
+      const { data } = await q;
       const types = [...new Set((data ?? []).map(d => d.product_type).filter(Boolean))];
       return types.sort();
     },
@@ -119,6 +114,7 @@ export default function ProductMaster() {
     queryFn: async () => {
       try {
         let q = supabase.from("v_product_inventory_summary").select("*", { count: "exact" });
+        if (storeId) q = q.eq("store_id", storeId);
         if (search) q = q.or(`product_name.ilike.%${search}%,sku.ilike.%${search}%`);
         if (collectionFilter !== "all") q = q.eq("collection_name", collectionFilter);
         if (vendorFilter !== "all") q = q.eq("vendor_name", vendorFilter);
@@ -126,11 +122,7 @@ export default function ProductMaster() {
         q = q.order("created_at", { ascending: false }).range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
         const { data, error, count } = await q;
         if (error) throw error;
-        let filtered = data ?? [];
-        if (storeId && storeProductIds) {
-          filtered = filtered.filter(p => p.product_id && storeProductIds.has(p.product_id));
-        }
-        return { data: filtered, count: storeId && storeProductIds ? filtered.length : (count ?? 0) };
+        return { data: data ?? [], count: count ?? 0 };
       } catch (e) {
         toast.error("Failed to load products");
         return { data: [], count: 0 };
@@ -269,6 +261,22 @@ export default function ProductMaster() {
   };
 
   const resetDateFilter = () => { setFilterDates([]); setFilterMonths([]); setFilterYears([]); };
+
+  const handleForceResync = async () => {
+    if (!shopifyConn?.id) { toast.error("No active Shopify connection"); return; }
+    setResyncing(true);
+    try {
+      const { data: result } = await supabase.functions.invoke("shopify-sync", {
+        body: { action: "force_resync", connection_id: shopifyConn.id },
+      });
+      if (!result?.ok) throw new Error(result?.error || "Resync failed");
+      toast.success("Full re-sync started — collections and products will update in a few minutes");
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to start re-sync");
+    } finally {
+      setResyncing(false);
+    }
+  };
 
   // ── Adjust Stock ──────────────────────────────────────────────────────────
 
@@ -494,6 +502,10 @@ export default function ProductMaster() {
               <XCircle className="h-4 w-4 mr-1" /> Remove Discount ({selected.size})
             </Button>
           )}
+          <Button variant="outline" size="sm" onClick={handleForceResync} disabled={resyncing}>
+            <RotateCcw className={`h-4 w-4 mr-1 ${resyncing ? "animate-spin" : ""}`} />
+            {resyncing ? "Syncing..." : "Resync"}
+          </Button>
           <Button variant="outline" size="sm" onClick={handleExport}><Download className="h-4 w-4 mr-1" />Export CSV</Button>
         </div>
       </div>

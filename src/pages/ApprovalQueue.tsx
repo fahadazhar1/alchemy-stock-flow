@@ -9,8 +9,10 @@ import { formatUAEDateTime } from "@/lib/timezone";
 import { CheckSquare } from "lucide-react";
 import { useStoreFilter } from "@/hooks/useStoreFilter";
 import { useStore } from "@/contexts/StoreContext";
+import { useCurrency } from "@/hooks/useCurrency";
 
 export default function ApprovalQueue() {
+  const { symbol } = useCurrency();
   const queryClient = useQueryClient();
   const { storeId } = useStoreFilter();
   const { isAllStores } = useStore();
@@ -77,7 +79,7 @@ export default function ApprovalQueue() {
                   <TableRow key={c.id}>
                     <TableCell className="font-medium">{c.name}</TableCell>
                     <TableCell>{c.action_type}</TableCell>
-                    <TableCell>{c.discount_percent ? `${c.discount_percent}%` : c.fixed_price ? `£${c.fixed_price}` : '-'}</TableCell>
+                    <TableCell>{c.discount_percent ? `${c.discount_percent}%` : c.fixed_price ? `${symbol}${c.fixed_price}` : '-'}</TableCell>
                     <TableCell className="text-xs">{formatUAEDateTime(c.created_at)}</TableCell>
                     <TableCell className="text-right space-x-2">
                       <Button size="sm" onClick={() => handleApprove(c.id)}>Approve & Execute</Button>

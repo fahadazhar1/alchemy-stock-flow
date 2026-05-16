@@ -15,6 +15,7 @@ export interface OrderRow {
   status: OrderStatus;
   paymentLabel: string;
   total: number;
+  trackingNumber: string | null;
 }
 
 export interface OrdersParams {
@@ -25,6 +26,8 @@ export interface OrdersParams {
   channel: string;
   daysBack: number;
   storeId: string | null;
+  codFilter?: "all" | "held" | "released";
+  courierStatusFilter?: string[];
 }
 
 export interface LiveLineItem {
@@ -63,18 +66,76 @@ function derivePaymentLabel(r: any): string {
 // ─── Hooks ────────────────────────────────────────────────────────────────────
 
 export function useOrders(params: OrdersParams) {
-  const { page, pageSize, search, status, channel, daysBack, storeId } = params;
+  const { page, pageSize, search, status, channel, daysBack, storeId, codFilter, courierStatusFilter } = params;
 
   return useQuery({
     queryKey: ["v2-orders", params],
     placeholderData: (prev) => prev,
     queryFn: async () => {
+      // COD filter: look up matching tracking numbers in sonic_cache before querying orders.
+      // sonic_cache is populated lazily as orders are viewed, so only cached orders appear in results.
+      let codTrackingNumbers: string[] | null = null;
+      if (codFilter && codFilter !== "all") {
+        const statuses = codFilter === "held" ? ["Unpaid", "Pending"] : ["Paid", "Processed"];
+        const { data: cacheRows } = await (supabase as any)
+          .from("sonic_cache")
+          .select("tracking_number")
+          .in("courier_payment_status", statuses)
+          .limit(1000);
+        codTrackingNumbers = ((cacheRows ?? []) as any[]).map((r: any) => r.tracking_number as string);
+        if (codTrackingNumbers.length === 0) return { rows: [], total: 0 };
+      }
+
+      // Courier status filter: resolve matching tracking numbers from sonic_cache, then apply as server-side IN filter.
+      // sonic_cache is populated lazily — only orders fetched at least once appear.
+      let courierTrackingNumbers: string[] | null = null;
+      let includeNoTracking = false;
+      const activeStatuses = (courierStatusFilter ?? []).filter(s => s !== "no_tracking");
+      includeNoTracking = (courierStatusFilter ?? []).includes("no_tracking");
+
+      if (activeStatuses.length > 0) {
+        const orParts: string[] = [];
+        if (activeStatuses.includes("delivered"))        orParts.push("courier_status.ilike.%delivered%");
+        if (activeStatuses.includes("out_for_delivery")) orParts.push("courier_status.ilike.%out for delivery%");
+        if (activeStatuses.includes("in_transit"))       orParts.push("courier_status.ilike.%transit%");
+        if (activeStatuses.includes("returned"))         orParts.push("courier_status.ilike.%return%", "courier_status.ilike.%cancelled%");
+
+        const needsPending = activeStatuses.includes("pending");
+        const trackingSet = new Set<string>();
+
+        if (orParts.length > 0) {
+          const { data: matched } = await (supabase as any)
+            .from("sonic_cache").select("tracking_number")
+            .or(orParts.join(",")).limit(5000);
+          ((matched ?? []) as any[]).forEach((r: any) => trackingSet.add(r.tracking_number));
+        }
+
+        if (needsPending) {
+          // "pending" = anything in sonic_cache that isn't a known status
+          const { data: pendingRows } = await (supabase as any)
+            .from("sonic_cache").select("tracking_number")
+            .not("courier_status", "ilike", "%delivered%")
+            .not("courier_status", "ilike", "%out for delivery%")
+            .not("courier_status", "ilike", "%transit%")
+            .not("courier_status", "ilike", "%return%")
+            .not("courier_status", "ilike", "%cancelled%")
+            .limit(5000);
+          ((pendingRows ?? []) as any[]).forEach((r: any) => trackingSet.add(r.tracking_number));
+        }
+
+        courierTrackingNumbers = [...trackingSet];
+        if (courierTrackingNumbers.length === 0 && !includeNoTracking) return { rows: [], total: 0 };
+      } else if (includeNoTracking && (courierStatusFilter ?? []).length > 0) {
+        // Only "no_tracking" selected — filter to orders with no tracking number
+        courierTrackingNumbers = [];
+      }
+
       let q = (supabase as any)
         .from("orders")
         .select(
           "id, order_number, shopify_created_at, created_at, " +
           "financial_status, fulfillment_status, cancelled_at, " +
-          "total_price, source_name, store_id, " +
+          "total_price, source_name, store_id, tracking_number, " +
           "stores(store_name)",
           { count: "exact" }
         )
@@ -118,6 +179,20 @@ export function useOrders(params: OrdersParams) {
           : q.in("source_name", targets);
       }
 
+      if (codTrackingNumbers !== null) {
+        q = q.in("tracking_number", codTrackingNumbers);
+      }
+
+      if (courierTrackingNumbers !== null) {
+        if (includeNoTracking && courierTrackingNumbers.length > 0) {
+          q = q.or(`tracking_number.is.null,tracking_number.in.(${courierTrackingNumbers.join(",")})`);
+        } else if (includeNoTracking) {
+          q = q.is("tracking_number", null);
+        } else {
+          q = q.in("tracking_number", courierTrackingNumbers);
+        }
+      }
+
       const { data, error, count } = await q;
       if (error) throw error;
 
@@ -135,6 +210,7 @@ export function useOrders(params: OrdersParams) {
           status: deriveStatus(r),
           paymentLabel: derivePaymentLabel(r),
           total: Number(r.total_price ?? 0),
+          trackingNumber: r.tracking_number ?? null,
         };
       });
 

@@ -16,6 +16,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useCustomReport } from "../lib/useReportData";
+import { useCurrency } from "@/hooks/useCurrency";
 import { RangePicker } from "./ReportPanels";
 import type { DateRange } from "../lib/reportsEngine";
 
@@ -41,8 +42,6 @@ const fieldLibrary: Record<FieldType, string[]> = {
 
 const PIE_COLORS = ["#6366f1", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4"];
 
-const fmt = (n: number) =>
-  new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP", maximumFractionDigits: 0 }).format(n);
 const fmtN = (n: number) => new Intl.NumberFormat("en-GB").format(Math.round(n));
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -82,6 +81,7 @@ function Slot({ label, items, kind, onRemove }:
 }
 
 function ResultTooltip({ active, payload, label }: any) {
+  const { fmtCurrencyInt: fmt } = useCurrency();
   if (!active || !payload?.length) return null;
   return (
     <div className="rounded-lg border bg-card px-3 py-2 shadow-lg text-xs space-y-1">
@@ -101,6 +101,7 @@ function ResultTooltip({ active, payload, label }: any) {
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function FunctionalCustomBuilder() {
+  const { fmtCurrencyInt: fmt, symbol } = useCurrency();
   const [metrics, setMetrics] = useState<string[]>(["Revenue", "Orders"]);
   const [dimensions, setDimensions] = useState<string[]>(["Channel"]);
   const [filters, setFilters] = useState<string[]>(["Date range"]);
@@ -139,7 +140,7 @@ export default function FunctionalCustomBuilder() {
 
   const isCurrency = ["Revenue", "AOV"].includes(primaryMetric);
   const tickFmt = isCurrency
-    ? (v: number) => `£${Math.round(v / 1000)}k`
+    ? (v: number) => `${symbol}${Math.round(v / 1000)}k`
     : (v: number) => fmtN(v);
 
   return (

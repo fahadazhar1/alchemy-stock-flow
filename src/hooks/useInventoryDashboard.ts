@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { useStoreFilter } from "@/hooks/useStoreFilter";
 
 // ─── Return types ─────────────────────────────────────────────────────────────
 
@@ -90,35 +91,36 @@ const URGENCY_MAP: Record<string, "High" | "Medium" | "Low"> = {
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useInventoryDashboard() {
+  const { storeId } = useStoreFilter();
+
   return useQuery({
-    queryKey: ["inventory-dashboard"],
+    queryKey: ["inventory-dashboard", storeId],
     queryFn: async (): Promise<InventoryDashboardData> => {
-      const [kpiRes, centralRes, summaryRes, replenRes] = await Promise.all([
-        supabase.from("v_dashboard_kpis").select("*").single(),
+      let summaryQ = (supabase as any)
+        .from("v_product_inventory_summary")
+        .select(
+          "product_id, product_name, sku, vendor_name, collection_name, " +
+          "days_old, total_inventory, min_current_price, max_compare_at_price, " +
+          "nearest_expiry_date"
+        );
+      if (storeId) summaryQ = summaryQ.eq("store_id", storeId);
 
-        (supabase as any)
-          .from("v_central_inventory")
-          .select("available_quantity, reserved_quantity, net_available, base_price"),
+      let replenQ = (supabase as any)
+        .from("v_replenishment_candidates")
+        .select("product_name, sku, replenishment_status, velocity, available_units")
+        .order("available_units", { ascending: true })
+        .limit(5);
+      if (storeId) replenQ = replenQ.eq("store_id", storeId);
 
-        (supabase as any)
-          .from("v_product_inventory_summary")
-          .select(
-            "product_id, product_name, sku, vendor_name, collection_name, " +
-            "days_old, total_inventory, min_current_price, max_compare_at_price, " +
-            "nearest_expiry_date"
-          ),
-
-        (supabase as any)
-          .from("v_replenishment_candidates")
-          .select("product_name, sku, replenishment_status, velocity, available_units")
-          .order("available_units", { ascending: true })
-          .limit(5),
+      const [kpiRes, summaryRes, replenRes] = await Promise.all([
+        supabase.rpc("get_dashboard_kpis", { p_store_id: storeId ?? null }),
+        summaryQ,
+        replenQ,
       ]);
 
       if (kpiRes.error) throw kpiRes.error;
 
-      const kpiRow = kpiRes.data as any;
-      const centralRows = ((centralRes.data ?? []) as any[]);
+      const kpiRow = (Array.isArray(kpiRes.data) ? kpiRes.data[0] : kpiRes.data) as any;
       const summaryRows = ((summaryRes.data ?? []) as any[])
         .filter((r: any) => Number(r.total_inventory ?? 0) > 0);
       const replenRows = ((replenRes.data ?? []) as any[]);
@@ -131,20 +133,19 @@ export function useInventoryDashboard() {
         losers:     Number(kpiRow?.losers_count ?? 0),
       };
 
-      // ── Stock value (from product summary) ────────────────────────────────
+      // ── Stock value ───────────────────────────────────────────────────────
       const stockValue = summaryRows.reduce(
         (s: number, r: any) => s + Number(r.total_inventory ?? 0) * Number(r.min_current_price ?? 0),
         0
       );
 
-      // ── Central WMS pool (from v_central_inventory) ───────────────────────
+      // ── WMS pool (placeholder — central inventory not store-scoped by design) ─
       const wmsPool: WmsPool = {
-        totalSKUs:        centralRows.length,
-        totalAvailable:   centralRows.reduce((s: number, r: any) => s + Number(r.available_quantity ?? 0), 0),
-        totalReserved:    centralRows.reduce((s: number, r: any) => s + Number(r.reserved_quantity ?? 0), 0),
-        totalNetAvailable:centralRows.reduce((s: number, r: any) => s + Number(r.net_available ?? 0), 0),
-        totalValue:       centralRows.reduce((s: number, r: any) =>
-          s + Number(r.available_quantity ?? 0) * Number(r.base_price ?? 0), 0),
+        totalSKUs:         0,
+        totalAvailable:    0,
+        totalReserved:     0,
+        totalNetAvailable: 0,
+        totalValue:        0,
       };
 
       // ── Aging buckets ─────────────────────────────────────────────────────
@@ -168,9 +169,9 @@ export function useInventoryDashboard() {
         .slice(0, 7)
         .map(([name, units], i) => ({ name, units, color: CAT_COLORS[i % CAT_COLORS.length] }));
 
-      // ── Losers (oldest stock with inventory) ──────────────────────────────
+      // ── Losers: age > 20 days AND stock > 10 units (matches v_loser_products definition) ──
       const loserProducts: LoserProduct[] = summaryRows
-        .filter((r: any) => Number(r.days_old ?? 0) > 20)
+        .filter((r: any) => Number(r.days_old ?? 0) > 20 && Number(r.total_inventory ?? 0) > 10)
         .sort((a: any, b: any) => Number(b.days_old ?? 0) - Number(a.days_old ?? 0))
         .slice(0, 8)
         .map((r: any) => ({
@@ -198,7 +199,7 @@ export function useInventoryDashboard() {
         };
       });
 
-      // ── Expiry (nearest_expiry_date within 30 days) ───────────────────────
+      // ── Expiry ────────────────────────────────────────────────────────────
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       const cutoff = new Date(today);

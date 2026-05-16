@@ -7,8 +7,9 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import { fmtGBP, fmtNum } from "../mockData";
+import { fmtNum } from "../mockData";
 import { useOutOfStockLast7Days, type OosProduct } from "@/hooks/useOutOfStockLast7Days";
+import { useCurrency } from "@/hooks/useCurrency";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -45,6 +46,7 @@ const OOS_BADGE = (
 const HEADERS = ["Product", "Price", "Sold 7d", "Revenue 7d", "Est. loss/day", "Last sold", "Current"];
 
 function OosTable({ rows }: { rows: OosProduct[] }) {
+  const { fmtCurrency: fmtGBP } = useCurrency();
   return (
     <table className="w-full text-xs">
       <thead>

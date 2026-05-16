@@ -1,17 +1,9 @@
 // ─── Formatters ──────────────────────────────────────────────────────────────
 
-export const fmtGBP = (n: number | null | undefined): string => {
-  if (n == null) return "—";
-  if (Math.abs(n) >= 1_000_000) return "£" + (n / 1_000_000).toFixed(2) + "M";
-  if (Math.abs(n) >= 10_000) return "£" + (n / 1_000).toFixed(1) + "k";
-  return "£" + n.toLocaleString("en-GB", { maximumFractionDigits: 0 });
-};
 export const fmtNum = (n: number | null | undefined): string =>
   n == null ? "—" : n.toLocaleString("en-GB");
 export const fmtPct = (n: number | null | undefined): string =>
   n == null ? "—" : n.toFixed(1) + "%";
-export const fmtAxisGBP = (v: number): string =>
-  v >= 1_000 ? `£${(v / 1_000).toFixed(0)}k` : `£${v}`;
 
 // ─── Sales trend ─────────────────────────────────────────────────────────────
 

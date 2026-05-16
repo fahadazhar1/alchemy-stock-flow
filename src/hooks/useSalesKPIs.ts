@@ -123,10 +123,13 @@ export function useSalesKPIs(bounds?: DateBounds) {
 // ─── Customer metrics ──────────────────────────────────────────────────────────
 
 export interface CustomerMetrics {
-  uniqueCustomers: number;
-  repeatCustomers: number;
-  retentionRate: number;
-  ltv: number;
+  totalCustomers:    number;
+  oneTimeCustomers:  number;
+  repeatCustomers:   number;
+  oneTimePct:        number;
+  repeatPct:         number;
+  oneTimeRevenue:    number;
+  repeatRevenue:     number;
 }
 
 export function useCustomerMetrics(bounds?: DateBounds) {
@@ -146,10 +149,13 @@ export function useCustomerMetrics(bounds?: DateBounds) {
 
       const row = (Array.isArray(data) ? data[0] : data) as any;
       return {
-        uniqueCustomers: Number(row?.unique_customers ?? 0),
-        repeatCustomers: Number(row?.repeat_customers ?? 0),
-        retentionRate:   Number(row?.retention_rate   ?? 0),
-        ltv:             Number(row?.ltv              ?? 0),
+        totalCustomers:   Number(row?.total_customers    ?? 0),
+        oneTimeCustomers: Number(row?.one_time_customers ?? 0),
+        repeatCustomers:  Number(row?.repeat_customers   ?? 0),
+        oneTimePct:       Number(row?.one_time_pct       ?? 0),
+        repeatPct:        Number(row?.repeat_pct         ?? 0),
+        oneTimeRevenue:   Number(row?.one_time_revenue   ?? 0),
+        repeatRevenue:    Number(row?.repeat_revenue     ?? 0),
       };
     },
   });

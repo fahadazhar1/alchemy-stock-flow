@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { Brain, Zap, TrendingDown, ShieldAlert, Award, AlertTriangle, ArrowDown, Sparkles, Target, Shield, Percent, Warehouse } from "lucide-react";
-import { formatCurrency } from "@/lib/timezone";
+import { useCurrency } from "@/hooks/useCurrency";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useStoreFilter } from "@/hooks/useStoreFilter";
 import { useCentralInventoryKPIs } from "@/hooks/useCentralInventory";
@@ -60,11 +60,11 @@ function getActionType(recType: string, hasDiscount: boolean): ActionType {
   return "Apply Discount";
 }
 
-function getBusinessReasons(rec: { recommendation_type: string; inventory_value: number; days_old: number; velocity_7d: number; velocity_30d: number; expiry_days: number | null }): string[] {
+function getBusinessReasons(rec: { recommendation_type: string; inventory_value: number; days_old: number; velocity_7d: number; velocity_30d: number; expiry_days: number | null }, fmtCurr: (n: number) => string): string[] {
   const reasons: string[] = [];
   if (rec.velocity_7d === 0 && rec.velocity_30d === 0) reasons.push("No sales in last 30 days");
   else if (rec.velocity_7d === 0) reasons.push("No sales in last 7 days");
-  if (rec.inventory_value > 3000) reasons.push(`Holding ${formatCurrency(rec.inventory_value)} inventory value`);
+  if (rec.inventory_value > 3000) reasons.push(`Holding ${fmtCurr(rec.inventory_value)} inventory value`);
   if (rec.days_old > 30) reasons.push(`Product is ${rec.days_old} days old`);
   if (rec.expiry_days !== null && rec.expiry_days < 30) reasons.push(`Expiry risk in ${rec.expiry_days} days`);
   if (rec.recommendation_type === "Low Stock Winner") reasons.push("Top-performing product – avoid discount");
@@ -73,6 +73,7 @@ function getBusinessReasons(rec: { recommendation_type: string; inventory_value:
 }
 
 export default function AICoPilot() {
+  const { formatCurrency } = useCurrency();
   const queryClient = useQueryClient();
   const { storeId, isAllStores } = useStoreFilter();
   const { data: centralKPIs } = useCentralInventoryKPIs();
@@ -105,19 +106,23 @@ export default function AICoPilot() {
   const productIds = [...new Set((recs ?? []).filter(r => r.product_id).map(r => r.product_id!))];
 
   const { data: variantData } = useQuery({
-    queryKey: ["ai-variants", productIds],
+    queryKey: ["ai-variants", storeId, productIds],
     enabled: productIds.length > 0,
     queryFn: async () => {
-      const { data } = await supabase.from("variants").select("product_id, price, compare_at_price, inventory_quantity, expiry_date").in("product_id", productIds);
+      let q = supabase.from("variants").select("product_id, price, compare_at_price, inventory_quantity, expiry_date").in("product_id", productIds);
+      if (storeId) q = q.eq("store_id", storeId);
+      const { data } = await q;
       return data ?? [];
     },
   });
 
   const { data: velocityData } = useQuery({
-    queryKey: ["ai-velocity", productIds],
+    queryKey: ["ai-velocity", storeId, productIds],
     enabled: productIds.length > 0,
     queryFn: async () => {
-      const { data } = await supabase.from("product_velocity_metrics").select("product_id, units_sold_7d, units_sold_30d").in("product_id", productIds);
+      let q = supabase.from("product_velocity_metrics").select("product_id, units_sold_7d, units_sold_30d").in("product_id", productIds);
+      if (storeId) q = q.eq("store_id", storeId);
+      const { data } = await q;
       return data ?? [];
     },
   });
@@ -144,7 +149,7 @@ export default function AICoPilot() {
 
     const priority = getPriority(invValue, daysOld, vel7, expiryDays);
     const actionType = getActionType(r.recommendation_type, hasDiscount);
-    const businessReasons = getBusinessReasons({ recommendation_type: r.recommendation_type, inventory_value: invValue, days_old: daysOld, velocity_7d: vel7, velocity_30d: vel30, expiry_days: expiryDays });
+    const businessReasons = getBusinessReasons({ recommendation_type: r.recommendation_type, inventory_value: invValue, days_old: daysOld, velocity_7d: vel7, velocity_30d: vel30, expiry_days: expiryDays }, formatCurrency);
 
     const discountPct = r.suggested_discount_percent ?? 10;
     const expectedSellThrough = Math.round(discountPct * 0.8 * 10) / 10;

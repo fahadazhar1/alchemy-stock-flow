@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, Package, RefreshCw, Brain, Bot, FileText,
   BarChart3, Truck, CheckSquare, FlaskConical, Clock, Settings, Beaker, Store,
-  ShoppingCart, BarChart2,
+  ShoppingCart, BarChart2, ListOrdered,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
@@ -24,6 +24,7 @@ const navItems = [
   { title: "Replenishment", url: "/replenishment", icon: Truck },
   { title: "Expiry Monitor", url: "/expiry", icon: Clock },
   { title: "Audit Logs", url: "/audit-logs", icon: FileText },
+  { title: "Collection Sort", url: "/collection-sort", icon: ListOrdered },
   { title: "Stores", url: "/stores", icon: Store },
   { title: "Settings", url: "/settings", icon: Settings },
 ];

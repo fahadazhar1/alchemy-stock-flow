@@ -21,6 +21,7 @@ import Simulation from "@/pages/Simulation";
 import ExpiryMonitoring from "@/pages/ExpiryMonitoring";
 import Settings from "@/pages/Settings";
 import StoreManagement from "@/pages/StoreManagement";
+import CollectionSortManager from "@/pages/CollectionSortManager";
 import NotFound from "@/pages/NotFound";
 
 const queryClient = new QueryClient({
@@ -54,6 +55,7 @@ const App = () => (
                   <Route path="/expiry" element={<ExpiryMonitoring />} />
                   <Route path="/settings" element={<Settings />} />
                   <Route path="/stores" element={<StoreManagement />} />
+                  <Route path="/collection-sort" element={<CollectionSortManager />} />
                 </Route>
                 <Route path="*" element={<NotFound />} />
               </Routes>

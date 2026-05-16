@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { formatCurrency } from "@/lib/timezone";
+import { useCurrency } from "@/hooks/useCurrency";
 import { FlaskConical, ShieldCheck, AlertTriangle, Zap, TrendingUp, TrendingDown, Target, Warehouse } from "lucide-react";
 import { Json } from "@/integrations/supabase/types";
 import { useStoreFilter } from "@/hooks/useStoreFilter";
@@ -39,6 +39,7 @@ function getRiskWarnings(s: Scenario, baseInventory: number): string[] {
 }
 
 export default function Simulation() {
+  const { formatCurrency } = useCurrency();
   const queryClient = useQueryClient();
   const { storeId, isAllStores } = useStoreFilter();
   const { data: centralKPIs } = useCentralInventoryKPIs();

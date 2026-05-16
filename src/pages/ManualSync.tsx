@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
-import { formatCurrency } from "@/lib/timezone";
+import { useCurrency } from "@/hooks/useCurrency";
 import { RefreshCw, Eye, Zap, Filter } from "lucide-react";
 import { Json } from "@/integrations/supabase/types";
 import { DateRangeFilter, matchesDateFilter } from "@/components/DateRangeFilter";
@@ -21,6 +21,7 @@ import { useStoreFilter } from "@/hooks/useStoreFilter";
 const PAGE_SIZE = 20;
 
 export default function ManualSync() {
+  const { formatCurrency, symbol } = useCurrency();
   const { storeId, isAllStores } = useStoreFilter();
   const queryClient = useQueryClient();
   const [page, setPage] = useState(0);
@@ -229,7 +230,7 @@ export default function ManualSync() {
           <CardContent className="space-y-4">
             <div><Label>Campaign Name *</Label><Input value={campaignName} onChange={e => setCampaignName(e.target.value)} placeholder="e.g. Ramadan Push v2" /></div>
             <div><Label>Discount %</Label><Input type="number" min="0" max="99" value={discountPercent} onChange={e => { setDiscountPercent(e.target.value); setFixedPrice(""); }} placeholder="0-99" /></div>
-            <div><Label>Fixed Price Override</Label><Input type="number" min="0" value={fixedPrice} onChange={e => { setFixedPrice(e.target.value); setDiscountPercent(""); }} placeholder="GBP" /></div>
+            <div><Label>Fixed Price Override</Label><Input type="number" min="0" value={fixedPrice} onChange={e => { setFixedPrice(e.target.value); setDiscountPercent(""); }} placeholder={symbol.trim()} /></div>
             <div><Label>Rounding</Label>
               <Select value={roundingMode} onValueChange={setRoundingMode}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="whole">Whole Numbers</SelectItem><SelectItem value=".00">.00</SelectItem><SelectItem value=".99">.99</SelectItem></SelectContent></Select>
             </div>

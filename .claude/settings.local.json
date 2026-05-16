@@ -1,0 +1,43 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(supabase --version)",
+      "PowerShell(supabase --version 2>&1)",
+      "PowerShell(npx supabase --version 2>&1)",
+      "PowerShell(Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass)",
+      "PowerShell(Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass; [System.Environment]::GetEnvironmentVariable\\(\"SUPABASE_ACCESS_TOKEN\", \"User\"\\); [System.Environment]::GetEnvironmentVariable\\(\"SUPABASE_ACCESS_TOKEN\", \"Machine\"\\))",
+      "PowerShell(netstat -ano)",
+      "Bash(git commit -m ' *)",
+      "Bash(xargs grep -l \"products\\\\|inventory\")",
+      "Bash(which supabase *)",
+      "Read(//mnt/c/Users/**)",
+      "PowerShell($env:PATH -split ';' | ForEach-Object { if \\(Test-Path \"$_\\\\supabase.exe\"\\) { \"$_\\\\supabase.exe\" } })",
+      "Read(//c/Users/Hp/AppData/Local/**)",
+      "PowerShell(Get-ExecutionPolicy)",
+      "PowerShell(Get-ExecutionPolicy -List)",
+      "Bash(cmd.exe /c \"npx supabase --version\")",
+      "Bash(cmd.exe /c \"where supabase\")",
+      "PowerShell(winget --version 2>&1)",
+      "PowerShell(scoop --version 2>&1)",
+      "PowerShell(choco --version 2>&1)",
+      "PowerShell(winget install Supabase.Supabase 2>&1)",
+      "PowerShell(winget install Supabase.Supabase --accept-source-agreements --accept-package-agreements 2>&1)",
+      "PowerShell($url = \"https://github.com/supabase/cli/releases/latest/download/supabase_windows_amd64.tar.gz\"; $dest = \"C:\\\\Users\\\\Hp\\\\AppData\\\\Local\\\\supabase-cli\\\\supabase.tar.gz\"; New-Item -ItemType Directory -Force \"C:\\\\Users\\\\Hp\\\\AppData\\\\Local\\\\supabase-cli\" | Out-Null; Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing; Write-Host \"Downloaded to $dest\")",
+      "Bash(tar -xzf supabase.tar.gz)",
+      "PowerShell($env:PATH += \";C:\\\\Users\\\\Hp\\\\AppData\\\\Local\\\\supabase-cli\"; cd \"C:\\\\Users\\\\Hp\\\\Inventory-Dashboard\"; supabase functions deploy sonic-sync-cron 2>&1)",
+      "PowerShell($env:PATH += \";C:\\\\Users\\\\Hp\\\\AppData\\\\Local\\\\supabase-cli\"; cd \"C:\\\\Users\\\\Hp\\\\Inventory-Dashboard\"; supabase db push 2>&1)",
+      "PowerShell($env:PATH += \";C:\\\\Users\\\\Hp\\\\AppData\\\\Local\\\\supabase-cli\"; cd \"C:\\\\Users\\\\Hp\\\\Inventory-Dashboard\"; supabase secrets list 2>&1)",
+      "Bash(curl -s -X POST \"https://gbvbvopeieqghvettmkj.supabase.co/functions/v1/sonic-sync-cron\" -H \"Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdidmJ2b3BlaWVxZ2h2ZXR0bWtqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc3MDMzNDksImV4cCI6MjA5MzI3OTM0OX0.bezMzljmBaqGo0kuThNO5tIuLDeWXaVnbAn8O2ZD5dM\" -H \"Content-Type: application/json\" -d \"{}\")",
+      "Bash(supabase db *)",
+      "Bash(curl -s -X POST https://gbvbvopeieqghvettmkj.supabase.co/functions/v1/sonic-sync-cron -H 'Content-Type: application/json' -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdidmJ2b3BlaWVxZ2h2ZXR0bWtqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc3MDMzNDksImV4cCI6MjA5MzI3OTM0OX0.bezMzljmBaqGo0kuThNO5tIuLDeWXaVnbAn8O2ZD5dM' -d '{}')",
+      "Bash(curl -s 'https://gbvbvopeieqghvettmkj.supabase.co/rest/v1/sonic_cache?select=count&limit=1' -H 'apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdidmJ2b3BlaWVxZ2h2ZXR0bWtqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc3MDMzNDksImV4cCI6MjA5MzI3OTM0OX0.bezMzljmBaqGo0kuThNO5tIuLDeWXaVnbAn8O2ZD5dM' -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdidmJ2b3BlaWVxZ2h2ZXR0bWtqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc3MDMzNDksImV4cCI6MjA5MzI3OTM0OX0.bezMzljmBaqGo0kuThNO5tIuLDeWXaVnbAn8O2ZD5dM' -H 'Prefer: count=exact')",
+      "Bash(curl -s 'https://gbvbvopeieqghvettmkj.supabase.co/rest/v1/sonic_cache?select=tracking_number&limit=3' -H 'apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdidmJ2b3BlaWVxZ2h2ZXR0bWtqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc3MDMzNDksImV4cCI6MjA5MzI3OTM0OX0.bezMzljmBaqGo0kuThNO5tIuLDeWXaVnbAn8O2ZD5dM' -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdidmJ2b3BlaWVxZ2h2ZXR0bWtqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc3MDMzNDksImV4cCI6MjA5MzI3OTM0OX0.bezMzljmBaqGo0kuThNO5tIuLDeWXaVnbAn8O2ZD5dM')",
+      "Bash(curl -s 'https://gbvbvopeieqghvettmkj.supabase.co/rest/v1/sonic_cache?select=tracking_number,courier_status&limit=3' -H 'apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdidmJ2b3BlaWVxZ2h2ZXR0bWtqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc3MDMzNDksImV4cCI6MjA5MzI3OTM0OX0.bezMzljmBaqGo0kuThNO5tIuLDeWXaVnbAn8O2ZD5dM' -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdidmJ2b3BlaWVxZ2h2ZXR0bWtqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc3MDMzNDksImV4cCI6MjA5MzI3OTM0OX0.bezMzljmBaqGo0kuThNO5tIuLDeWXaVnbAn8O2ZD5dM')",
+      "Bash(Copy-Item \"c:\\\\Users\\\\Hp\\\\Inventory-Dashboard\\\\Darussalam Logo.png\" \"c:\\\\Users\\\\Hp\\\\Inventory-Dashboard\\\\public\\\\favicon.png\")",
+      "Bash(cp \"c:/Users/Hp/Inventory-Dashboard/Darussalam Logo.png\" \"c:/Users/Hp/Inventory-Dashboard/public/favicon.png\")"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\Hp\\Inventory-Dashboard"
+    ]
+  }
+}

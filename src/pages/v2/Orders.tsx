@@ -1,9 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Download, Upload, Plus, Search, SlidersHorizontal,
   MoreHorizontal, CheckCircle, Send, XCircle, Copy, Edit2,
-  X, Truck, MapPin, Hash, PoundSterling, Mail, CreditCard,
+  X, Truck, MapPin, Hash, Banknote, Mail, CreditCard,
   ShoppingCart, Clock, Package, ChevronLeft, ChevronRight,
+  Wallet, CalendarCheck, ChevronDown, RefreshCw,
 } from "lucide-react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -15,18 +16,19 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { useStoreFilter } from "@/hooks/useStoreFilter";
+import { useCurrency } from "@/hooks/useCurrency";
 import {
   useOrders, useOrderDetail, useOrderLineItems,
   normalizeChannel,
   type OrderRow, type OrderStatus,
 } from "@/hooks/useOrders";
+import { useSonicTracking, type SonicTrackingData } from "@/hooks/useSonicTracking";
+import { useSonicSyncStatus } from "@/hooks/useSonicSyncStatus";
+import { useCODSummary } from "@/hooks/useCODSummary";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const PAGE_SIZE = 25;
-
-const fmtGBP = (n: number | null | undefined): string =>
-  n == null ? "—" : new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP" }).format(n);
 
 const fmtDate = (d: Date | null) =>
   d ? d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—";
@@ -36,6 +38,27 @@ const fmtDateTime = (d: Date | null) =>
       " · " + d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "—";
 
 const STATUS_TABS: OrderStatus[] = ["Pending", "Fulfilled", "Cancelled", "Refunded"];
+
+const fmtPKR = (n: number | null | undefined) =>
+  n == null ? "—" : `Rs. ${n.toLocaleString("en-PK", { maximumFractionDigits: 0 })}`;
+
+function sonicStatusCls(status: string | null) {
+  if (!status) return "text-muted-foreground border-border";
+  const s = status.toLowerCase();
+  if (s.includes("delivered")) return "text-emerald-600 border-emerald-200 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-800 dark:text-emerald-400";
+  if (s.includes("out for delivery")) return "text-blue-600 border-blue-200 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-800 dark:text-blue-400";
+  if (s.includes("return") || s.includes("cancelled")) return "text-red-500 border-red-200 bg-red-50 dark:bg-red-950/30 dark:border-red-800 dark:text-red-400";
+  if (s.includes("transit") || s.includes("in transit")) return "text-indigo-600 border-indigo-200 bg-indigo-50 dark:bg-indigo-950/30 dark:border-indigo-800 dark:text-indigo-400";
+  return "text-amber-600 border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-400";
+}
+
+function sonicPaymentCls(status: string | null) {
+  if (!status) return "text-muted-foreground border-border";
+  const s = status.toLowerCase();
+  if (s.includes("processed") || s === "paid") return "text-emerald-600 border-emerald-200 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-800 dark:text-emerald-400";
+  if (s.includes("pending") || s === "unpaid") return "text-amber-600 border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-400";
+  return "text-muted-foreground border-border";
+}
 
 const STATUS_CLS: Record<string, string> = {
   Pending:   "text-amber-600 border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-400",
@@ -83,6 +106,93 @@ function channelMeta(ch: string) {
   return CHANNEL_META[ch] ?? { label: ch, cls: "text-muted-foreground" };
 }
 
+const COURIER_STATUS_OPTIONS = [
+  { value: "delivered",        label: "Delivered" },
+  { value: "out_for_delivery", label: "Out for Delivery" },
+  { value: "in_transit",       label: "In Transit" },
+  { value: "returned",         label: "Returned" },
+  { value: "pending",          label: "Pending / Other" },
+  { value: "no_tracking",      label: "No Tracking" },
+];
+
+function CourierStatusMultiSelect({
+  value,
+  onChange,
+}: {
+  value: string[];
+  onChange: (v: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  const toggle = (v: string) => {
+    onChange(value.includes(v) ? value.filter(x => x !== v) : [...value, v]);
+  };
+
+  const label =
+    value.length === 0
+      ? "Courier Status"
+      : value.length === 1
+      ? (COURIER_STATUS_OPTIONS.find(o => o.value === value[0])?.label ?? value[0])
+      : `Courier Status (${value.length})`;
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        className={cn(
+          "h-8 flex items-center gap-1.5 rounded-md border px-3 text-xs transition-colors",
+          value.length > 0
+            ? "border-primary bg-primary/5 text-primary"
+            : "border-input bg-background text-muted-foreground hover:bg-muted hover:text-foreground",
+        )}
+      >
+        <Truck size={11} />
+        <span>{label}</span>
+        <ChevronDown size={11} className={cn("transition-transform", open && "rotate-180")} />
+      </button>
+      {open && (
+        <div className="absolute right-0 z-50 mt-1 w-48 rounded-md border bg-popover shadow-md">
+          <div className="p-1">
+            {COURIER_STATUS_OPTIONS.map(opt => (
+              <label
+                key={opt.value}
+                className="flex items-center gap-2.5 rounded px-2.5 py-1.5 text-xs cursor-pointer hover:bg-muted select-none"
+              >
+                <Checkbox
+                  checked={value.includes(opt.value)}
+                  onCheckedChange={() => toggle(opt.value)}
+                  className="h-3.5 w-3.5"
+                />
+                {opt.label}
+              </label>
+            ))}
+            {value.length > 0 && (
+              <>
+                <div className="my-1 border-t" />
+                <button
+                  onClick={() => { onChange([]); setOpen(false); }}
+                  className="w-full rounded px-2.5 py-1.5 text-xs text-left text-muted-foreground hover:bg-muted"
+                >
+                  Clear filter
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Order drawer ─────────────────────────────────────────────────────────────
 
 function DrawerSkeleton() {
@@ -119,7 +229,32 @@ function DrawerSkeleton() {
   );
 }
 
-function OrderDrawer({ order, onClose }: { order: OrderRow | null; onClose: () => void }) {
+function fmtRemittanceDate(d: string | null) {
+  if (!d) return null;
+  const parsed = new Date(d);
+  if (!isNaN(parsed.getTime())) {
+    return parsed.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  }
+  return d;
+}
+
+function CourierBadge({ courier }: { courier: "sonic" | "mandp" | null }) {
+  if (!courier) return null;
+  const label = courier === "mandp" ? "M&P" : "SONIC";
+  const cls   = courier === "mandp"
+    ? "text-blue-600 border-blue-200 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-800 dark:text-blue-400"
+    : "text-indigo-600 border-indigo-200 bg-indigo-50 dark:bg-indigo-950/30 dark:border-indigo-800 dark:text-indigo-400";
+  return <Badge variant="outline" className={cn("text-[10px] px-1.5 py-0", cls)}>{label}</Badge>;
+}
+
+function OrderDrawer({
+  order, onClose, trackingData,
+}: {
+  order: OrderRow | null;
+  onClose: () => void;
+  trackingData?: SonicTrackingData | null;
+}) {
+  const { fmtCurrency: fmtGBP } = useCurrency();
   const { data: detail, isLoading: detailLoading } = useOrderDetail(order?.id ?? null);
   const { data: lineItems = [], isLoading: itemsLoading } = useOrderLineItems(order?.id ?? null);
 
@@ -220,7 +355,7 @@ function OrderDrawer({ order, onClose }: { order: OrderRow | null; onClose: () =
                     </div>
                     <div className="flex gap-4 mt-2.5 text-xs text-muted-foreground">
                       <span className="flex items-center gap-1"><Hash size={10} /> {ch.label}</span>
-                      <span className="flex items-center gap-1"><PoundSterling size={10} /> {fmtGBP(orderTotal)}</span>
+                      <span className="flex items-center gap-1"><Banknote size={10} /> {fmtGBP(orderTotal)}</span>
                     </div>
                   </CardContent>
                 </Card>
@@ -307,6 +442,110 @@ function OrderDrawer({ order, onClose }: { order: OrderRow | null; onClose: () =
                 </CardContent>
               </Card>
 
+              {/* Courier tracking */}
+              {order?.trackingNumber && (
+                <Card>
+                  <CardHeader className="pb-2 pt-3 px-4">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-sm font-semibold">Courier</h3>
+                      <CourierBadge courier={trackingData?.courier ?? null} />
+                    </div>
+                  </CardHeader>
+                  <CardContent className="px-4 pb-4 space-y-2.5 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="text-muted-foreground flex items-center gap-1.5">
+                        <Hash size={11} /> Tracking no.
+                      </span>
+                      <span className="font-mono font-medium">{order.trackingNumber}</span>
+                    </div>
+                    {trackingData ? (
+                      <>
+                        <div className="flex items-center justify-between">
+                          <span className="text-muted-foreground flex items-center gap-1.5">
+                            <Truck size={11} /> Delivery status
+                          </span>
+                          <Badge variant="outline" className={cn("text-[10px] px-1.5 py-0 max-w-[160px] truncate", sonicStatusCls(trackingData.courier_status))}>
+                            {trackingData.courier_status ?? "—"}
+                          </Badge>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-muted-foreground flex items-center gap-1.5">
+                            <Wallet size={11} /> COD payment
+                          </span>
+                          <Badge variant="outline" className={cn("text-[10px] px-1.5 py-0", sonicPaymentCls(trackingData.courier_payment_status))}>
+                            {trackingData.courier_payment_status ?? "—"}
+                          </Badge>
+                        </div>
+                        {trackingData.remittance_date && (
+                          <div className="flex items-center justify-between">
+                            <span className="text-muted-foreground flex items-center gap-1.5">
+                              <CalendarCheck size={11} /> Remitted on
+                            </span>
+                            <span className="font-medium text-emerald-600 dark:text-emerald-400">
+                              {fmtRemittanceDate(trackingData.remittance_date)}
+                            </span>
+                          </div>
+                        )}
+                        {(() => {
+                          const courierTotal = trackingData.shipping_charges;
+                          const fuel         = trackingData.fuel_surcharge ?? 0;
+                          const gst          = trackingData.gst ?? 0;
+                          const freight      = courierTotal != null ? courierTotal - fuel - gst : null;
+                          return (
+                            <>
+                              {freight != null && (
+                                <div className="flex items-center justify-between">
+                                  <span className="text-muted-foreground flex items-center gap-1.5">
+                                    <Banknote size={11} /> Freight charges
+                                  </span>
+                                  <span className="tabular-nums font-medium">{fmtPKR(freight)}</span>
+                                </div>
+                              )}
+                              {trackingData.fuel_surcharge != null && (
+                                <div className="flex items-center justify-between">
+                                  <span className="text-muted-foreground flex items-center gap-1.5">
+                                    <Banknote size={11} /> Fuel surcharge
+                                  </span>
+                                  <span className="tabular-nums font-medium">{fmtPKR(trackingData.fuel_surcharge)}</span>
+                                </div>
+                              )}
+                              {trackingData.gst != null && (
+                                <div className="flex items-center justify-between">
+                                  <span className="text-muted-foreground flex items-center gap-1.5">
+                                    <Banknote size={11} /> GST
+                                  </span>
+                                  <span className="tabular-nums font-medium">{fmtPKR(trackingData.gst)}</span>
+                                </div>
+                              )}
+                              {courierTotal != null && (
+                                <div className="flex items-center justify-between border-t pt-2 mt-1">
+                                  <span className="text-muted-foreground flex items-center gap-1.5">
+                                    <Banknote size={11} /> Courier charges
+                                  </span>
+                                  <span className="tabular-nums font-semibold">{fmtPKR(courierTotal)}</span>
+                                </div>
+                              )}
+                              {courierTotal != null && (
+                                <div className="flex items-center justify-between">
+                                  <span className="font-medium flex items-center gap-1.5">
+                                    <Banknote size={11} /> Net Total
+                                  </span>
+                                  <span className={cn("tabular-nums font-bold", orderTotal - courierTotal >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-500 dark:text-red-400")}>
+                                    {fmtPKR(orderTotal - courierTotal)}
+                                  </span>
+                                </div>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </>
+                    ) : (
+                      <p className="text-muted-foreground text-[11px]">Fetching courier data…</p>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
+
               {/* Timeline */}
               <Card>
                 <CardHeader className="pb-2 pt-3 px-4">
@@ -347,13 +586,63 @@ function OrderDrawer({ order, onClose }: { order: OrderRow | null; onClose: () =
   );
 }
 
+// ─── Sonic sync progress banner ───────────────────────────────────────────────
+
+function SonicSyncBanner({ storeId }: { storeId: string | null }) {
+  const { data: sync } = useSonicSyncStatus(storeId);
+
+  if (!sync || sync.total === 0) return null;
+
+  const pct = sync.total > 0 ? Math.round((sync.synced / sync.total) * 100) : 0;
+  const isDone = sync.pending === 0;
+
+  const lastSyncLabel = sync.lastSyncedAt
+    ? (() => {
+        const diff = Math.round((Date.now() - sync.lastSyncedAt.getTime()) / 1000);
+        if (diff < 60) return `${diff}s ago`;
+        if (diff < 3600) return `${Math.round(diff / 60)}m ago`;
+        return `${Math.round(diff / 3600)}h ago`;
+      })()
+    : null;
+
+  return (
+    <div className="flex items-center gap-3 px-4 py-2.5 rounded-lg border bg-card text-xs">
+      <div className="flex items-center gap-2 shrink-0">
+        {isDone ? (
+          <CheckCircle size={13} className="text-emerald-500" />
+        ) : (
+          <RefreshCw size={13} className="text-indigo-500 animate-spin" />
+        )}
+        <span className={cn(isDone ? "text-muted-foreground" : "font-medium")}>
+          {isDone ? "Courier data up to date" : "Syncing courier data…"}
+        </span>
+      </div>
+      <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
+        <div
+          className={cn(
+            "h-full rounded-full transition-all duration-700",
+            isDone ? "bg-emerald-500" : "bg-indigo-500",
+          )}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <span className="tabular-nums text-muted-foreground shrink-0">
+        {sync.synced.toLocaleString()} / {sync.total.toLocaleString()}
+      </span>
+      {lastSyncLabel && (
+        <span className="text-muted-foreground shrink-0">· {lastSyncLabel}</span>
+      )}
+    </div>
+  );
+}
+
 // ─── Table skeleton ───────────────────────────────────────────────────────────
 
 function TableRowSkeleton() {
   return (
     <tr className="border-b last:border-b-0">
       <td className="px-4 py-3 w-10"><div className="w-4 h-4 bg-muted animate-pulse rounded" /></td>
-      {[100, 64, 80, 64, 72, 56, 56, 64, 80, 24].map((w, i) => (
+      {[100, 64, 80, 64, 72, 40, 88, 56, 88, 64, 56, 56, 56, 64, 72, 24].map((w, i) => (
         <td key={i} className="px-4 py-3">
           <div className="h-3 bg-muted animate-pulse rounded" style={{ width: w }} />
         </td>
@@ -365,6 +654,7 @@ function TableRowSkeleton() {
 // ─── Page ────────────────────────────────────────────────────────────────────
 
 export default function Orders() {
+  const { fmtCurrency: fmtGBP } = useCurrency();
   const { storeId } = useStoreFilter();
 
   const [statusFilter, setStatusFilter] = useState("All");
@@ -375,6 +665,8 @@ export default function Orders() {
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [drawer, setDrawer] = useState<OrderRow | null>(null);
+  const [codFilter, setCodFilter] = useState<"all" | "held" | "released">("all");
+  const [courierStatusFilter, setCourierStatusFilter] = useState<string[]>([]);
 
   // Debounce search
   useEffect(() => {
@@ -383,27 +675,37 @@ export default function Orders() {
   }, [searchInput]);
 
   // Reset page on filter change
-  useEffect(() => { setPage(0); setSelected(new Set()); }, [search, statusFilter, channelFilter, daysBack]);
+  useEffect(() => { setPage(0); setSelected(new Set()); }, [search, statusFilter, channelFilter, daysBack, codFilter, courierStatusFilter]);
 
   const { data, isLoading, isFetching } = useOrders({
     page, pageSize: PAGE_SIZE,
     search, status: statusFilter, channel: channelFilter,
-    daysBack, storeId,
+    daysBack, storeId, codFilter,
+    courierStatusFilter,
   });
+
+  const { data: codSummary } = useCODSummary(storeId);
 
   const rows = data?.rows ?? [];
   const total = data?.total ?? 0;
+
+  const { data: sonicMap, isLoading: sonicLoading } = useSonicTracking(
+    rows.map(r => r.trackingNumber)
+  );
+
+  const displayRows = rows;
+
   const totalPages = Math.ceil(total / PAGE_SIZE);
   const from = page * PAGE_SIZE + 1;
   const to = Math.min(from + rows.length - 1, total);
-  const totalRevenue = rows.reduce((s, o) => s + o.total, 0);
+  const totalRevenue = displayRows.reduce((s, o) => s + o.total, 0);
 
   const toggleSel = (id: string) => setSelected(s => {
     const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n;
   });
-  const allSelected = rows.length > 0 && selected.size === rows.length && rows.every(r => selected.has(r.id));
+  const allSelected = displayRows.length > 0 && selected.size === displayRows.length && displayRows.every(r => selected.has(r.id));
   const toggleAll = () =>
-    setSelected(allSelected ? new Set() : new Set(rows.map(r => r.id)));
+    setSelected(allSelected ? new Set() : new Set(displayRows.map(r => r.id)));
 
   return (
     <div className="p-6 space-y-4 max-w-[1600px]">
@@ -420,6 +722,42 @@ export default function Orders() {
           <Button size="sm" variant="outline" className="gap-1.5 text-xs h-8"><Download size={13} /> Export CSV</Button>
           <Button size="sm" className="gap-1.5 text-xs h-8"><Plus size={13} /> New order</Button>
         </div>
+      </div>
+
+      {/* COD payment KPI cards */}
+      <div className="grid grid-cols-2 gap-3">
+        <Card>
+          <CardContent className="p-4 flex items-start gap-3">
+            <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 bg-amber-50 dark:bg-amber-950/30">
+              <Wallet size={16} className="text-amber-600 dark:text-amber-400" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-semibold mb-0.5">Sonic COD Held (Net)</p>
+              <p className="text-xl font-bold tabular-nums leading-tight">
+                {codSummary ? fmtPKR(codSummary.held.amount) : "—"}
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {codSummary ? `${codSummary.held.count} delivered · Sonic owes you this` : "Loading…"}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4 flex items-start gap-3">
+            <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 bg-emerald-50 dark:bg-emerald-950/30">
+              <CalendarCheck size={16} className="text-emerald-600 dark:text-emerald-400" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-semibold mb-0.5">Sonic COD Released (Net)</p>
+              <p className="text-xl font-bold tabular-nums leading-tight">
+                {codSummary ? fmtPKR(codSummary.released.amount) : "—"}
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {codSummary ? `${codSummary.released.count} order${codSummary.released.count !== 1 ? "s" : ""} · already remitted by Sonic` : "Loading…"}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
       {/* Status chips + filters */}
@@ -447,6 +785,15 @@ export default function Orders() {
               {CHANNEL_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
             </SelectContent>
           </Select>
+          <Select value={codFilter} onValueChange={v => { setCodFilter(v as "all" | "held" | "released"); setPage(0); }}>
+            <SelectTrigger className="h-8 w-40 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All COD status</SelectItem>
+              <SelectItem value="held">COD held by courier</SelectItem>
+              <SelectItem value="released">COD released to you</SelectItem>
+            </SelectContent>
+          </Select>
+          <CourierStatusMultiSelect value={courierStatusFilter} onChange={setCourierStatusFilter} />
           <Select value={String(daysBack)} onValueChange={v => { setDaysBack(Number(v)); setPage(0); }}>
             <SelectTrigger className="h-8 w-32 text-xs"><SelectValue /></SelectTrigger>
             <SelectContent>
@@ -474,28 +821,51 @@ export default function Orders() {
         </div>
       )}
 
+      {/* Sonic sync progress */}
+      <SonicSyncBanner storeId={storeId} />
+
       {/* Orders table */}
       <Card className={cn(isFetching && !isLoading && "opacity-70 transition-opacity")}>
-        <CardContent className="p-0">
-          <table className="w-full text-xs">
+        <CardContent className="p-0 overflow-x-auto">
+          <table className="w-full text-xs min-w-[1500px]">
             <thead>
               <tr className="border-b">
                 <th className="px-4 py-3 w-10">
                   <Checkbox checked={allSelected} onCheckedChange={toggleAll} />
                 </th>
-                {["Order", "Date", "Channel", "Store", "Status", "Payment", "Total", ""].map((h, i) => (
-                  <th key={i} className={cn("px-4 py-3 font-medium text-muted-foreground text-left whitespace-nowrap",
-                    i === 6 && "text-right")}>{h}</th>
+                {[
+                  { label: "Order",           tight: false, right: false },
+                  { label: "Date",            tight: false, right: false },
+                  { label: "Channel",         tight: false, right: false },
+                  { label: "Store",           tight: false, right: false },
+                  { label: "Status",          tight: false, right: false },
+                  { label: "Courier",         tight: true,  right: false },
+                  { label: "Courier Status",  tight: true,  right: false },
+                  { label: "Payment",         tight: false, right: false },
+                  { label: "Cour. Payment",   tight: true,  right: false },
+                  { label: "Total",           tight: false, right: true  },
+                  { label: "Freight",         tight: true,  right: true  },
+                  { label: "Fuel",            tight: true,  right: true  },
+                  { label: "GST",             tight: true,  right: true  },
+                  { label: "Cour. Charges",   tight: true,  right: true  },
+                  { label: "Net Total",       tight: true,  right: true  },
+                  { label: "",                tight: false, right: false },
+                ].map((h, i) => (
+                  <th key={i} className={cn(
+                    "py-3 font-medium text-muted-foreground text-left whitespace-nowrap",
+                    h.tight ? "px-2" : "px-4",
+                    h.right && "text-right",
+                  )}>{h.label}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {isLoading ? (
                 Array.from({ length: 8 }).map((_, i) => <TableRowSkeleton key={i} />)
-              ) : rows.length === 0 ? (
-                <tr><td colSpan={9} className="px-4 py-12 text-center text-muted-foreground">No orders found</td></tr>
+              ) : displayRows.length === 0 ? (
+                <tr><td colSpan={16} className="px-4 py-12 text-center text-muted-foreground">No orders found</td></tr>
               ) : (
-                rows.map(o => {
+                displayRows.map(o => {
                   const ch = channelMeta(o.channel);
                   return (
                     <tr key={o.id}
@@ -519,12 +889,86 @@ export default function Orders() {
                           {o.status}
                         </Badge>
                       </td>
+                      <td className="px-2 py-3">
+                        {sonicLoading && o.trackingNumber ? (
+                          <div className="h-3 w-10 bg-muted animate-pulse rounded" />
+                        ) : o.trackingNumber && sonicMap?.[o.trackingNumber]?.courier ? (
+                          <CourierBadge courier={sonicMap[o.trackingNumber]!.courier} />
+                        ) : (
+                          <span className="text-muted-foreground text-[10px]">—</span>
+                        )}
+                      </td>
+                      <td className="px-2 py-3">
+                        {sonicLoading && o.trackingNumber ? (
+                          <div className="h-3 w-20 bg-muted animate-pulse rounded" />
+                        ) : o.trackingNumber && sonicMap?.[o.trackingNumber]?.courier_status ? (
+                          <Badge variant="outline" className={cn("text-[10px] px-1.5 py-0 max-w-[130px] truncate block", sonicStatusCls(sonicMap[o.trackingNumber]!.courier_status))}>
+                            {sonicMap[o.trackingNumber]!.courier_status}
+                          </Badge>
+                        ) : (
+                          <span className="text-muted-foreground text-[10px]">—</span>
+                        )}
+                      </td>
                       <td className="px-4 py-3">
                         <Badge variant="outline" className={cn("text-[10px] px-1.5 py-0", STATUS_CLS[o.paymentLabel] ?? "text-muted-foreground")}>
                           {o.paymentLabel}
                         </Badge>
                       </td>
+                      <td className="px-2 py-3">
+                        {sonicLoading && o.trackingNumber ? (
+                          <div className="h-3 w-16 bg-muted animate-pulse rounded" />
+                        ) : o.trackingNumber && sonicMap?.[o.trackingNumber]?.courier_payment_status ? (
+                          <Badge variant="outline" className={cn("text-[10px] px-1.5 py-0 max-w-[110px] truncate block", sonicPaymentCls(sonicMap[o.trackingNumber]!.courier_payment_status))}>
+                            {sonicMap[o.trackingNumber]!.courier_payment_status}
+                          </Badge>
+                        ) : (
+                          <span className="text-muted-foreground text-[10px]">—</span>
+                        )}
+                      </td>
                       <td className="px-4 py-3 text-right font-semibold tabular-nums">{fmtGBP(o.total)}</td>
+                      <td className="px-2 py-3 text-right tabular-nums text-muted-foreground">
+                        {sonicLoading && o.trackingNumber ? (
+                          <div className="h-3 w-14 bg-muted animate-pulse rounded ml-auto" />
+                        ) : (() => {
+                          const td = o.trackingNumber ? sonicMap?.[o.trackingNumber] : null;
+                          const total = td?.shipping_charges ?? null;
+                          const fuel  = td?.fuel_surcharge ?? 0;
+                          const gst   = td?.gst ?? 0;
+                          return fmtPKR(total != null ? total - fuel - gst : null);
+                        })()}
+                      </td>
+                      <td className="px-2 py-3 text-right tabular-nums text-muted-foreground">
+                        {sonicLoading && o.trackingNumber ? (
+                          <div className="h-3 w-12 bg-muted animate-pulse rounded ml-auto" />
+                        ) : (
+                          fmtPKR(o.trackingNumber ? sonicMap?.[o.trackingNumber]?.fuel_surcharge : null)
+                        )}
+                      </td>
+                      <td className="px-2 py-3 text-right tabular-nums text-muted-foreground">
+                        {sonicLoading && o.trackingNumber ? (
+                          <div className="h-3 w-12 bg-muted animate-pulse rounded ml-auto" />
+                        ) : (
+                          fmtPKR(o.trackingNumber ? sonicMap?.[o.trackingNumber]?.gst : null)
+                        )}
+                      </td>
+                      <td className="px-2 py-3 text-right tabular-nums text-muted-foreground">
+                        {sonicLoading && o.trackingNumber ? (
+                          <div className="h-3 w-14 bg-muted animate-pulse rounded ml-auto" />
+                        ) : (
+                          fmtPKR(o.trackingNumber ? sonicMap?.[o.trackingNumber]?.shipping_charges : null)
+                        )}
+                      </td>
+                      <td className="px-2 py-3 text-right tabular-nums font-medium">
+                        {sonicLoading && o.trackingNumber ? (
+                          <div className="h-3 w-14 bg-muted animate-pulse rounded ml-auto" />
+                        ) : (() => {
+                          const td = o.trackingNumber ? sonicMap?.[o.trackingNumber] : null;
+                          const courierCharges = td?.shipping_charges ?? null;
+                          return courierCharges != null
+                            ? fmtPKR(o.total - courierCharges)
+                            : <span className="text-muted-foreground">—</span>;
+                        })()}
+                      </td>
                       <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                         <button className="text-muted-foreground hover:text-foreground"><MoreHorizontal size={14} /></button>
                       </td>
@@ -553,7 +997,11 @@ export default function Orders() {
         </CardContent>
       </Card>
 
-      <OrderDrawer order={drawer} onClose={() => setDrawer(null)} />
+      <OrderDrawer
+        order={drawer}
+        onClose={() => setDrawer(null)}
+        trackingData={drawer?.trackingNumber ? sonicMap?.[drawer.trackingNumber] : null}
+      />
     </div>
   );
 }

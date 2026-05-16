@@ -7,7 +7,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip,
 } from "recharts";
 import {
-  PoundSterling, ShoppingCart, CreditCard, TrendingUp, Activity,
+  Banknote, ShoppingCart, CreditCard, TrendingUp, Activity,
   Boxes, XCircle, Award, TrendingDown, AlertTriangle, Download,
   RefreshCw, Filter, MoreHorizontal, Warehouse, Truck, Package,
   Clock, Layers, ArrowUp, ArrowDown, ChevronRight, Eye, X,
@@ -22,7 +22,8 @@ import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
-import { fmtGBP, fmtNum, fmtAxisGBP } from "./mockData";
+import { fmtNum } from "./mockData";
+import { useCurrency } from "@/hooks/useCurrency";
 import { useTopProducts } from "@/hooks/useTopProducts";
 import { useSalesTrend } from "@/hooks/useSalesTrend";
 import { useChannelPerformance } from "@/hooks/useChannelPerformance";
@@ -148,6 +149,7 @@ function DonutChart({ data, centerLabel, centerValue, size = 140, showLegend = t
 // ─── Trend chart tooltip ─────────────────────────────────────────────────────
 
 function TrendTooltip({ active, payload, label }: { active?: boolean; payload?: any[]; label?: string }) {
+  const { fmtCurrency: fmtGBP } = useCurrency();
   if (!active || !payload?.length) return null;
   const isProjected = payload[0]?.payload?.isProjected === true;
   const labelMap: Record<string, string> = {
@@ -404,6 +406,7 @@ function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing,
   setCustomTo: (d: Date | null) => void;
 }) {
   const navigate = useNavigate();
+  const { fmtCurrency: fmtGBP, fmtAxis: fmtAxisGBP, symbol } = useCurrency();
   const { data: liveProducts, isLoading: productsLoading, error: productsError } = useTopProducts(6, bounds);
   const { data: trendData,    isLoading: trendLoading }    = useSalesTrend(30, bounds);
   const { data: channelData,  isLoading: channelLoading }  = useChannelPerformance(30, bounds);
@@ -463,7 +466,7 @@ function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing,
       rows.push(["AOV", salesKPIs.aov.toFixed(2)]);
       rows.push(["Sell-Through %", salesKPIs.sellThrough.toFixed(1)]);
       rows.push(["Refund Rate (orders) %", String(salesKPIs.refundRate)]);
-      rows.push(["Refund Rate (£) %", String(salesKPIs.refundAmountRate)]);
+      rows.push([`Refund Rate (${symbol}) %`, String(salesKPIs.refundAmountRate)]);
       rows.push(["Refunded Revenue", salesKPIs.refundedRevenue.toFixed(2)]);
       rows.push(["Pending Orders", String(salesKPIs.pendingOrders)]);
     }
@@ -539,7 +542,7 @@ function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing,
         </div>
       ) : (
         <div className="grid grid-cols-6 gap-3.5">
-          <KpiCard icon={PoundSterling} iconColor="#4f46e5" iconBg="#eef2ff"
+          <KpiCard icon={Banknote} iconColor="#4f46e5" iconBg="#eef2ff"
             label={`Revenue (${range})`} value={fmtGBP(salesKPIs?.revenueMTD ?? 0)}
             delta={salesKPIs?.revenueDelta ?? undefined}
             deltaUp={(salesKPIs?.revenueDelta ?? 0) >= 0}
@@ -564,7 +567,7 @@ function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing,
             value={salesKPIs ? `${salesKPIs.refundRate}%` : "—"}
             footer={salesKPIs ? `${fmtNum(salesKPIs.ordersMTD > 0 ? Math.round(salesKPIs.refundRate * salesKPIs.ordersMTD / 100) : 0)} orders refunded` : "—"} />
           <KpiCard icon={ReceiptText} iconColor="#7c3aed" iconBg="#ede9fe"
-            label="Refund rate (£)"
+            label={`Refund rate (${symbol})`}
 value={salesKPIs ? `${salesKPIs.refundAmountRate ?? 0}%` : "—"}
 footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"} />
         </div>
@@ -578,14 +581,16 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
       ) : (
         <div className="grid grid-cols-4 gap-3.5">
           <KpiCard icon={Users} iconColor="#0891b2" iconBg="#cffafe"
-            label="Customer LTV"
-            value={customerMetrics?.uniqueCustomers ? fmtGBP(customerMetrics.ltv) : "—"}
-            footer={customerMetrics?.uniqueCustomers ? `${fmtNum(customerMetrics.uniqueCustomers)} unique customers` : "Sync to populate"} />
+            label="Unique Customers"
+            value={customerMetrics?.totalCustomers ? `${customerMetrics.oneTimePct.toFixed(1)}%` : "—"}
+            footer={customerMetrics?.totalCustomers ? `${fmtNum(customerMetrics.oneTimeCustomers)} customers · ${fmtGBP(customerMetrics.oneTimeRevenue)}` : "Sync to populate"}
+            progress={customerMetrics?.totalCustomers ? customerMetrics.oneTimePct : 0}
+            progressColor="#0891b2" />
           <KpiCard icon={Repeat2} iconColor="#7c3aed" iconBg="#ede9fe"
-            label="Retention rate"
-            value={customerMetrics?.uniqueCustomers ? `${customerMetrics.retentionRate}%` : "—"}
-            footer={customerMetrics?.uniqueCustomers ? `${fmtNum(customerMetrics.repeatCustomers)} repeat buyers` : "Sync to populate"}
-            progress={customerMetrics?.uniqueCustomers ? customerMetrics.retentionRate : 0}
+            label="Repeat Customers"
+            value={customerMetrics?.totalCustomers ? `${customerMetrics.repeatPct.toFixed(1)}%` : "—"}
+            footer={customerMetrics?.totalCustomers ? `${fmtNum(customerMetrics.repeatCustomers)} customers · ${fmtGBP(customerMetrics.repeatRevenue)}` : "Sync to populate"}
+            progress={customerMetrics?.totalCustomers ? customerMetrics.repeatPct : 0}
             progressColor="#7c3aed" />
           <KpiCard icon={Clock} iconColor="#d97706" iconBg="#fef3c7"
             label="Avg. fulfillment time"
@@ -816,7 +821,7 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
                       <span className="font-semibold tabular-nums">{salesKPIs?.refundRate ?? 0}%</span>
                     </div>
                     <div className="flex items-center justify-between text-xs">
-                      <span className="text-muted-foreground">Refund rate (£)</span>
+                      <span className="text-muted-foreground">Refund rate ({symbol})</span>
                       <span className="font-semibold tabular-nums text-red-500">{salesKPIs?.refundAmountRate ?? 0}%</span>
                     </div>
                   </div>
@@ -1071,6 +1076,7 @@ function RowSkeleton({ cols = 5 }: { cols?: number }) {
 
 function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; syncing: boolean }) {
   const navigate = useNavigate();
+  const { fmtCurrency: fmtGBP } = useCurrency();
   const { data, isLoading } = useInventoryDashboard();
 
   const onHand      = data?.kpis.onHand ?? 0;
@@ -1107,7 +1113,7 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
           <KpiCard icon={Boxes} iconColor="#4f46e5" iconBg="#eef2ff"
             label="On-hand units" value={fmtNum(onHand)}
             sparkData={sparkInv} sparkColor="#6366f1" />
-          <KpiCard icon={PoundSterling} iconColor="#059669" iconBg="#d1fae5"
+          <KpiCard icon={Banknote} iconColor="#059669" iconBg="#d1fae5"
             label="Stock value" value={fmtGBP(stockValue)}
             footer="at current prices" />
           <KpiCard icon={XCircle} iconColor="#dc2626" iconBg="#fee2e2"
@@ -1219,7 +1225,7 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
               <KpiCard label="In transit"      value="—"
                 icon={Truck}         iconColor="#0891b2" iconBg="#cffafe" />
               <KpiCard label="Central value"   value={fmtGBP(data?.wmsPool.totalValue ?? 0)}
-                icon={PoundSterling} iconColor="#059669" iconBg="#d1fae5" footer="At base prices" />
+                icon={Banknote} iconColor="#059669" iconBg="#d1fae5" footer="At base prices" />
             </div>
           )}
         </CardContent>

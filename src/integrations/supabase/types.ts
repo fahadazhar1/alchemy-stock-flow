@@ -1023,6 +1023,8 @@ export type Database = {
           access_token: string | null
           connected_at: string | null
           created_at: string | null
+          currency: string | null
+          currency_symbol: string | null
           id: string
           is_active: boolean
           platform: string | null
@@ -1036,6 +1038,8 @@ export type Database = {
           access_token?: string | null
           connected_at?: string | null
           created_at?: string | null
+          currency?: string | null
+          currency_symbol?: string | null
           id?: string
           is_active?: boolean
           platform?: string | null
@@ -1049,6 +1053,8 @@ export type Database = {
           access_token?: string | null
           connected_at?: string | null
           created_at?: string | null
+          currency?: string | null
+          currency_symbol?: string | null
           id?: string
           is_active?: boolean
           platform?: string | null
