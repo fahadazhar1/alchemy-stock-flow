@@ -1318,6 +1318,7 @@ export type Database = {
           p_overwrite_existing?: boolean
           p_product_ids: string[]
           p_rounding_mode?: string
+          p_store_id?: string
         }
         Returns: Json
       }
@@ -1334,6 +1335,7 @@ export type Database = {
           p_product_ids?: string[]
           p_rounding_mode?: string
           p_source?: string
+          p_store_id?: string
           p_variant_ids?: string[]
         }
         Returns: Json

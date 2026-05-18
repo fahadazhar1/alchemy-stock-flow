@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import { formatUAEDateTime } from "@/lib/timezone";
-import { CheckSquare } from "lucide-react";
+import { CheckSquare, RefreshCw } from "lucide-react";
 import { useStoreFilter } from "@/hooks/useStoreFilter";
 import { useStore } from "@/contexts/StoreContext";
 import { useCurrency } from "@/hooks/useCurrency";
@@ -37,7 +37,20 @@ export default function ApprovalQueue() {
       body: { action: "push_prices", campaign_id: id },
     });
     if (pushErr || (data && !data.ok)) {
-      const msg = data?.error ?? data?.errors?.[0] ?? pushErr?.message ?? "Unknown error";
+      const msg = data?.error ?? data?.failed?.[0] ?? pushErr?.message ?? "Unknown error";
+      toast.error("Shopify push failed: " + msg);
+      return;
+    }
+    toast.success(`Prices live on Shopify — ${data?.pushed ?? 0} variants updated`);
+  };
+
+  const handleRetryPush = async (id: string) => {
+    toast.info("Retrying Shopify push…");
+    const { data, error: pushErr } = await supabase.functions.invoke("shopify-sync", {
+      body: { action: "push_prices", campaign_id: id },
+    });
+    if (pushErr || (data && !data.ok)) {
+      const msg = data?.error ?? data?.failed?.[0] ?? pushErr?.message ?? "Unknown error";
       toast.error("Shopify push failed: " + msg);
       return;
     }
@@ -97,10 +110,23 @@ export default function ApprovalQueue() {
         <h2 className="text-sm font-semibold text-muted-foreground mb-2">All Campaigns</h2>
         <div className="rounded-md border">
           <Table>
-            <TableHeader><TableRow><TableHead>Campaign</TableHead><TableHead>Status</TableHead><TableHead>Type</TableHead><TableHead>Discount</TableHead><TableHead>Created</TableHead></TableRow></TableHeader>
+            <TableHeader><TableRow><TableHead>Campaign</TableHead><TableHead>Status</TableHead><TableHead>Type</TableHead><TableHead>Discount</TableHead><TableHead>Created</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
             <TableBody>
               {(others.length ? others : data ?? []).map(c => (
-                <TableRow key={c.id}><TableCell className="font-medium">{c.name}</TableCell><TableCell><Badge variant={statusColor(c.workflow_status ?? '')}>{c.workflow_status}</Badge></TableCell><TableCell>{c.action_type}</TableCell><TableCell>{c.discount_percent ? `${c.discount_percent}%` : '-'}</TableCell><TableCell className="text-xs">{formatUAEDateTime(c.created_at)}</TableCell></TableRow>
+                <TableRow key={c.id}>
+                  <TableCell className="font-medium">{c.name}</TableCell>
+                  <TableCell><Badge variant={statusColor(c.workflow_status ?? '')}>{c.workflow_status}</Badge></TableCell>
+                  <TableCell>{c.action_type}</TableCell>
+                  <TableCell>{c.discount_percent ? `${c.discount_percent}%` : '-'}</TableCell>
+                  <TableCell className="text-xs">{formatUAEDateTime(c.created_at)}</TableCell>
+                  <TableCell className="text-right">
+                    {normalizeStatus(c.workflow_status) === 'executed' && (
+                      <Button size="sm" variant="outline" onClick={() => handleRetryPush(c.id)}>
+                        <RefreshCw className="h-3 w-3 mr-1" /> Retry Push
+                      </Button>
+                    )}
+                  </TableCell>
+                </TableRow>
               ))}
             </TableBody>
           </Table>

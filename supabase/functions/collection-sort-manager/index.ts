@@ -103,7 +103,62 @@ async function fetchAllCollections(domain: string, token: string): Promise<Shopi
     cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
   } while (cursor);
 
+  // Ensure the "All Products" (collections/all) collection is at the top of the list.
+  // It may already be included by the paginated query (if created as a real collection),
+  // or it may be a system collection only discoverable via direct handle lookup.
+  const alreadyInList = all.find((c) => c.handle === "all");
+  if (alreadyInList) {
+    // Move it to the front without duplicating
+    return [alreadyInList, ...all.filter((c) => c.handle !== "all")];
+  }
+
+  // Not in the paginated results — try direct lookups for system collections
+  try {
+    const r1 = await shopifyGQL(domain, token, `{ collection(handle: "all") { id title handle } }`);
+    if (r1.ok) {
+      const j1 = await r1.json();
+      const col = j1.data?.collection;
+      if (col?.id) return [col, ...all];
+    }
+    const r2 = await shopifyGQL(domain, token, `{ collections(first: 1, query: "handle:all") { nodes { id title handle } } }`);
+    if (r2.ok) {
+      const j2 = await r2.json();
+      const col = j2.data?.collections?.nodes?.[0];
+      if (col?.id && col.handle === "all") return [col, ...all];
+    }
+  } catch {
+    // Non-fatal
+  }
+
   return all;
+}
+
+// ── Create the "All Products" smart collection with handle "all" ─────────────
+
+async function createAllProductsCollection(domain: string, token: string): Promise<{ id: string; handle: string; title: string } | null> {
+  const mutation = `
+    mutation collectionCreate($input: CollectionInput!) {
+      collectionCreate(input: $input) {
+        collection { id title handle }
+        userErrors { field message }
+      }
+    }
+  `;
+  const res = await shopifyGQL(domain, token, mutation, {
+    input: {
+      title: "All Products",
+      handle: "all",
+      ruleSet: {
+        appliedDisjunctively: false,
+        rules: [{ column: "TITLE", relation: "IS_NOT_EMPTY", condition: "" }],
+      },
+    },
+  });
+  if (!res.ok) return null;
+  const json = await res.json();
+  const errs = json.data?.collectionCreate?.userErrors ?? [];
+  if (errs.length) throw new Error(errs.map((e: { message: string }) => e.message).join(", "));
+  return json.data?.collectionCreate?.collection ?? null;
 }
 
 // ── Fetch distinct language values from product metafields ───────────────────
@@ -641,6 +696,23 @@ Deno.serve(async (req: Request) => {
     try {
       const cols = await fetchAllCollections(domain, conn.access_token);
       return new Response(JSON.stringify({ ok: true, collections: cols }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return new Response(JSON.stringify({ ok: false, error: msg }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+  }
+
+  // ── CREATE ALL-PRODUCTS COLLECTION ──────────────────────────────────────
+  if (action === "create_all_collection") {
+    try {
+      const col = await createAllProductsCollection(domain, conn.access_token);
+      if (!col) throw new Error("Shopify did not return a collection — handle 'all' may be reserved on this store.");
+      return new Response(JSON.stringify({ ok: true, collection: col }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     } catch (e: unknown) {

@@ -174,6 +174,29 @@ export default function CollectionSortManager() {
   const [invCollectionProgress, setInvCollectionProgress] = useState<CollectionProgress[]>([]);
   const [invRunSummary, setInvRunSummary] = useState<RunSummary | null>(null);
 
+  // ── Setup: create collections/all ──────────────────────────────────────────
+  const [settingUpAll, setSettingUpAll] = useState(false);
+
+  const hasAllCollection = allCollections.some((c) => c.handle === "all");
+
+  async function setupAllCollection() {
+    if (!selectedStoreId) return;
+    setSettingUpAll(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("collection-sort-manager", {
+        body: { action: "create_all_collection", storeId: selectedStoreId },
+      });
+      if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error ?? "Failed to create collection");
+      toast.success("All Products collection created! Reloading collections…");
+      await fetchCollections(selectedStoreId);
+    } catch (e: unknown) {
+      toast.error(`Setup failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setSettingUpAll(false);
+    }
+  }
+
   // ── Last run query ──────────────────────────────────────────────────────────
   const { data: lastRun } = useQuery({
     queryKey: ["collection-sort-last-run", selectedStoreId],
@@ -966,6 +989,24 @@ export default function CollectionSortManager() {
               </span>
             )}
           </div>
+
+          {/* collections/all setup banner */}
+          {selectedStoreId && !loadingCollections && !hasAllCollection && (
+            <div className="flex items-center justify-between rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm dark:border-amber-800 dark:bg-amber-950/30">
+              <span className="text-amber-800 dark:text-amber-300">
+                <strong>collections/all</strong> is not set up — that page cannot be sorted yet.
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs border-amber-400 text-amber-800 hover:bg-amber-100 dark:text-amber-300"
+                disabled={settingUpAll}
+                onClick={setupAllCollection}
+              >
+                {settingUpAll ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" /> Setting up…</> : "Set up now"}
+              </Button>
+            </div>
+          )}
 
           {/* Two-panel collection lists */}
           <div className="grid grid-cols-2 gap-4">

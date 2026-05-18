@@ -307,6 +307,7 @@ export default function ManualSync() {
         p_fixed_price: fixedPrice ? Number(fixedPrice) : null,
         p_campaign_name: campaignName, p_overwrite_existing: overwrite,
         p_rounding_mode: roundingMode,
+        p_store_id: storeId,
       });
       if (error) throw error;
 
@@ -317,7 +318,7 @@ export default function ManualSync() {
           body: { action: "push_prices", campaign_id: campaignId }
         });
         if (syncErr) throw syncErr;
-        if (!syncResult?.ok) throw new Error(syncResult?.error || "Shopify push failed");
+        if (!syncResult?.ok) throw new Error(syncResult?.error || syncResult?.failed?.[0] || "Shopify push failed");
         toast.success("Pricing synced to Shopify successfully!");
       } else {
         toast.success("Pricing applied in DB (no Shopify push — campaign ID missing)");
@@ -346,7 +347,7 @@ export default function ManualSync() {
             <div><Label>Discount %</Label><Input type="number" min="0" max="99" value={discountPercent} onChange={e => { setDiscountPercent(e.target.value); setFixedPrice(""); }} placeholder="0-99" /></div>
             <div><Label>Fixed Price Override</Label><Input type="number" min="0" value={fixedPrice} onChange={e => { setFixedPrice(e.target.value); setDiscountPercent(""); }} placeholder={symbol.trim()} /></div>
             <div><Label>Rounding</Label>
-              <Select value={roundingMode} onValueChange={setRoundingMode}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="whole">Whole Numbers</SelectItem><SelectItem value=".00">.00</SelectItem><SelectItem value=".99">.99</SelectItem></SelectContent></Select>
+              <Select value={roundingMode} onValueChange={setRoundingMode}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="whole">Whole Numbers</SelectItem><SelectItem value=".00">.00</SelectItem><SelectItem value=".99">.99</SelectItem><SelectItem value="fahads_choice">Fahad's Choice (£0.50)</SelectItem></SelectContent></Select>
             </div>
             <div className="flex items-center justify-between"><Label>Overwrite Existing</Label><Switch checked={overwrite} onCheckedChange={setOverwrite} /></div>
             <div className="border-t pt-3">

@@ -1037,7 +1037,7 @@ Deno.serve(async (req) => {
       // Get campaign to find its store
       const { data: campaign } = await supabase
         .from("pricing_campaigns").select("store_id").eq("id", campaign_id).single();
-      if (!campaign?.store_id) return json(404, { ok: false, error: "Campaign or store not found" });
+      if (!campaign?.store_id) return json(200, { ok: false, error: "Campaign or store not found" });
 
       // Get active Shopify connection for this store
       const { data: conn } = await supabase
@@ -1046,7 +1046,7 @@ Deno.serve(async (req) => {
         .eq("store_id", campaign.store_id)
         .eq("is_active", true)
         .single();
-      if (!conn?.access_token) return json(404, { ok: false, error: "No active Shopify connection for store" });
+      if (!conn?.access_token) return json(200, { ok: false, error: "No active Shopify connection for store" });
 
       // Get all campaign items with their new prices
       const { data: items, error: itemsErr } = await supabase
@@ -1096,7 +1096,7 @@ Deno.serve(async (req) => {
       // Get campaign to find its store
       const { data: campaign } = await supabase
         .from("pricing_campaigns").select("store_id").eq("id", campaign_id).single();
-      if (!campaign?.store_id) return json(404, { ok: false, error: "Campaign or store not found" });
+      if (!campaign?.store_id) return json(200, { ok: false, error: "Campaign or store not found" });
 
       // Get active Shopify connection for this store
       const { data: conn } = await supabase
@@ -1105,7 +1105,7 @@ Deno.serve(async (req) => {
         .eq("store_id", campaign.store_id)
         .eq("is_active", true)
         .single();
-      if (!conn?.access_token) return json(404, { ok: false, error: "No active Shopify connection for store" });
+      if (!conn?.access_token) return json(200, { ok: false, error: "No active Shopify connection for store" });
 
       // Fetch campaign items with original prices
       const { data: items, error: itemsErr } = await supabase
