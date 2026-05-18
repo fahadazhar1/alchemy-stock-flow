@@ -51,14 +51,10 @@ export default function Simulation() {
   const { data: products } = useQuery({
     queryKey: ["sim-products", storeId],
     queryFn: async () => {
-      const { data: losers } = await supabase.from("v_loser_products").select("product_id").limit(200);
-      let ids = losers?.map(p => p.product_id) ?? [];
-      if (storeId) {
-        const { data: storeProds } = await supabase.from("products").select("id").eq("store_id", storeId);
-        const storeSet = new Set((storeProds ?? []).map(p => p.id));
-        ids = ids.filter(id => id && storeSet.has(id));
-      }
-      return ids;
+      let q = supabase.from("v_loser_products").select("product_id").limit(200);
+      if (storeId) q = q.eq("store_id", storeId);
+      const { data } = await q;
+      return (data ?? []).map(p => p.product_id).filter(Boolean) as string[];
     },
   });
 

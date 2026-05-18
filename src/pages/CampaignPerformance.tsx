@@ -40,7 +40,10 @@ export default function CampaignPerformance() {
     try {
       if (currentStatus === "Executed") {
         const { error: rpcError } = await supabase.rpc("revert_variant_pricing", { p_campaign_id: campaignId });
-        if (rpcError) throw rpcError;
+        if (rpcError) {
+          console.error("revert_variant_pricing failed:", rpcError);
+          toast.warning("DB price revert failed — still ending campaign: " + rpcError.message);
+        }
         const { data, error: pushErr } = await supabase.functions.invoke("shopify-sync", {
           body: { action: "revert_prices", campaign_id: campaignId },
         });
@@ -53,9 +56,13 @@ export default function CampaignPerformance() {
         .update({ workflow_status: "Ended", ended_at: new Date().toISOString() })
         .eq("id", campaignId);
       if (error) throw error;
-      toast.success(currentStatus === "Executed" ? "Campaign ended and prices reverted on Shopify" : "Campaign deactivated");
+      toast.success(currentStatus === "Executed" ? "Campaign ended — prices reverted" : "Campaign deactivated");
       queryClient.invalidateQueries({ queryKey: ["campaign-performance-all"] });
-    } catch { toast.error("Failed to deactivate campaign"); }
+    } catch (e) {
+      console.error("handleDeactivate failed:", e);
+      const msg = (e as any)?.message ?? "Unknown error";
+      toast.error("Failed to deactivate campaign: " + msg);
+    }
   };
 
   const handleRemoveDiscounts = async (campaignId: string, campaignName: string) => {
@@ -73,7 +80,11 @@ export default function CampaignPerformance() {
       } else {
         toast.success(`Original prices restored on Shopify — ${data?.pushed ?? 0} variants updated`);
       }
-    } catch { toast.error("Failed to remove discounts"); }
+    } catch (e) {
+      console.error("handleRemoveDiscounts failed:", e);
+      const msg = (e as any)?.message ?? "Unknown error";
+      toast.error("Failed to remove discounts: " + msg);
+    }
   };
 
   if (isLoading) return <div className="space-y-4"><Skeleton className="h-8 w-64" /><Skeleton className="h-96" /></div>;

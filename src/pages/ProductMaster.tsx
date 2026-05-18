@@ -83,18 +83,42 @@ export default function ProductMaster() {
   }, [priceEditData?.productId]);
 
   const { data: collections } = useQuery({
-    queryKey: ["filter-collections"],
+    queryKey: ["filter-collections", storeId],
     queryFn: async () => {
-      const { data } = await supabase.from("collections").select("id, name").order("name");
-      return data ?? [];
+      const names = new Set<string>();
+
+      // Source 1: v_product_inventory_summary (always populated via products.collection_id)
+      let viewQ = supabase.from("v_product_inventory_summary").select("collection_name");
+      if (storeId) viewQ = viewQ.eq("store_id", storeId);
+      const { data: viewData } = await viewQ;
+      (viewData ?? []).forEach(d => { if (d.collection_name) names.add(d.collection_name); });
+
+      // Source 2: product_collections junction (includes smart collections after sync)
+      let prodQ = supabase.from("products").select("id");
+      if (storeId) prodQ = prodQ.eq("store_id", storeId);
+      const { data: prods } = await prodQ;
+      const productIds = (prods ?? []).map(p => p.id);
+      if (productIds.length) {
+        const { data: pcs } = await supabase.from("product_collections").select("collection_id").in("product_id", productIds);
+        const collIds = [...new Set((pcs ?? []).map(p => p.collection_id))];
+        if (collIds.length) {
+          const { data: colls } = await supabase.from("collections").select("name").in("id", collIds);
+          (colls ?? []).forEach(c => { if (c.name) names.add(c.name); });
+        }
+      }
+
+      return [...names].sort().map(name => ({ name }));
     },
   });
 
   const { data: vendors } = useQuery({
-    queryKey: ["filter-vendors"],
+    queryKey: ["filter-vendors", storeId],
     queryFn: async () => {
-      const { data } = await supabase.from("vendors").select("id, name").order("name");
-      return data ?? [];
+      let q = supabase.from("v_product_inventory_summary").select("vendor_name");
+      if (storeId) q = q.eq("store_id", storeId);
+      const { data } = await q;
+      const names = [...new Set((data ?? []).map(d => d.vendor_name).filter(Boolean))].sort() as string[];
+      return names.map(name => ({ name }));
     },
   });
 
@@ -113,10 +137,24 @@ export default function ProductMaster() {
     queryKey: ["products", page, search, collectionFilter, vendorFilter, typeFilter, storeId],
     queryFn: async () => {
       try {
+        let collectionProductIds: string[] | null = null;
+        if (collectionFilter !== "all") {
+          const { data: coll } = await supabase.from("collections").select("id").eq("name", collectionFilter).maybeSingle();
+          if (coll?.id) {
+            const { data: pcs } = await supabase.from("product_collections").select("product_id").eq("collection_id", coll.id);
+            collectionProductIds = (pcs ?? []).map((p: any) => p.product_id).filter(Boolean);
+          } else {
+            collectionProductIds = [];
+          }
+        }
+
         let q = supabase.from("v_product_inventory_summary").select("*", { count: "exact" });
         if (storeId) q = q.eq("store_id", storeId);
         if (search) q = q.or(`product_name.ilike.%${search}%,sku.ilike.%${search}%`);
-        if (collectionFilter !== "all") q = q.eq("collection_name", collectionFilter);
+        if (collectionProductIds !== null) {
+          if (!collectionProductIds.length) return { data: [], count: 0 };
+          q = q.in("product_id", collectionProductIds);
+        }
         if (vendorFilter !== "all") q = q.eq("vendor_name", vendorFilter);
         if (typeFilter !== "all") q = q.eq("product_type", typeFilter);
         q = q.order("created_at", { ascending: false }).range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
@@ -519,14 +557,14 @@ export default function ProductMaster() {
           <SelectTrigger className="w-[160px]"><SelectValue placeholder="Collection" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Collections</SelectItem>
-            {collections?.map(c => <SelectItem key={c.id} value={c.name}>{c.name}</SelectItem>)}
+            {collections?.map(c => <SelectItem key={c.name} value={c.name}>{c.name}</SelectItem>)}
           </SelectContent>
         </Select>
         <Select value={vendorFilter} onValueChange={v => { setVendorFilter(v); setPage(0); }}>
           <SelectTrigger className="w-[160px]"><SelectValue placeholder="Vendor" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Vendors</SelectItem>
-            {vendors?.map(v => <SelectItem key={v.id} value={v.name}>{v.name}</SelectItem>)}
+            {vendors?.map(v => <SelectItem key={v.name} value={v.name}>{v.name}</SelectItem>)}
           </SelectContent>
         </Select>
         <Select value={typeFilter} onValueChange={v => { setTypeFilter(v); setPage(0); }}>

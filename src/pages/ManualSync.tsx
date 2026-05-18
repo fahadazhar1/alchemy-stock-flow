@@ -15,7 +15,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
 import { useCurrency } from "@/hooks/useCurrency";
-import { RefreshCw, Eye, Zap, Filter, ChevronDown, X } from "lucide-react";
+import { RefreshCw, Eye, Zap, Filter, ChevronDown, X, Globe } from "lucide-react";
 import { Json } from "@/integrations/supabase/types";
 import { DateRangeFilter, matchesDateFilter } from "@/components/DateRangeFilter";
 import { useStoreFilter } from "@/hooks/useStoreFilter";
@@ -45,28 +45,55 @@ export default function ManualSync() {
   const [filterDates, setFilterDates] = useState<Date[]>([]);
   const [filterMonths, setFilterMonths] = useState<number[]>([]);
   const [filterYears, setFilterYears] = useState<number[]>([]);
+  const [selectingAll, setSelectingAll] = useState(false);
   const hasDateFilter = filterDates.length > 0 || filterMonths.length > 0 || filterYears.length > 0;
 
   const { data: collections } = useQuery({
-    queryKey: ["sync-collections"],
+    queryKey: ["sync-collections", storeId],
     queryFn: async () => {
-      const { data } = await supabase.from("collections").select("id, name").order("name");
-      return data ?? [];
+      const names = new Set<string>();
+
+      // Source 1: v_product_inventory_summary (always populated via products.collection_id)
+      let viewQ = supabase.from("v_product_inventory_summary").select("collection_name");
+      if (storeId) viewQ = viewQ.eq("store_id", storeId);
+      const { data: viewData } = await viewQ;
+      (viewData ?? []).forEach(d => { if (d.collection_name) names.add(d.collection_name); });
+
+      // Source 2: product_collections junction (includes smart collections after sync)
+      let prodQ = supabase.from("products").select("id");
+      if (storeId) prodQ = prodQ.eq("store_id", storeId);
+      const { data: prods } = await prodQ;
+      const productIds = (prods ?? []).map(p => p.id);
+      if (productIds.length) {
+        const { data: pcs } = await supabase.from("product_collections").select("collection_id").in("product_id", productIds);
+        const collIds = [...new Set((pcs ?? []).map(p => p.collection_id))];
+        if (collIds.length) {
+          const { data: colls } = await supabase.from("collections").select("name").in("id", collIds);
+          (colls ?? []).forEach(c => { if (c.name) names.add(c.name); });
+        }
+      }
+
+      return [...names].sort().map(name => ({ name }));
     },
   });
 
   const { data: vendors } = useQuery({
-    queryKey: ["sync-vendors"],
+    queryKey: ["sync-vendors", storeId],
     queryFn: async () => {
-      const { data } = await supabase.from("vendors").select("id, name").order("name");
-      return data ?? [];
+      let q = supabase.from("v_product_inventory_summary").select("vendor_name");
+      if (storeId) q = q.eq("store_id", storeId);
+      const { data } = await q;
+      const names = [...new Set((data ?? []).map(d => d.vendor_name).filter(Boolean))].sort() as string[];
+      return names.map(name => ({ name }));
     },
   });
 
   const { data: productTypes } = useQuery({
-    queryKey: ["sync-product-types"],
+    queryKey: ["sync-product-types", storeId],
     queryFn: async () => {
-      const { data } = await supabase.from("v_product_inventory_summary").select("product_type");
+      let q = supabase.from("v_product_inventory_summary").select("product_type");
+      if (storeId) q = q.eq("store_id", storeId);
+      const { data } = await q;
       return [...new Set((data ?? []).map(d => d.product_type).filter(Boolean))].sort();
     },
   });
@@ -75,10 +102,25 @@ export default function ManualSync() {
     queryKey: ["sync-products", page, search, collectionFilter, vendorFilter, typeFilter, storeId],
     queryFn: async () => {
       try {
+        // Resolve collection filter via junction table (covers smart + custom collections)
+        let collectionProductIds: string[] | null = null;
+        if (collectionFilter !== "all") {
+          const { data: coll } = await supabase.from("collections").select("id").eq("name", collectionFilter).maybeSingle();
+          if (coll?.id) {
+            const { data: pcs } = await supabase.from("product_collections").select("product_id").eq("collection_id", coll.id);
+            collectionProductIds = (pcs ?? []).map((p: any) => p.product_id).filter(Boolean);
+          } else {
+            collectionProductIds = [];
+          }
+        }
+
         let q = supabase.from("v_product_inventory_summary").select("*", { count: "exact" });
         if (storeId) q = q.eq("store_id", storeId);
         if (search) q = q.or(`product_name.ilike.%${search}%,sku.ilike.%${search}%`);
-        if (collectionFilter !== "all") q = q.eq("collection_name", collectionFilter);
+        if (collectionProductIds !== null) {
+          if (!collectionProductIds.length) return { data: [], count: 0 };
+          q = q.in("product_id", collectionProductIds);
+        }
         if (vendorFilter !== "all") q = q.eq("vendor_name", vendorFilter);
         if (typeFilter !== "all") q = q.eq("product_type", typeFilter);
         q = q.order("created_at", { ascending: false }).range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
@@ -125,14 +167,28 @@ export default function ManualSync() {
 
   const selectByFilter = async (filterType: string, filterValue: string) => {
     try {
-      let q = supabase.from("v_product_inventory_summary").select("product_id");
-      if (storeId) q = q.eq("store_id", storeId);
-      if (filterType === "collection") q = q.eq("collection_name", filterValue);
-      else if (filterType === "vendor") q = q.eq("vendor_name", filterValue);
-      else if (filterType === "type") q = q.eq("product_type", filterValue);
-      const { data, error } = await q;
-      if (error) throw error;
-      const ids = (data ?? []).map(p => p.product_id).filter(Boolean) as string[];
+      let ids: string[] = [];
+      if (filterType === "collection") {
+        const { data: coll } = await supabase.from("collections").select("id").eq("name", filterValue).maybeSingle();
+        if (coll?.id) {
+          const { data: pcs } = await supabase.from("product_collections").select("product_id").eq("collection_id", coll.id);
+          const allIds = (pcs ?? []).map((p: any) => p.product_id).filter(Boolean) as string[];
+          if (storeId && allIds.length) {
+            const { data: filtered } = await supabase.from("v_product_inventory_summary").select("product_id").eq("store_id", storeId).in("product_id", allIds);
+            ids = (filtered ?? []).map(p => p.product_id).filter(Boolean) as string[];
+          } else {
+            ids = allIds;
+          }
+        }
+      } else {
+        let q = supabase.from("v_product_inventory_summary").select("product_id");
+        if (storeId) q = q.eq("store_id", storeId);
+        if (filterType === "vendor") q = q.eq("vendor_name", filterValue);
+        else if (filterType === "type") q = q.eq("product_type", filterValue);
+        const { data, error } = await q;
+        if (error) throw error;
+        ids = (data ?? []).map(p => p.product_id).filter(Boolean) as string[];
+      }
       setSelected(prev => { const n = new Set(prev); ids.forEach(id => n.add(id)); return n; });
       toast.success(`Added ${ids.length} products from ${filterValue}`);
     } catch { toast.error("Failed to select by filter"); }
@@ -178,6 +234,29 @@ export default function ManualSync() {
       setCollectionTargets(new Set());
       setSelected(new Set());
     }
+  };
+
+  const handleSelectEntireWebsite = async () => {
+    if (isAllStores) { toast.error("Select a specific store first"); return; }
+    setSelectingAll(true);
+    try {
+      const allIds: string[] = [];
+      const BATCH = 1000;
+      let from = 0;
+      while (true) {
+        let q = supabase.from("v_product_inventory_summary").select("product_id");
+        if (storeId) q = q.eq("store_id", storeId);
+        q = q.range(from, from + BATCH - 1);
+        const { data, error } = await q;
+        if (error) throw error;
+        const batch = (data ?? []).map(p => p.product_id).filter(Boolean) as string[];
+        allIds.push(...batch);
+        if (batch.length < BATCH) break;
+        from += BATCH;
+      }
+      setSelected(new Set(allIds));
+      toast.success(`Selected all ${allIds.length} products in store`);
+    } catch { toast.error("Failed to select all products"); } finally { setSelectingAll(false); }
   };
 
   const handlePreview = async () => {
@@ -273,6 +352,16 @@ export default function ManualSync() {
             <div className="border-t pt-3">
               <p className="text-xs font-semibold text-muted-foreground mb-2 flex items-center gap-1"><Filter className="h-3 w-3" /> Quick Target by</p>
               <div className="space-y-2">
+                {/* Entire Website */}
+                <Button
+                  variant="outline"
+                  className="h-8 w-full text-xs justify-start gap-2 font-normal"
+                  onClick={handleSelectEntireWebsite}
+                  disabled={isAllStores || selectingAll}
+                >
+                  <Globe className="h-3 w-3" />
+                  {selectingAll ? "Loading…" : "Entire Website"}
+                </Button>
                 {/* Multi-select Collections */}
                 <Popover open={collectionPopoverOpen} onOpenChange={setCollectionPopoverOpen}>
                   <PopoverTrigger asChild>
@@ -297,7 +386,7 @@ export default function ManualSync() {
                           All Collections
                         </label>
                         {collections?.map(c => (
-                          <label key={c.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer text-xs">
+                          <label key={c.name} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer text-xs">
                             <Checkbox
                               checked={collectionTargets.has(c.name)}
                               onCheckedChange={checked => toggleCollectionTarget(c.name, !!checked)}
@@ -320,7 +409,7 @@ export default function ManualSync() {
                     ))}
                   </div>
                 )}
-                <Select onValueChange={v => selectByFilter("vendor", v)}><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="+ Add Vendor" /></SelectTrigger><SelectContent>{vendors?.map(v => <SelectItem key={v.id} value={v.name}>{v.name}</SelectItem>)}</SelectContent></Select>
+                <Select onValueChange={v => selectByFilter("vendor", v)}><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="+ Add Vendor" /></SelectTrigger><SelectContent>{vendors?.map(v => <SelectItem key={v.name} value={v.name}>{v.name}</SelectItem>)}</SelectContent></Select>
                 <Select onValueChange={v => selectByFilter("type", v)}><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="+ Add Product Type" /></SelectTrigger><SelectContent>{productTypes?.map(t => <SelectItem key={t} value={t!}>{t}</SelectItem>)}</SelectContent></Select>
               </div>
             </div>
@@ -341,8 +430,8 @@ export default function ManualSync() {
             <div className="flex items-center justify-between">
               <CardTitle className="text-base">Select Products</CardTitle>
               <div className="flex gap-2">
-                <Select value={collectionFilter} onValueChange={v => { setCollectionFilter(v); setPage(0); }}><SelectTrigger className="h-8 w-[140px] text-xs"><SelectValue placeholder="Collection" /></SelectTrigger><SelectContent><SelectItem value="all">All</SelectItem>{collections?.map(c => <SelectItem key={c.id} value={c.name}>{c.name}</SelectItem>)}</SelectContent></Select>
-                <Select value={vendorFilter} onValueChange={v => { setVendorFilter(v); setPage(0); }}><SelectTrigger className="h-8 w-[140px] text-xs"><SelectValue placeholder="Vendor" /></SelectTrigger><SelectContent><SelectItem value="all">All</SelectItem>{vendors?.map(v => <SelectItem key={v.id} value={v.name}>{v.name}</SelectItem>)}</SelectContent></Select>
+                <Select value={collectionFilter} onValueChange={v => { setCollectionFilter(v); setPage(0); }}><SelectTrigger className="h-8 w-[140px] text-xs"><SelectValue placeholder="Collection" /></SelectTrigger><SelectContent><SelectItem value="all">All</SelectItem>{collections?.map(c => <SelectItem key={c.name} value={c.name}>{c.name}</SelectItem>)}</SelectContent></Select>
+                <Select value={vendorFilter} onValueChange={v => { setVendorFilter(v); setPage(0); }}><SelectTrigger className="h-8 w-[140px] text-xs"><SelectValue placeholder="Vendor" /></SelectTrigger><SelectContent><SelectItem value="all">All</SelectItem>{vendors?.map(v => <SelectItem key={v.name} value={v.name}>{v.name}</SelectItem>)}</SelectContent></Select>
                 <DateRangeFilter selectedDates={filterDates} selectedMonths={filterMonths} selectedYears={filterYears} onDatesChange={setFilterDates} onMonthsChange={setFilterMonths} onYearsChange={setFilterYears} onReset={() => { setFilterDates([]); setFilterMonths([]); setFilterYears([]); }} />
               </div>
             </div>
