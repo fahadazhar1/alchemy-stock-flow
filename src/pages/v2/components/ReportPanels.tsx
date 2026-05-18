@@ -1,7 +1,7 @@
 import { useState } from "react";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
-  LineChart, Line, PieChart, Pie, Cell,
+  ComposedChart, Area, LineChart, Line, PieChart, Pie, Cell,
 } from "recharts";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -34,10 +34,11 @@ const PIE_COLORS = ["#6366f1", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#06b
 
 function KpiCard({ label, value, sub, subColor }: { label: string; value: string; sub?: string; subColor?: string }) {
   return (
-    <div className="border rounded-lg p-4 bg-card">
-      <p className="text-xs text-muted-foreground mb-1">{label}</p>
-      <p className="text-2xl font-semibold tabular-nums">{value}</p>
-      {sub && <p className="text-xs mt-1" style={{ color: subColor ?? "inherit" }}>{sub}</p>}
+    <div className="rounded-xl border p-4 bg-card overflow-hidden relative"
+         style={subColor ? { borderLeftWidth: "3px", borderLeftColor: subColor } : {}}>
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">{label}</p>
+      <p className="text-[26px] font-bold tabular-nums leading-none">{value}</p>
+      {sub && <p className="text-xs mt-2 font-medium" style={{ color: subColor ?? "inherit" }}>{sub}</p>}
     </div>
   );
 }
@@ -93,11 +94,11 @@ const RANGES: { label: string; value: DateRange }[] = [
 
 export function RangePicker({ value, onChange }: { value: DateRange; onChange: (r: DateRange) => void }) {
   return (
-    <div className="flex rounded-md border overflow-hidden text-xs">
+    <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-muted border text-xs">
       {RANGES.map(r => (
         <button key={r.value} onClick={() => onChange(r.value)}
-          className={`px-2.5 py-1 border-r last:border-r-0 transition-colors ${
-            value === r.value ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground"
+          className={`px-2.5 py-1 rounded-md font-medium transition-all ${
+            value === r.value ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
           }`}>
           {r.label}
         </button>
@@ -149,13 +150,19 @@ export function SalesOverviewReport() {
             <ErrorState msg={trend.error} onRetry={trend.refetch} />
           ) : (
             <ResponsiveContainer width="100%" height={220}>
-              <LineChart data={trend.data ?? []} margin={{ top: 4, right: 12, left: 0, bottom: 0 }}>
+              <ComposedChart data={trend.data ?? []} margin={{ top: 4, right: 12, left: 0, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="salesRevGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#6366f1" stopOpacity={0.22} />
+                    <stop offset="100%" stopColor="#6366f1" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
                 <XAxis dataKey="label" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} minTickGap={40} axisLine={false} tickLine={false} />
                 <YAxis tickFormatter={v => `${symbol}${Math.round(v / 1000)}k`} tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} width={42} />
                 <Tooltip content={<ReportTooltip />} />
-                <Line type="monotone" dataKey="revenue" name="Revenue" stroke="#6366f1" strokeWidth={2} dot={false} isAnimationActive={false} />
-              </LineChart>
+                <Area type="monotone" dataKey="revenue" name="Revenue" stroke="#6366f1" strokeWidth={2.5} fill="url(#salesRevGrad)" dot={false} isAnimationActive={false} />
+              </ComposedChart>
             </ResponsiveContainer>
           )}
         </CardContent>
@@ -246,7 +253,7 @@ export function TopProductsReport() {
                       <td className="px-4 py-2.5 tabular-nums">{fmtN(r.units)}</td>
                       <td className="px-4 py-2.5">
                         <div className="flex items-center gap-2">
-                          <div className="h-1.5 w-20 bg-muted rounded-full overflow-hidden">
+                          <div className="h-2 w-20 bg-muted rounded-full overflow-hidden">
                             <div className="h-full bg-indigo-500 rounded-full" style={{ width: `${share}%` }} />
                           </div>
                           <span className="text-muted-foreground">{share.toFixed(1)}%</span>
@@ -303,16 +310,18 @@ export function InventoryHealthReport() {
       </div>
 
       {/* Filter tabs */}
-      <div className="flex gap-1.5">
-        {(["all", "out", "low", "expiring"] as const).map(f => (
-          <button key={f} onClick={() => setFilter(f)}
-            className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors border ${
-              filter === f ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted text-muted-foreground"
-            }`}>
-            {f === "all" ? "All" : f === "out" ? "Out of stock" : f === "low" ? "Low stock" : "Expiring soon"}
-          </button>
-        ))}
-        {!items.isLoading && <span className="ml-auto text-xs text-muted-foreground self-center">{filtered.length} variants</span>}
+      <div className="flex items-center gap-4">
+        <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-muted border">
+          {(["all", "out", "low", "expiring"] as const).map(f => (
+            <button key={f} onClick={() => setFilter(f)}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                filter === f ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
+              }`}>
+              {f === "all" ? "All" : f === "out" ? "Out of stock" : f === "low" ? "Low stock" : "Expiring soon"}
+            </button>
+          ))}
+        </div>
+        {!items.isLoading && <span className="text-xs text-muted-foreground">{filtered.length} variants</span>}
       </div>
 
       <Card>
@@ -439,9 +448,9 @@ export function FulfillmentReport() {
               <p className="text-xs text-muted-foreground py-4">No data</p>
             ) : (
               <>
-                <PieChart width={160} height={160}>
-                  <Pie data={pieData} cx={80} cy={80} innerRadius={50} outerRadius={72}
-                    strokeWidth={0} paddingAngle={2} dataKey="value">
+                <PieChart width={180} height={180}>
+                  <Pie data={pieData} cx={90} cy={90} innerRadius={58} outerRadius={80}
+                    strokeWidth={0} paddingAngle={3} dataKey="value">
                     {pieData.map((d, i) => <Cell key={i} fill={d.color} />)}
                   </Pie>
                 </PieChart>
@@ -512,7 +521,7 @@ export function CollectionPerformanceReport() {
                         <td className="px-4 py-2.5 tabular-nums">{fmtN(r.units)}</td>
                         <td className="px-4 py-2.5">
                           <div className="flex items-center gap-2">
-                            <div className="h-1.5 w-20 bg-muted rounded-full overflow-hidden">
+                            <div className="h-2 w-20 bg-muted rounded-full overflow-hidden">
                               <div className="h-full rounded-full" style={{ width: `${share}%`, background: PIE_COLORS[i % PIE_COLORS.length] }} />
                             </div>
                             <span className="text-muted-foreground">{share.toFixed(1)}%</span>

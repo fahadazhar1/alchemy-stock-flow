@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useStoreFilter } from "@/hooks/useStoreFilter";
 import {
   fetchSalesByChannel,
   fetchSalesTrend,
@@ -48,44 +49,54 @@ function useAsync<T>(fn: () => Promise<T>, deps: unknown[]) {
 // ─── Per-report hooks ─────────────────────────────────────────────────────────
 
 export function useSalesByChannel(range: DateRange) {
-  return useAsync(() => fetchSalesByChannel(range), [range]);
+  const { storeId } = useStoreFilter();
+  return useAsync(() => fetchSalesByChannel(range, storeId), [range, storeId]);
 }
 
 export function useSalesTrend(range: DateRange) {
-  return useAsync(() => fetchSalesTrend(range), [range]);
+  const { storeId } = useStoreFilter();
+  return useAsync(() => fetchSalesTrend(range, storeId), [range, storeId]);
 }
 
 export function useTopProducts(range: DateRange) {
-  return useAsync(() => fetchTopProducts(range), [range]);
+  const { storeId } = useStoreFilter();
+  return useAsync(() => fetchTopProducts(range, 20, storeId), [range, storeId]);
 }
 
 export function useInventoryHealth() {
-  return useAsync(() => fetchInventoryHealth(), []);
+  const { storeId } = useStoreFilter();
+  return useAsync(() => fetchInventoryHealth(storeId), [storeId]);
 }
 
 export function useInventoryKPIs() {
-  return useAsync(() => fetchInventoryKPIs(), []);
+  const { storeId } = useStoreFilter();
+  return useAsync(() => fetchInventoryKPIs(storeId), [storeId]);
 }
 
 export function useFulfillmentSummary(range: DateRange) {
-  return useAsync(() => fetchFulfillmentSummary(range), [range]);
+  const { storeId } = useStoreFilter();
+  return useAsync(() => fetchFulfillmentSummary(range, storeId), [range, storeId]);
 }
 
 export function useFulfillmentTrend(range: DateRange) {
-  return useAsync(() => fetchFulfillmentTrend(range), [range]);
+  const { storeId } = useStoreFilter();
+  return useAsync(() => fetchFulfillmentTrend(range, storeId), [range, storeId]);
 }
 
 export function useCollectionPerformance(range: DateRange) {
-  return useAsync(() => fetchCollectionPerformance(range), [range]);
+  const { storeId } = useStoreFilter();
+  return useAsync(() => fetchCollectionPerformance(range, storeId), [range, storeId]);
 }
 
 export function useRevenueKPIs(range: DateRange) {
-  return useAsync(() => fetchRevenueKPIs(range), [range]);
+  const { storeId } = useStoreFilter();
+  return useAsync(() => fetchRevenueKPIs(range, storeId), [range, storeId]);
 }
 
 // ─── Custom report (manual trigger) ──────────────────────────────────────────
 
 export function useCustomReport() {
+  const { storeId } = useStoreFilter();
   const [data, setData] = useState<Record<string, number | string>[] | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -104,14 +115,15 @@ export function useCustomReport() {
     setError(null);
     setLastConfig(config);
     try {
-      const result = await runCustomReport(config);
+      const result = await runCustomReport(config, storeId);
       setData(result);
     } catch (e: any) {
       setError(e.message ?? "Query failed");
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storeId]);
 
   return { data, isLoading, error, lastConfig, run };
 }

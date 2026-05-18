@@ -13,12 +13,11 @@ export default function Replenishment() {
   const { data, isLoading } = useQuery({
     queryKey: ["replenishment", storeId],
     queryFn: async () => {
-      const { data: allData, error } = await supabase.from("v_replenishment_candidates").select("*").order("available_units", { ascending: true }).limit(100);
+      let q = supabase.from("v_replenishment_candidates").select("*").order("available_units", { ascending: true }).limit(100);
+      if (storeId) q = q.eq("store_id", storeId);
+      const { data, error } = await q;
       if (error) throw error;
-      if (!storeId) return allData ?? [];
-      const { data: storeProds } = await supabase.from("products").select("id").eq("store_id", storeId);
-      const storeSet = new Set((storeProds ?? []).map(p => p.id));
-      return (allData ?? []).filter(r => r.product_id && storeSet.has(r.product_id));
+      return data ?? [];
     },
   });
 

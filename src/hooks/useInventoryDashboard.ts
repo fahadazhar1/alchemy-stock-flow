@@ -1,11 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useStoreFilter } from "@/hooks/useStoreFilter";
 
 // ─── Return types ─────────────────────────────────────────────────────────────
 
 export interface InventoryKPIs {
-  onHand: number;
+  available: number;
   outOfStock: number;
   winners: number;
   losers: number;
@@ -88,20 +89,33 @@ const URGENCY_MAP: Record<string, "High" | "Medium" | "Low"> = {
   critical: "High", high: "High", medium: "Medium", low: "Low",
 };
 
+// ─── Raw query shape (all statuses, fetched once per store) ──────────────────
+
+interface RawDashboardData {
+  allRows:      any[];
+  replenRows:   any[];
+  pcRows:       Array<{ product_id: string; collection_id: string }>;
+  collIdToName: Record<string, string>;
+}
+
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
-export function useInventoryDashboard() {
+export type ProductStatusFilter = "all" | "active" | "draft";
+
+export function useInventoryDashboard(statusFilter: ProductStatusFilter = "all") {
   const { storeId } = useStoreFilter();
 
-  return useQuery({
-    queryKey: ["inventory-dashboard", storeId],
-    queryFn: async (): Promise<InventoryDashboardData> => {
+  // Raw fetch — always all statuses, cached once per store (5 min stale)
+  const rawQuery = useQuery<RawDashboardData>({
+    queryKey: ["inventory-dashboard-raw", storeId],
+    staleTime: 5 * 60 * 1000,
+    queryFn: async () => {
       let summaryQ = (supabase as any)
         .from("v_product_inventory_summary")
         .select(
-          "product_id, product_name, sku, vendor_name, collection_name, " +
+          "product_id, product_name, sku, vendor_name, collection_name, product_type, " +
           "days_old, total_inventory, min_current_price, max_compare_at_price, " +
-          "nearest_expiry_date"
+          "nearest_expiry_date, product_status"
         );
       if (storeId) summaryQ = summaryQ.eq("store_id", storeId);
 
@@ -112,119 +126,164 @@ export function useInventoryDashboard() {
         .limit(5);
       if (storeId) replenQ = replenQ.eq("store_id", storeId);
 
-      const [kpiRes, summaryRes, replenRes] = await Promise.all([
-        supabase.rpc("get_dashboard_kpis", { p_store_id: storeId ?? null }),
-        summaryQ,
-        replenQ,
-      ]);
+      const [summaryRes, replenRes] = await Promise.all([summaryQ, replenQ]);
 
-      if (kpiRes.error) throw kpiRes.error;
+      const allRows = ((summaryRes.data ?? []) as any[]);
+      const allInStockIds = allRows
+        .filter((r: any) => Number(r.total_inventory ?? 0) > 0)
+        .map((r: any) => r.product_id as string);
 
-      const kpiRow = (Array.isArray(kpiRes.data) ? kpiRes.data[0] : kpiRes.data) as any;
-      const summaryRows = ((summaryRes.data ?? []) as any[])
-        .filter((r: any) => Number(r.total_inventory ?? 0) > 0);
-      const replenRows = ((replenRes.data ?? []) as any[]);
+      // Fetch product_collections + collection names for all in-stock products
+      let pcRows: Array<{ product_id: string; collection_id: string }> = [];
+      let collIdToName: Record<string, string> = {};
 
-      // ── KPIs ──────────────────────────────────────────────────────────────
-      const kpis: InventoryKPIs = {
-        onHand:     Number(kpiRow?.on_hand_inventory ?? 0),
-        outOfStock: Number(kpiRow?.out_of_stock_products ?? 0),
-        winners:    Number(kpiRow?.winners_count ?? kpiRow?.low_stock_winners_count ?? 0),
-        losers:     Number(kpiRow?.losers_count ?? 0),
-      };
+      if (allInStockIds.length > 0) {
+        const { data: pcData } = await (supabase as any)
+          .from("product_collections")
+          .select("product_id, collection_id")
+          .in("product_id", allInStockIds);
+        pcRows = (pcData ?? []) as typeof pcRows;
 
-      // ── Stock value ───────────────────────────────────────────────────────
-      const stockValue = summaryRows.reduce(
-        (s: number, r: any) => s + Number(r.total_inventory ?? 0) * Number(r.min_current_price ?? 0),
-        0
-      );
+        if (pcRows.length > 0) {
+          const collIds = [...new Set(pcRows.map(r => r.collection_id))];
+          const { data: collData } = await (supabase as any)
+            .from("collections").select("id, name").in("id", collIds);
+          for (const c of (collData ?? []) as any[]) collIdToName[c.id] = c.name;
+        }
+      }
 
-      // ── WMS pool (placeholder — central inventory not store-scoped by design) ─
-      const wmsPool: WmsPool = {
-        totalSKUs:         0,
-        totalAvailable:    0,
-        totalReserved:     0,
-        totalNetAvailable: 0,
-        totalValue:        0,
-      };
-
-      // ── Aging buckets ─────────────────────────────────────────────────────
-      const agingBuckets: AgingBucket[] = AGING_BUCKETS.map(b => ({
-        label: b.label,
-        color: b.color,
-        units: summaryRows.reduce((s: number, r: any) => {
-          const d = Number(r.days_old ?? 0);
-          return s + (d >= b.min && d <= b.max ? Number(r.total_inventory ?? 0) : 0);
-        }, 0),
-      }));
-
-      // ── Categories ────────────────────────────────────────────────────────
-      const catMap = new Map<string, number>();
-      summaryRows.forEach((r: any) => {
-        const name = (r.collection_name as string | null) ?? "Uncategorised";
-        catMap.set(name, (catMap.get(name) ?? 0) + Number(r.total_inventory ?? 0));
-      });
-      const categories: InventoryCategory[] = Array.from(catMap.entries())
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 7)
-        .map(([name, units], i) => ({ name, units, color: CAT_COLORS[i % CAT_COLORS.length] }));
-
-      // ── Losers: age > 20 days AND stock > 10 units (matches v_loser_products definition) ──
-      const loserProducts: LoserProduct[] = summaryRows
-        .filter((r: any) => Number(r.days_old ?? 0) > 20 && Number(r.total_inventory ?? 0) > 10)
-        .sort((a: any, b: any) => Number(b.days_old ?? 0) - Number(a.days_old ?? 0))
-        .slice(0, 8)
-        .map((r: any) => ({
-          product_id: r.product_id ?? "",
-          name:       r.product_name ?? "—",
-          sku:        r.sku ?? "—",
-          vendor:     r.vendor_name ?? "—",
-          collection: r.collection_name ?? "—",
-          stock:      Number(r.total_inventory ?? 0),
-          days:       Number(r.days_old ?? 0),
-          price:      r.min_current_price != null ? Number(r.min_current_price) : null,
-          compare:    r.max_compare_at_price != null ? Number(r.max_compare_at_price) : null,
-        }));
-
-      // ── Replenishment queue ───────────────────────────────────────────────
-      const replenishment: ReplenItem[] = replenRows.map((r: any) => {
-        const vel = Number(r.velocity ?? 0);
-        const avail = Number(r.available_units ?? 0);
-        return {
-          name:      r.product_name ?? "—",
-          sku:       r.sku ?? "—",
-          urgency:   URGENCY_MAP[(r.replenishment_status ?? "").toLowerCase()] ?? "Medium",
-          available: avail,
-          suggested: Math.max(0, Math.round(vel * 14 - avail)),
-        };
-      });
-
-      // ── Expiry ────────────────────────────────────────────────────────────
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const cutoff = new Date(today);
-      cutoff.setDate(cutoff.getDate() + 30);
-
-      const expiringSoon: ExpiryItem[] = summaryRows
-        .filter((r: any) => {
-          if (!r.nearest_expiry_date) return false;
-          const d = new Date(r.nearest_expiry_date as string);
-          return d <= cutoff;
-        })
-        .sort((a: any, b: any) =>
-          new Date(a.nearest_expiry_date).getTime() - new Date(b.nearest_expiry_date).getTime()
-        )
-        .slice(0, 5)
-        .map((r: any) => ({
-          name:  r.product_name ?? "—",
-          sku:   r.sku ?? "—",
-          units: Number(r.total_inventory ?? 0),
-          days:  Math.max(0, Math.ceil(
-            (new Date(r.nearest_expiry_date as string).getTime() - today.getTime()) / 86_400_000
-          )),
-        }));
-
-      return { kpis, stockValue, wmsPool, agingBuckets, categories, loserProducts, replenishment, expiringSoon };
+      return { allRows, replenRows: (replenRes.data ?? []) as any[], pcRows, collIdToName };
     },
   });
+
+  // Derived data — recomputed synchronously when statusFilter changes, no network request
+  const data = useMemo((): InventoryDashboardData | undefined => {
+    if (!rawQuery.data) return undefined;
+    const { allRows, replenRows, pcRows, collIdToName } = rawQuery.data;
+
+    // Apply status filter client-side
+    const filteredRows = statusFilter === "all"
+      ? allRows
+      : allRows.filter((r: any) => r.product_status === statusFilter);
+    const inStockRows = filteredRows.filter((r: any) => Number(r.total_inventory ?? 0) > 0);
+
+    // ── KPIs ─────────────────────────────────────────────────────────────────
+    const kpis: InventoryKPIs = {
+      available:  filteredRows.reduce((s: number, r: any) => s + Number(r.total_inventory ?? 0), 0),
+      outOfStock: filteredRows.filter((r: any) => Number(r.total_inventory ?? 0) === 0).length,
+      losers:     filteredRows.filter((r: any) => Number(r.days_old ?? 0) > 20 && Number(r.total_inventory ?? 0) > 10).length,
+      winners:    filteredRows.filter((r: any) => !(Number(r.days_old ?? 0) > 20 && Number(r.total_inventory ?? 0) > 10)).length,
+    };
+
+    // ── Stock value ───────────────────────────────────────────────────────────
+    const stockValue = inStockRows.reduce(
+      (s: number, r: any) => s + Number(r.total_inventory ?? 0) * Number(r.min_current_price ?? 0),
+      0
+    );
+
+    // ── WMS pool ──────────────────────────────────────────────────────────────
+    const wmsPool: WmsPool = {
+      totalSKUs: 0, totalAvailable: 0, totalReserved: 0, totalNetAvailable: 0, totalValue: 0,
+    };
+
+    // ── Aging buckets ─────────────────────────────────────────────────────────
+    const agingBuckets: AgingBucket[] = AGING_BUCKETS.map(b => ({
+      label: b.label,
+      color: b.color,
+      units: inStockRows.reduce((s: number, r: any) => {
+        const d = Number(r.days_old ?? 0);
+        return s + (d >= b.min && d <= b.max ? Number(r.total_inventory ?? 0) : 0);
+      }, 0),
+    }));
+
+    // ── Collections (Top 5) — uses pre-fetched pcRows filtered to current status ──
+    const collInventoryMap = new Map<string, number>();
+    const prodInv = new Map(inStockRows.map((r: any) => [r.product_id as string, Number(r.total_inventory ?? 0)]));
+
+    if (pcRows.length > 0) {
+      const mappedProductIds = new Set<string>();
+      for (const r of pcRows) {
+        const inv = prodInv.get(r.product_id);
+        if (inv === undefined) continue; // not in this status filter
+        const name = collIdToName[r.collection_id];
+        if (!name) continue;
+        collInventoryMap.set(name, (collInventoryMap.get(name) ?? 0) + inv);
+        mappedProductIds.add(r.product_id);
+      }
+      // Fallback for products absent from product_collections
+      for (const r of inStockRows) {
+        if (mappedProductIds.has(r.product_id)) continue;
+        const name = (r.collection_name as string | null) || (r.product_type as string | null);
+        if (name) collInventoryMap.set(name, (collInventoryMap.get(name) ?? 0) + Number(r.total_inventory ?? 0));
+      }
+    } else {
+      for (const r of inStockRows) {
+        const name = (r.collection_name as string | null) || (r.product_type as string | null);
+        if (name) collInventoryMap.set(name, (collInventoryMap.get(name) ?? 0) + Number(r.total_inventory ?? 0));
+      }
+    }
+
+    const categories: InventoryCategory[] = Array.from(collInventoryMap.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([name, units], i) => ({ name, units, color: CAT_COLORS[i % CAT_COLORS.length] }));
+
+    // ── Losers ────────────────────────────────────────────────────────────────
+    const loserProducts: LoserProduct[] = inStockRows
+      .filter((r: any) => Number(r.days_old ?? 0) > 20 && Number(r.total_inventory ?? 0) > 10)
+      .sort((a: any, b: any) => Number(b.days_old ?? 0) - Number(a.days_old ?? 0))
+      .slice(0, 8)
+      .map((r: any) => ({
+        product_id: r.product_id ?? "",
+        name:       r.product_name ?? "—",
+        sku:        r.sku ?? "—",
+        vendor:     r.vendor_name ?? "—",
+        collection: r.collection_name ?? "—",
+        stock:      Number(r.total_inventory ?? 0),
+        days:       Number(r.days_old ?? 0),
+        price:      r.min_current_price  != null ? Number(r.min_current_price)  : null,
+        compare:    r.max_compare_at_price != null ? Number(r.max_compare_at_price) : null,
+      }));
+
+    // ── Replenishment ─────────────────────────────────────────────────────────
+    const replenishment: ReplenItem[] = replenRows.map((r: any) => {
+      const vel = Number(r.velocity ?? 0);
+      const avail = Number(r.available_units ?? 0);
+      return {
+        name:      r.product_name ?? "—",
+        sku:       r.sku ?? "—",
+        urgency:   URGENCY_MAP[(r.replenishment_status ?? "").toLowerCase()] ?? "Medium",
+        available: avail,
+        suggested: Math.max(0, Math.round(vel * 14 - avail)),
+      };
+    });
+
+    // ── Expiry ────────────────────────────────────────────────────────────────
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const cutoff = new Date(today);
+    cutoff.setDate(cutoff.getDate() + 30);
+
+    const expiringSoon: ExpiryItem[] = inStockRows
+      .filter((r: any) => {
+        if (!r.nearest_expiry_date) return false;
+        return new Date(r.nearest_expiry_date as string) <= cutoff;
+      })
+      .sort((a: any, b: any) =>
+        new Date(a.nearest_expiry_date).getTime() - new Date(b.nearest_expiry_date).getTime()
+      )
+      .slice(0, 5)
+      .map((r: any) => ({
+        name:  r.product_name ?? "—",
+        sku:   r.sku ?? "—",
+        units: Number(r.total_inventory ?? 0),
+        days:  Math.max(0, Math.ceil(
+          (new Date(r.nearest_expiry_date as string).getTime() - today.getTime()) / 86_400_000
+        )),
+      }));
+
+    return { kpis, stockValue, wmsPool, agingBuckets, categories, loserProducts, replenishment, expiringSoon };
+  }, [rawQuery.data, statusFilter]);
+
+  return { ...rawQuery, data };
 }

@@ -9,11 +9,13 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
 import { useCurrency } from "@/hooks/useCurrency";
-import { RefreshCw, Eye, Zap, Filter } from "lucide-react";
+import { RefreshCw, Eye, Zap, Filter, ChevronDown, X } from "lucide-react";
 import { Json } from "@/integrations/supabase/types";
 import { DateRangeFilter, matchesDateFilter } from "@/components/DateRangeFilter";
 import { useStoreFilter } from "@/hooks/useStoreFilter";
@@ -38,6 +40,8 @@ export default function ManualSync() {
   const [collectionFilter, setCollectionFilter] = useState("all");
   const [vendorFilter, setVendorFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
+  const [collectionTargets, setCollectionTargets] = useState<Set<string>>(new Set());
+  const [collectionPopoverOpen, setCollectionPopoverOpen] = useState(false);
   const [filterDates, setFilterDates] = useState<Date[]>([]);
   const [filterMonths, setFilterMonths] = useState<number[]>([]);
   const [filterYears, setFilterYears] = useState<number[]>([]);
@@ -67,21 +71,12 @@ export default function ManualSync() {
     },
   });
 
-  // Get store product IDs
-  const { data: storeProductIds } = useQuery({
-    queryKey: ["store-product-ids-sync", storeId],
-    enabled: !!storeId,
-    queryFn: async () => {
-      const { data } = await supabase.from("products").select("id").eq("store_id", storeId!);
-      return new Set((data ?? []).map(p => p.id));
-    },
-  });
-
   const { data: products } = useQuery({
     queryKey: ["sync-products", page, search, collectionFilter, vendorFilter, typeFilter, storeId],
     queryFn: async () => {
       try {
         let q = supabase.from("v_product_inventory_summary").select("*", { count: "exact" });
+        if (storeId) q = q.eq("store_id", storeId);
         if (search) q = q.or(`product_name.ilike.%${search}%,sku.ilike.%${search}%`);
         if (collectionFilter !== "all") q = q.eq("collection_name", collectionFilter);
         if (vendorFilter !== "all") q = q.eq("vendor_name", vendorFilter);
@@ -89,11 +84,7 @@ export default function ManualSync() {
         q = q.order("created_at", { ascending: false }).range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
         const { data, error, count } = await q;
         if (error) throw error;
-        let filtered = data ?? [];
-        if (storeId && storeProductIds) {
-          filtered = filtered.filter(p => p.product_id && storeProductIds.has(p.product_id));
-        }
-        return { data: filtered, count: storeId && storeProductIds ? filtered.length : (count ?? 0) };
+        return { data: data ?? [], count: count ?? 0 };
       } catch {
         toast.error("Failed to load products");
         return { data: [], count: 0 };
@@ -135,19 +126,62 @@ export default function ManualSync() {
   const selectByFilter = async (filterType: string, filterValue: string) => {
     try {
       let q = supabase.from("v_product_inventory_summary").select("product_id");
+      if (storeId) q = q.eq("store_id", storeId);
       if (filterType === "collection") q = q.eq("collection_name", filterValue);
       else if (filterType === "vendor") q = q.eq("vendor_name", filterValue);
       else if (filterType === "type") q = q.eq("product_type", filterValue);
       const { data, error } = await q;
       if (error) throw error;
-      let ids = (data ?? []).map(p => p.product_id).filter(Boolean) as string[];
-      if (storeId && storeProductIds) ids = ids.filter(id => storeProductIds.has(id));
+      const ids = (data ?? []).map(p => p.product_id).filter(Boolean) as string[];
       setSelected(prev => { const n = new Set(prev); ids.forEach(id => n.add(id)); return n; });
       toast.success(`Added ${ids.length} products from ${filterValue}`);
     } catch { toast.error("Failed to select by filter"); }
   };
 
+  const toggleCollectionTarget = async (collectionName: string, checked: boolean) => {
+    setCollectionTargets(prev => {
+      const n = new Set(prev);
+      checked ? n.add(collectionName) : n.delete(collectionName);
+      return n;
+    });
+    if (checked) {
+      await selectByFilter("collection", collectionName);
+    } else {
+      // Deselect products that belong only to this collection
+      try {
+        let dq = supabase.from("v_product_inventory_summary").select("product_id").eq("collection_name", collectionName);
+        if (storeId) dq = dq.eq("store_id", storeId);
+        const { data } = await dq;
+        const ids = (data ?? []).map(p => p.product_id).filter(Boolean) as string[];
+        setSelected(prev => {
+          const n = new Set(prev);
+          ids.forEach(id => n.delete(id));
+          return n;
+        });
+      } catch { toast.error("Failed to deselect collection"); }
+    }
+  };
+
+  const toggleAllCollections = async (checked: boolean) => {
+    if (checked) {
+      const allNames = (collections ?? []).map(c => c.name);
+      setCollectionTargets(new Set(allNames));
+      try {
+        let q = supabase.from("v_product_inventory_summary").select("product_id");
+        if (storeId) q = q.eq("store_id", storeId);
+        const { data } = await q;
+        const ids = (data ?? []).map(p => p.product_id).filter(Boolean) as string[];
+        setSelected(new Set(ids));
+        toast.success(`Selected all ${ids.length} products`);
+      } catch { toast.error("Failed to select all"); }
+    } else {
+      setCollectionTargets(new Set());
+      setSelected(new Set());
+    }
+  };
+
   const handlePreview = async () => {
+    if (isAllStores) { toast.error("Select a specific store before previewing a campaign"); return; }
     if (!selected.size) { toast.error("Select products first"); return; }
     if (!campaignName.trim()) { toast.error("Campaign name is required"); return; }
     if (!discountPercent && !fixedPrice) { toast.error("Enter discount % or fixed price"); return; }
@@ -166,6 +200,7 @@ export default function ManualSync() {
   };
 
   const handleSync = async () => {
+  if (isAllStores) { toast.error("Select a specific store before launching a campaign"); return; }
   if (!campaignName.trim()) { toast.error("Campaign name is required"); return; }
   if (!discountPercent && !fixedPrice) { toast.error("Enter discount % or fixed price"); return; }
   setSyncing(true);
@@ -214,7 +249,7 @@ export default function ManualSync() {
   } catch (e: any) { toast.error(e?.message || "Sync failed"); } finally { setSyncing(false); }
 };
 
-  const canSync = campaignName.trim() && (discountPercent || fixedPrice) && selected.size > 0;
+  const canSync = !isAllStores && campaignName.trim() && (discountPercent || fixedPrice) && selected.size > 0;
   const preview = previewData as Record<string, unknown> | null;
 
   return (
@@ -238,14 +273,61 @@ export default function ManualSync() {
             <div className="border-t pt-3">
               <p className="text-xs font-semibold text-muted-foreground mb-2 flex items-center gap-1"><Filter className="h-3 w-3" /> Quick Target by</p>
               <div className="space-y-2">
-                <Select onValueChange={v => selectByFilter("collection", v)}><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="+ Add Collection" /></SelectTrigger><SelectContent>{collections?.map(c => <SelectItem key={c.id} value={c.name}>{c.name}</SelectItem>)}</SelectContent></Select>
+                {/* Multi-select Collections */}
+                <Popover open={collectionPopoverOpen} onOpenChange={setCollectionPopoverOpen}>
+                  <PopoverTrigger asChild>
+                    <Button variant="outline" className="h-8 w-full text-xs justify-between font-normal">
+                      {collectionTargets.size === 0
+                        ? "+ Add Collection"
+                        : collectionTargets.size === (collections?.length ?? 0)
+                          ? "All Collections"
+                          : `${collectionTargets.size} collection${collectionTargets.size > 1 ? "s" : ""} selected`}
+                      <ChevronDown className="h-3 w-3 ml-1 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-64 p-2" align="start">
+                    <ScrollArea className="max-h-56">
+                      <div className="space-y-1">
+                        {/* All Collections option */}
+                        <label className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer text-xs font-semibold border-b pb-2 mb-1">
+                          <Checkbox
+                            checked={collectionTargets.size === (collections?.length ?? 0) && (collections?.length ?? 0) > 0}
+                            onCheckedChange={checked => toggleAllCollections(!!checked)}
+                          />
+                          All Collections
+                        </label>
+                        {collections?.map(c => (
+                          <label key={c.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer text-xs">
+                            <Checkbox
+                              checked={collectionTargets.has(c.name)}
+                              onCheckedChange={checked => toggleCollectionTarget(c.name, !!checked)}
+                            />
+                            {c.name}
+                          </label>
+                        ))}
+                      </div>
+                    </ScrollArea>
+                  </PopoverContent>
+                </Popover>
+                {/* Selected collection badges */}
+                {collectionTargets.size > 0 && collectionTargets.size < (collections?.length ?? 0) && (
+                  <div className="flex flex-wrap gap-1">
+                    {Array.from(collectionTargets).map(name => (
+                      <Badge key={name} variant="secondary" className="text-xs gap-1 pr-1">
+                        {name}
+                        <button onClick={() => toggleCollectionTarget(name, false)} className="ml-0.5 hover:text-destructive"><X className="h-2.5 w-2.5" /></button>
+                      </Badge>
+                    ))}
+                  </div>
+                )}
                 <Select onValueChange={v => selectByFilter("vendor", v)}><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="+ Add Vendor" /></SelectTrigger><SelectContent>{vendors?.map(v => <SelectItem key={v.id} value={v.name}>{v.name}</SelectItem>)}</SelectContent></Select>
                 <Select onValueChange={v => selectByFilter("type", v)}><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="+ Add Product Type" /></SelectTrigger><SelectContent>{productTypes?.map(t => <SelectItem key={t} value={t!}>{t}</SelectItem>)}</SelectContent></Select>
               </div>
             </div>
             <div className="pt-2 space-y-2">
               <Badge variant="secondary">{selected.size} products selected</Badge>
-              {requireApproval && <p className="text-xs text-amber-600">⚠ Approval required before live execution</p>}
+              {isAllStores && <p className="text-xs text-red-600 font-medium">⚠ Select a specific store to enable campaigns</p>}
+              {requireApproval && !isAllStores && <p className="text-xs text-amber-600">⚠ Approval required before live execution</p>}
             </div>
             <div className="flex gap-2">
               <Button variant="outline" className="flex-1" onClick={handlePreview} disabled={!canSync}><Eye className="h-4 w-4 mr-1" /> Preview</Button>
@@ -271,7 +353,7 @@ export default function ManualSync() {
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-10"><Checkbox checked={filteredProducts.data.length ? filteredProducts.data.every(p => selected.has(p.product_id!)) : false} onCheckedChange={toggleSelectAll} /></TableHead>
-                  <TableHead>Name</TableHead><TableHead>SKU</TableHead><TableHead className="text-right">Store Stock</TableHead><TableHead className="text-right">Price</TableHead><TableHead>Status</TableHead>
+                  <TableHead>Name</TableHead><TableHead>SKU</TableHead><TableHead className="text-right">Stock</TableHead><TableHead className="text-right">Unit Price</TableHead><TableHead className="text-right">Total Value</TableHead><TableHead>Status</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -282,6 +364,9 @@ export default function ManualSync() {
                     <TableCell className="font-mono text-xs">{p.sku}</TableCell>
                     <TableCell className="text-right font-mono">{p.total_inventory}</TableCell>
                     <TableCell className="text-right font-mono">{p.min_current_price ? formatCurrency(p.min_current_price) : '-'}</TableCell>
+                    <TableCell className="text-right font-mono text-muted-foreground">
+                      {p.min_current_price && p.total_inventory ? formatCurrency(p.min_current_price * p.total_inventory) : '-'}
+                    </TableCell>
                     <TableCell><Badge variant={p.discount_status === 'discounted' ? 'default' : 'secondary'}>{p.discount_status}</Badge></TableCell>
                   </TableRow>
                 ))}

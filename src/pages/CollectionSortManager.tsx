@@ -139,6 +139,41 @@ export default function CollectionSortManager() {
   const [collectionProgress, setCollectionProgress] = useState<CollectionProgress[]>([]);
   const [runSummary, setRunSummary] = useState<RunSummary | null>(null);
 
+  // ── Module 1: Sales & Performance ──────────────────────────────────────────
+  const [spExcludedIds, setSpExcludedIds] = useState<Set<string>>(new Set());
+  const [spCheckedIds, setSpCheckedIds] = useState<Set<string>>(new Set());
+  const [spIncludeSearch, setSpIncludeSearch] = useState("");
+  const [spExcludeSearch, setSpExcludeSearch] = useState("");
+  const [spSortRule, setSpSortRule] = useState<"best_selling_first" | "revenue_first">("best_selling_first");
+  const [spConfirmOpen, setSpConfirmOpen] = useState(false);
+  const [spRunning, setSpRunning] = useState(false);
+  const [spCollectionProgress, setSpCollectionProgress] = useState<CollectionProgress[]>([]);
+  const [spRunSummary, setSpRunSummary] = useState<RunSummary | null>(null);
+
+  // ── Module 2: Discount & Campaign ──────────────────────────────────────────
+  const [dcExcludedIds, setDcExcludedIds] = useState<Set<string>>(new Set());
+  const [dcCheckedIds, setDcCheckedIds] = useState<Set<string>>(new Set());
+  const [dcIncludeSearch, setDcIncludeSearch] = useState("");
+  const [dcExcludeSearch, setDcExcludeSearch] = useState("");
+  const [dcSortRule, setDcSortRule] = useState<"discounted_first" | "highest_discount_first">("discounted_first");
+  const [dcConfirmOpen, setDcConfirmOpen] = useState(false);
+  const [dcRunning, setDcRunning] = useState(false);
+  const [dcCollectionProgress, setDcCollectionProgress] = useState<CollectionProgress[]>([]);
+  const [dcRunSummary, setDcRunSummary] = useState<RunSummary | null>(null);
+
+  // ── Module 3: Inventory ─────────────────────────────────────────────────────
+  const [invExcludedIds, setInvExcludedIds] = useState<Set<string>>(new Set());
+  const [invCheckedIds, setInvCheckedIds] = useState<Set<string>>(new Set());
+  const [invIncludeSearch, setInvIncludeSearch] = useState("");
+  const [invExcludeSearch, setInvExcludeSearch] = useState("");
+  const [invSortRule, setInvSortRule] = useState<"low_stock_first" | "overstock_first">("low_stock_first");
+  const [lowStockThreshold, setLowStockThreshold] = useState(5);
+  const [overstockThreshold, setOverstockThreshold] = useState(50);
+  const [invConfirmOpen, setInvConfirmOpen] = useState(false);
+  const [invRunning, setInvRunning] = useState(false);
+  const [invCollectionProgress, setInvCollectionProgress] = useState<CollectionProgress[]>([]);
+  const [invRunSummary, setInvRunSummary] = useState<RunSummary | null>(null);
+
   // ── Last run query ──────────────────────────────────────────────────────────
   const { data: lastRun } = useQuery({
     queryKey: ["collection-sort-last-run", selectedStoreId],
@@ -224,6 +259,26 @@ export default function CollectionSortManager() {
     }
   }, [selectedStoreId, fetchCollections, fetchLanguages]);
 
+  // Sync per-module collection selectors whenever allCollections changes
+  useEffect(() => {
+    if (allCollections.length === 0) return;
+    const autoExclude = new Set<string>();
+    const allChecked = new Set<string>();
+    for (const c of allCollections) {
+      if (shouldAutoExclude(c.handle)) {
+        autoExclude.add(c.id);
+      } else {
+        allChecked.add(c.id);
+      }
+    }
+    setSpExcludedIds(new Set(autoExclude));
+    setSpCheckedIds(new Set(allChecked));
+    setDcExcludedIds(new Set(autoExclude));
+    setDcCheckedIds(new Set(allChecked));
+    setInvExcludedIds(new Set(autoExclude));
+    setInvCheckedIds(new Set(allChecked));
+  }, [allCollections]);
+
   // ── Derived collection lists ────────────────────────────────────────────────
   const includedCollections = useMemo(
     () => allCollections.filter((c) => !excludedIds.has(c.id)),
@@ -256,6 +311,84 @@ export default function CollectionSortManager() {
     [includedCollections, checkedIds],
   );
 
+  // ── Module 1 derived ────────────────────────────────────────────────────────
+  const spIncludedCollections = useMemo(
+    () => allCollections.filter((c) => !spExcludedIds.has(c.id)),
+    [allCollections, spExcludedIds],
+  );
+  const spExcludedCollections = useMemo(
+    () => allCollections.filter((c) => spExcludedIds.has(c.id)),
+    [allCollections, spExcludedIds],
+  );
+  const spFilteredIncluded = useMemo(
+    () => spIncludedCollections.filter(
+      (c) => !spIncludeSearch || c.title.toLowerCase().includes(spIncludeSearch.toLowerCase()),
+    ),
+    [spIncludedCollections, spIncludeSearch],
+  );
+  const spFilteredExcluded = useMemo(
+    () => spExcludedCollections.filter(
+      (c) => !spExcludeSearch || c.title.toLowerCase().includes(spExcludeSearch.toLowerCase()),
+    ),
+    [spExcludedCollections, spExcludeSearch],
+  );
+  const spSortableCollections = useMemo(
+    () => spIncludedCollections.filter((c) => spCheckedIds.has(c.id)),
+    [spIncludedCollections, spCheckedIds],
+  );
+
+  // ── Module 2 derived ────────────────────────────────────────────────────────
+  const dcIncludedCollections = useMemo(
+    () => allCollections.filter((c) => !dcExcludedIds.has(c.id)),
+    [allCollections, dcExcludedIds],
+  );
+  const dcExcludedCollections = useMemo(
+    () => allCollections.filter((c) => dcExcludedIds.has(c.id)),
+    [allCollections, dcExcludedIds],
+  );
+  const dcFilteredIncluded = useMemo(
+    () => dcIncludedCollections.filter(
+      (c) => !dcIncludeSearch || c.title.toLowerCase().includes(dcIncludeSearch.toLowerCase()),
+    ),
+    [dcIncludedCollections, dcIncludeSearch],
+  );
+  const dcFilteredExcluded = useMemo(
+    () => dcExcludedCollections.filter(
+      (c) => !dcExcludeSearch || c.title.toLowerCase().includes(dcExcludeSearch.toLowerCase()),
+    ),
+    [dcExcludedCollections, dcExcludeSearch],
+  );
+  const dcSortableCollections = useMemo(
+    () => dcIncludedCollections.filter((c) => dcCheckedIds.has(c.id)),
+    [dcIncludedCollections, dcCheckedIds],
+  );
+
+  // ── Module 3 derived ────────────────────────────────────────────────────────
+  const invIncludedCollections = useMemo(
+    () => allCollections.filter((c) => !invExcludedIds.has(c.id)),
+    [allCollections, invExcludedIds],
+  );
+  const invExcludedCollections = useMemo(
+    () => allCollections.filter((c) => invExcludedIds.has(c.id)),
+    [allCollections, invExcludedIds],
+  );
+  const invFilteredIncluded = useMemo(
+    () => invIncludedCollections.filter(
+      (c) => !invIncludeSearch || c.title.toLowerCase().includes(invIncludeSearch.toLowerCase()),
+    ),
+    [invIncludedCollections, invIncludeSearch],
+  );
+  const invFilteredExcluded = useMemo(
+    () => invExcludedCollections.filter(
+      (c) => !invExcludeSearch || c.title.toLowerCase().includes(invExcludeSearch.toLowerCase()),
+    ),
+    [invExcludedCollections, invExcludeSearch],
+  );
+  const invSortableCollections = useMemo(
+    () => invIncludedCollections.filter((c) => invCheckedIds.has(c.id)),
+    [invIncludedCollections, invCheckedIds],
+  );
+
   // ── Collection list actions ─────────────────────────────────────────────────
   function moveToExclude(id: string) {
     setExcludedIds((prev) => new Set([...prev, id]));
@@ -283,6 +416,66 @@ export default function CollectionSortManager() {
       n.has(id) ? n.delete(id) : n.add(id);
       return n;
     });
+  }
+
+  // ── Module 1 collection actions ─────────────────────────────────────────────
+  function spMoveToExclude(id: string) {
+    setSpExcludedIds((prev) => new Set([...prev, id]));
+    setSpCheckedIds((prev) => { const n = new Set(prev); n.delete(id); return n; });
+  }
+  function spMoveToInclude(id: string) {
+    setSpExcludedIds((prev) => { const n = new Set(prev); n.delete(id); return n; });
+    setSpCheckedIds((prev) => new Set([...prev, id]));
+  }
+  function spSelectAll() {
+    setSpCheckedIds((prev) => new Set([...prev, ...spFilteredIncluded.map((c) => c.id)]));
+  }
+  function spDeselectAll() {
+    const ids = new Set(spFilteredIncluded.map((c) => c.id));
+    setSpCheckedIds((prev) => { const n = new Set(prev); ids.forEach((id) => n.delete(id)); return n; });
+  }
+  function spToggleChecked(id: string) {
+    setSpCheckedIds((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  }
+
+  // ── Module 2 collection actions ─────────────────────────────────────────────
+  function dcMoveToExclude(id: string) {
+    setDcExcludedIds((prev) => new Set([...prev, id]));
+    setDcCheckedIds((prev) => { const n = new Set(prev); n.delete(id); return n; });
+  }
+  function dcMoveToInclude(id: string) {
+    setDcExcludedIds((prev) => { const n = new Set(prev); n.delete(id); return n; });
+    setDcCheckedIds((prev) => new Set([...prev, id]));
+  }
+  function dcSelectAll() {
+    setDcCheckedIds((prev) => new Set([...prev, ...dcFilteredIncluded.map((c) => c.id)]));
+  }
+  function dcDeselectAll() {
+    const ids = new Set(dcFilteredIncluded.map((c) => c.id));
+    setDcCheckedIds((prev) => { const n = new Set(prev); ids.forEach((id) => n.delete(id)); return n; });
+  }
+  function dcToggleChecked(id: string) {
+    setDcCheckedIds((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  }
+
+  // ── Module 3 collection actions ─────────────────────────────────────────────
+  function invMoveToExclude(id: string) {
+    setInvExcludedIds((prev) => new Set([...prev, id]));
+    setInvCheckedIds((prev) => { const n = new Set(prev); n.delete(id); return n; });
+  }
+  function invMoveToInclude(id: string) {
+    setInvExcludedIds((prev) => { const n = new Set(prev); n.delete(id); return n; });
+    setInvCheckedIds((prev) => new Set([...prev, id]));
+  }
+  function invSelectAll() {
+    setInvCheckedIds((prev) => new Set([...prev, ...invFilteredIncluded.map((c) => c.id)]));
+  }
+  function invDeselectAll() {
+    const ids = new Set(invFilteredIncluded.map((c) => c.id));
+    setInvCheckedIds((prev) => { const n = new Set(prev); ids.forEach((id) => n.delete(id)); return n; });
+  }
+  function invToggleChecked(id: string) {
+    setInvCheckedIds((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   }
 
   // ── Sort rule actions ───────────────────────────────────────────────────────
@@ -494,6 +687,227 @@ export default function CollectionSortManager() {
       : 0;
 
   const currentlyProcessing = collectionProgress.find((p) => p.status === "processing");
+
+  // ── Module 1 run ─────────────────────────────────────────────────────────────
+  function openSpConfirmModal() {
+    if (spSortableCollections.length === 0) { toast.error("No collections selected to sort."); return; }
+    setSpConfirmOpen(true);
+  }
+
+  async function spConfirmAndRun() {
+    setSpConfirmOpen(false);
+    setSpRunning(true);
+    setSpRunSummary(null);
+
+    const initialProgress: CollectionProgress[] = spSortableCollections.map((c) => ({
+      id: c.id, title: c.title, status: "pending",
+    }));
+    setSpCollectionProgress(initialProgress);
+    setSpCollectionProgress((prev) => prev.map((p, i) => (i === 0 ? { ...p, status: "processing" } : p)));
+
+    try {
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/collection-sort-manager`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${SUPABASE_ANON_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "run_sales_sort",
+          storeId: selectedStoreId,
+          collections: spSortableCollections.map((c) => c.id),
+          sortRule: spSortRule,
+        }),
+      });
+      if (!response.ok || !response.body) throw new Error(`Edge function returned ${response.status}`);
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let processedCount = 0;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const data = JSON.parse(line);
+            if (data.type === "summary") {
+              setSpRunSummary({ collectionsTotal: data.collectionsTotal, collectionsSorted: data.collectionsSorted, totalProductsReordered: data.totalProductsReordered, errors: data.errors ?? [], runAt: data.runAt });
+              queryClient.invalidateQueries({ queryKey: ["collection-sort-last-run"] });
+              continue;
+            }
+            processedCount++;
+            const nextIndex = processedCount;
+            setSpCollectionProgress((prev) =>
+              prev.map((p, idx) => {
+                if (p.id === data.collectionId) return { ...p, status: data.status, productsReordered: data.productsReordered, error: data.error };
+                if (idx === nextIndex && p.status === "pending") return { ...p, status: "processing" };
+                return p;
+              }),
+            );
+          } catch { /* ignore malformed lines */ }
+        }
+      }
+    } catch (e: unknown) {
+      toast.error(`Sales sort failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setSpRunning(false);
+    }
+  }
+
+  const spDoneCount = spCollectionProgress.filter((p) => p.status === "done" || p.status === "failed").length;
+  const spProgressPercent = spCollectionProgress.length > 0 ? Math.round((spDoneCount / spCollectionProgress.length) * 100) : 0;
+  const spCurrentlyProcessing = spCollectionProgress.find((p) => p.status === "processing");
+
+  // ── Module 2 run ─────────────────────────────────────────────────────────────
+  function openDcConfirmModal() {
+    if (dcSortableCollections.length === 0) { toast.error("No collections selected to sort."); return; }
+    setDcConfirmOpen(true);
+  }
+
+  async function dcConfirmAndRun() {
+    setDcConfirmOpen(false);
+    setDcRunning(true);
+    setDcRunSummary(null);
+
+    const initialProgress: CollectionProgress[] = dcSortableCollections.map((c) => ({
+      id: c.id, title: c.title, status: "pending",
+    }));
+    setDcCollectionProgress(initialProgress);
+    setDcCollectionProgress((prev) => prev.map((p, i) => (i === 0 ? { ...p, status: "processing" } : p)));
+
+    try {
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/collection-sort-manager`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${SUPABASE_ANON_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "run_discount_sort",
+          storeId: selectedStoreId,
+          collections: dcSortableCollections.map((c) => c.id),
+          sortRule: dcSortRule,
+        }),
+      });
+      if (!response.ok || !response.body) throw new Error(`Edge function returned ${response.status}`);
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let processedCount = 0;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const data = JSON.parse(line);
+            if (data.type === "summary") {
+              setDcRunSummary({ collectionsTotal: data.collectionsTotal, collectionsSorted: data.collectionsSorted, totalProductsReordered: data.totalProductsReordered, errors: data.errors ?? [], runAt: data.runAt });
+              queryClient.invalidateQueries({ queryKey: ["collection-sort-last-run"] });
+              continue;
+            }
+            processedCount++;
+            const nextIndex = processedCount;
+            setDcCollectionProgress((prev) =>
+              prev.map((p, idx) => {
+                if (p.id === data.collectionId) return { ...p, status: data.status, productsReordered: data.productsReordered, error: data.error };
+                if (idx === nextIndex && p.status === "pending") return { ...p, status: "processing" };
+                return p;
+              }),
+            );
+          } catch { /* ignore malformed lines */ }
+        }
+      }
+    } catch (e: unknown) {
+      toast.error(`Discount sort failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setDcRunning(false);
+    }
+  }
+
+  const dcDoneCount = dcCollectionProgress.filter((p) => p.status === "done" || p.status === "failed").length;
+  const dcProgressPercent = dcCollectionProgress.length > 0 ? Math.round((dcDoneCount / dcCollectionProgress.length) * 100) : 0;
+  const dcCurrentlyProcessing = dcCollectionProgress.find((p) => p.status === "processing");
+
+  // ── Module 3 run ─────────────────────────────────────────────────────────────
+  function openInvConfirmModal() {
+    if (invSortableCollections.length === 0) { toast.error("No collections selected to sort."); return; }
+    setInvConfirmOpen(true);
+  }
+
+  async function invConfirmAndRun() {
+    setInvConfirmOpen(false);
+    setInvRunning(true);
+    setInvRunSummary(null);
+
+    const initialProgress: CollectionProgress[] = invSortableCollections.map((c) => ({
+      id: c.id, title: c.title, status: "pending",
+    }));
+    setInvCollectionProgress(initialProgress);
+    setInvCollectionProgress((prev) => prev.map((p, i) => (i === 0 ? { ...p, status: "processing" } : p)));
+
+    try {
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/collection-sort-manager`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${SUPABASE_ANON_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "run_inventory_sort",
+          storeId: selectedStoreId,
+          collections: invSortableCollections.map((c) => c.id),
+          sortRule: invSortRule,
+          lowStockThreshold,
+          overstockThreshold,
+        }),
+      });
+      if (!response.ok || !response.body) throw new Error(`Edge function returned ${response.status}`);
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let processedCount = 0;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const data = JSON.parse(line);
+            if (data.type === "summary") {
+              setInvRunSummary({ collectionsTotal: data.collectionsTotal, collectionsSorted: data.collectionsSorted, totalProductsReordered: data.totalProductsReordered, errors: data.errors ?? [], runAt: data.runAt });
+              queryClient.invalidateQueries({ queryKey: ["collection-sort-last-run"] });
+              continue;
+            }
+            processedCount++;
+            const nextIndex = processedCount;
+            setInvCollectionProgress((prev) =>
+              prev.map((p, idx) => {
+                if (p.id === data.collectionId) return { ...p, status: data.status, productsReordered: data.productsReordered, error: data.error };
+                if (idx === nextIndex && p.status === "pending") return { ...p, status: "processing" };
+                return p;
+              }),
+            );
+          } catch { /* ignore malformed lines */ }
+        }
+      }
+    } catch (e: unknown) {
+      toast.error(`Inventory sort failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setInvRunning(false);
+    }
+  }
+
+  const invDoneCount = invCollectionProgress.filter((p) => p.status === "done" || p.status === "failed").length;
+  const invProgressPercent = invCollectionProgress.length > 0 ? Math.round((invDoneCount / invCollectionProgress.length) * 100) : 0;
+  const invCurrentlyProcessing = invCollectionProgress.find((p) => p.status === "processing");
 
   // ── Sort summary text ─────────────────────────────────────────────────────
   const sortSummaryText = useMemo(() => buildSortSummary(sortRules), [sortRules]);
@@ -940,6 +1354,596 @@ export default function CollectionSortManager() {
         </Card>
       )}
 
+      {/* ══════════════════════════════════════════════════════════════════════
+           MODULE 1: Sales & Performance
+          ══════════════════════════════════════════════════════════════════════ */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Sales &amp; Performance Sort</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-xs text-muted-foreground">
+            Rank products by sales data from your synced order history.
+          </p>
+
+          {/* Sort rule selector */}
+          <div className="flex items-center gap-3">
+            <Label className="shrink-0 text-sm font-medium">Sort Rule</Label>
+            <Select value={spSortRule} onValueChange={(v) => setSpSortRule(v as typeof spSortRule)}>
+              <SelectTrigger className="w-[280px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="best_selling_first">Best Selling First (by order count)</SelectItem>
+                <SelectItem value="revenue_first">Revenue First (quantity × price)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Two-panel collection selector */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="border rounded-md flex flex-col">
+              <div className="p-3 border-b bg-muted/30">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium">
+                    Include Collections
+                    <Badge variant="secondary" className="ml-2">{spIncludedCollections.length}</Badge>
+                  </span>
+                  <div className="flex gap-1">
+                    <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={spSelectAll}>
+                      <CheckSquare className="h-3 w-3 mr-1" /> All
+                    </Button>
+                    <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={spDeselectAll}>
+                      <Square className="h-3 w-3 mr-1" /> None
+                    </Button>
+                  </div>
+                </div>
+                <Input placeholder="Search collections…" value={spIncludeSearch} onChange={(e) => setSpIncludeSearch(e.target.value)} className="h-7 text-xs" />
+              </div>
+              <ScrollArea className="h-56">
+                <div className="p-1">
+                  {spFilteredIncluded.length === 0 && (
+                    <p className="text-xs text-muted-foreground p-3 text-center">{loadingCollections ? "Loading…" : "No collections"}</p>
+                  )}
+                  {spFilteredIncluded.map((c) => (
+                    <div key={c.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted/50 group">
+                      <Checkbox checked={spCheckedIds.has(c.id)} onCheckedChange={() => spToggleChecked(c.id)} />
+                      <span className="text-xs flex-1 truncate" title={c.title}>{c.title}</span>
+                      <Button variant="ghost" size="sm" className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive" title="Move to Exclude" onClick={() => spMoveToExclude(c.id)}>
+                        <ChevronRight className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+              <div className="p-2 border-t bg-muted/20 text-xs text-muted-foreground">
+                {spSortableCollections.length} selected for sort
+              </div>
+            </div>
+            <div className="border rounded-md flex flex-col">
+              <div className="p-3 border-b bg-muted/30">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium">
+                    Exclude Collections
+                    <Badge variant="outline" className="ml-2">{spExcludedCollections.length}</Badge>
+                  </span>
+                </div>
+                <Input placeholder="Search excluded…" value={spExcludeSearch} onChange={(e) => setSpExcludeSearch(e.target.value)} className="h-7 text-xs" />
+              </div>
+              <ScrollArea className="h-56">
+                <div className="p-1">
+                  {spFilteredExcluded.length === 0 && (
+                    <p className="text-xs text-muted-foreground p-3 text-center">No excluded collections</p>
+                  )}
+                  {spFilteredExcluded.map((c) => (
+                    <div key={c.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted/50 group">
+                      <Button variant="ghost" size="sm" className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-primary" title="Move back to Include" onClick={() => spMoveToInclude(c.id)}>
+                        <ChevronLeft className="h-3 w-3" />
+                      </Button>
+                      <span className="text-xs flex-1 truncate line-through text-muted-foreground" title={c.title}>{c.title}</span>
+                      <X className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 cursor-pointer hover:text-destructive" onClick={() => spMoveToInclude(c.id)} />
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+              <div className="p-2 border-t bg-muted/20 text-xs text-muted-foreground">These will be skipped</div>
+            </div>
+          </div>
+
+          <div className="flex justify-end">
+            <Button size="lg" className="px-10 text-base font-semibold" onClick={openSpConfirmModal} disabled={spRunning || spSortableCollections.length === 0 || loadingCollections}>
+              {spRunning ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Sorting…</> : <><ArrowUpDown className="h-4 w-4 mr-2" /> Run Sales Sort</>}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Module 1 progress */}
+      {spCollectionProgress.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center justify-between">
+              <span>Sales Sort Progress</span>
+              <Badge variant={spRunning ? "secondary" : spRunSummary ? "default" : "outline"}>
+                {spRunning ? "Running" : spRunSummary ? "Complete" : "Idle"}
+              </Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <div className="flex justify-between text-xs text-muted-foreground mb-1">
+                <span>{spDoneCount} / {spCollectionProgress.length} collections</span>
+                <span>{spProgressPercent}%</span>
+              </div>
+              <Progress value={spProgressPercent} className="h-2" />
+            </div>
+            {spCurrentlyProcessing && (
+              <div className="flex items-center gap-2 text-sm">
+                <Loader2 className="h-4 w-4 animate-spin text-primary shrink-0" />
+                <span>Processing: <strong>{spCurrentlyProcessing.title}</strong></span>
+              </div>
+            )}
+            <ScrollArea className="h-64">
+              <div className="space-y-1">
+                {spCollectionProgress.map((item) => (
+                  <div key={item.id} className="flex items-center gap-3 px-2 py-1.5 rounded text-sm">
+                    <span className="shrink-0">
+                      {item.status === "pending" && <span className="h-2 w-2 rounded-full bg-muted-foreground/30 inline-block" />}
+                      {item.status === "processing" && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
+                      {item.status === "done" && <span className="h-2 w-2 rounded-full bg-emerald-500 inline-block" />}
+                      {item.status === "failed" && <span className="h-2 w-2 rounded-full bg-destructive inline-block" />}
+                    </span>
+                    <span className="flex-1 truncate">{item.title}</span>
+                    {item.status === "done" && <span className="text-xs text-muted-foreground shrink-0">{item.productsReordered} products</span>}
+                    {item.status === "failed" && <span className="text-xs text-destructive shrink-0 max-w-[180px] truncate" title={item.error}>{item.error}</span>}
+                    <Badge variant={item.status === "done" ? "default" : item.status === "failed" ? "destructive" : item.status === "processing" ? "secondary" : "outline"} className="text-xs h-5 shrink-0">
+                      {item.status}
+                    </Badge>
+                  </div>
+                ))}
+              </div>
+            </ScrollArea>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Module 1 run summary */}
+      {spRunSummary && (
+        <Card>
+          <CardHeader><CardTitle className="text-base">Sales Sort Summary</CardTitle></CardHeader>
+          <CardContent className="space-y-3">
+            <div className="grid grid-cols-3 gap-3">
+              <div className="bg-muted rounded-md p-3 text-center">
+                <p className="text-2xl font-bold">{spRunSummary.collectionsSorted}</p>
+                <p className="text-xs text-muted-foreground">Collections sorted</p>
+              </div>
+              <div className="bg-muted rounded-md p-3 text-center">
+                <p className="text-2xl font-bold">{spRunSummary.totalProductsReordered}</p>
+                <p className="text-xs text-muted-foreground">Products reordered</p>
+              </div>
+              <div className="bg-muted rounded-md p-3 text-center">
+                <p className={`text-2xl font-bold ${spRunSummary.errors.length > 0 ? "text-destructive" : "text-emerald-500"}`}>{spRunSummary.errors.length}</p>
+                <p className="text-xs text-muted-foreground">Errors</p>
+              </div>
+            </div>
+            {spRunSummary.errors.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-destructive">Failed collections:</p>
+                {spRunSummary.errors.map((err, i) => (
+                  <div key={i} className="text-xs bg-destructive/10 rounded p-2">
+                    <span className="font-medium">{err.title}</span>
+                    <span className="text-muted-foreground ml-2">{err.error}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground">Completed at {new Date(spRunSummary.runAt).toLocaleString()}</p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════
+           MODULE 2: Discount & Campaign
+          ══════════════════════════════════════════════════════════════════════ */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Discount &amp; Campaign Sort</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-xs text-muted-foreground">
+            Surface discounted products by comparing price vs compare-at price.
+          </p>
+
+          {/* Sort rule selector */}
+          <div className="flex items-center gap-3">
+            <Label className="shrink-0 text-sm font-medium">Sort Rule</Label>
+            <Select value={dcSortRule} onValueChange={(v) => setDcSortRule(v as typeof dcSortRule)}>
+              <SelectTrigger className="w-[320px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="discounted_first">Discounted Products First</SelectItem>
+                <SelectItem value="highest_discount_first">Highest Discount % First</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Two-panel collection selector */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="border rounded-md flex flex-col">
+              <div className="p-3 border-b bg-muted/30">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium">
+                    Include Collections
+                    <Badge variant="secondary" className="ml-2">{dcIncludedCollections.length}</Badge>
+                  </span>
+                  <div className="flex gap-1">
+                    <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={dcSelectAll}>
+                      <CheckSquare className="h-3 w-3 mr-1" /> All
+                    </Button>
+                    <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={dcDeselectAll}>
+                      <Square className="h-3 w-3 mr-1" /> None
+                    </Button>
+                  </div>
+                </div>
+                <Input placeholder="Search collections…" value={dcIncludeSearch} onChange={(e) => setDcIncludeSearch(e.target.value)} className="h-7 text-xs" />
+              </div>
+              <ScrollArea className="h-56">
+                <div className="p-1">
+                  {dcFilteredIncluded.length === 0 && (
+                    <p className="text-xs text-muted-foreground p-3 text-center">{loadingCollections ? "Loading…" : "No collections"}</p>
+                  )}
+                  {dcFilteredIncluded.map((c) => (
+                    <div key={c.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted/50 group">
+                      <Checkbox checked={dcCheckedIds.has(c.id)} onCheckedChange={() => dcToggleChecked(c.id)} />
+                      <span className="text-xs flex-1 truncate" title={c.title}>{c.title}</span>
+                      <Button variant="ghost" size="sm" className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive" title="Move to Exclude" onClick={() => dcMoveToExclude(c.id)}>
+                        <ChevronRight className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+              <div className="p-2 border-t bg-muted/20 text-xs text-muted-foreground">
+                {dcSortableCollections.length} selected for sort
+              </div>
+            </div>
+            <div className="border rounded-md flex flex-col">
+              <div className="p-3 border-b bg-muted/30">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium">
+                    Exclude Collections
+                    <Badge variant="outline" className="ml-2">{dcExcludedCollections.length}</Badge>
+                  </span>
+                </div>
+                <Input placeholder="Search excluded…" value={dcExcludeSearch} onChange={(e) => setDcExcludeSearch(e.target.value)} className="h-7 text-xs" />
+              </div>
+              <ScrollArea className="h-56">
+                <div className="p-1">
+                  {dcFilteredExcluded.length === 0 && (
+                    <p className="text-xs text-muted-foreground p-3 text-center">No excluded collections</p>
+                  )}
+                  {dcFilteredExcluded.map((c) => (
+                    <div key={c.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted/50 group">
+                      <Button variant="ghost" size="sm" className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-primary" title="Move back to Include" onClick={() => dcMoveToInclude(c.id)}>
+                        <ChevronLeft className="h-3 w-3" />
+                      </Button>
+                      <span className="text-xs flex-1 truncate line-through text-muted-foreground" title={c.title}>{c.title}</span>
+                      <X className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 cursor-pointer hover:text-destructive" onClick={() => dcMoveToInclude(c.id)} />
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+              <div className="p-2 border-t bg-muted/20 text-xs text-muted-foreground">These will be skipped</div>
+            </div>
+          </div>
+
+          <div className="flex justify-end">
+            <Button size="lg" className="px-10 text-base font-semibold" onClick={openDcConfirmModal} disabled={dcRunning || dcSortableCollections.length === 0 || loadingCollections}>
+              {dcRunning ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Sorting…</> : <><ArrowUpDown className="h-4 w-4 mr-2" /> Run Discount Sort</>}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Module 2 progress */}
+      {dcCollectionProgress.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center justify-between">
+              <span>Discount Sort Progress</span>
+              <Badge variant={dcRunning ? "secondary" : dcRunSummary ? "default" : "outline"}>
+                {dcRunning ? "Running" : dcRunSummary ? "Complete" : "Idle"}
+              </Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <div className="flex justify-between text-xs text-muted-foreground mb-1">
+                <span>{dcDoneCount} / {dcCollectionProgress.length} collections</span>
+                <span>{dcProgressPercent}%</span>
+              </div>
+              <Progress value={dcProgressPercent} className="h-2" />
+            </div>
+            {dcCurrentlyProcessing && (
+              <div className="flex items-center gap-2 text-sm">
+                <Loader2 className="h-4 w-4 animate-spin text-primary shrink-0" />
+                <span>Processing: <strong>{dcCurrentlyProcessing.title}</strong></span>
+              </div>
+            )}
+            <ScrollArea className="h-64">
+              <div className="space-y-1">
+                {dcCollectionProgress.map((item) => (
+                  <div key={item.id} className="flex items-center gap-3 px-2 py-1.5 rounded text-sm">
+                    <span className="shrink-0">
+                      {item.status === "pending" && <span className="h-2 w-2 rounded-full bg-muted-foreground/30 inline-block" />}
+                      {item.status === "processing" && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
+                      {item.status === "done" && <span className="h-2 w-2 rounded-full bg-emerald-500 inline-block" />}
+                      {item.status === "failed" && <span className="h-2 w-2 rounded-full bg-destructive inline-block" />}
+                    </span>
+                    <span className="flex-1 truncate">{item.title}</span>
+                    {item.status === "done" && <span className="text-xs text-muted-foreground shrink-0">{item.productsReordered} products</span>}
+                    {item.status === "failed" && <span className="text-xs text-destructive shrink-0 max-w-[180px] truncate" title={item.error}>{item.error}</span>}
+                    <Badge variant={item.status === "done" ? "default" : item.status === "failed" ? "destructive" : item.status === "processing" ? "secondary" : "outline"} className="text-xs h-5 shrink-0">
+                      {item.status}
+                    </Badge>
+                  </div>
+                ))}
+              </div>
+            </ScrollArea>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Module 2 run summary */}
+      {dcRunSummary && (
+        <Card>
+          <CardHeader><CardTitle className="text-base">Discount Sort Summary</CardTitle></CardHeader>
+          <CardContent className="space-y-3">
+            <div className="grid grid-cols-3 gap-3">
+              <div className="bg-muted rounded-md p-3 text-center">
+                <p className="text-2xl font-bold">{dcRunSummary.collectionsSorted}</p>
+                <p className="text-xs text-muted-foreground">Collections sorted</p>
+              </div>
+              <div className="bg-muted rounded-md p-3 text-center">
+                <p className="text-2xl font-bold">{dcRunSummary.totalProductsReordered}</p>
+                <p className="text-xs text-muted-foreground">Products reordered</p>
+              </div>
+              <div className="bg-muted rounded-md p-3 text-center">
+                <p className={`text-2xl font-bold ${dcRunSummary.errors.length > 0 ? "text-destructive" : "text-emerald-500"}`}>{dcRunSummary.errors.length}</p>
+                <p className="text-xs text-muted-foreground">Errors</p>
+              </div>
+            </div>
+            {dcRunSummary.errors.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-destructive">Failed collections:</p>
+                {dcRunSummary.errors.map((err, i) => (
+                  <div key={i} className="text-xs bg-destructive/10 rounded p-2">
+                    <span className="font-medium">{err.title}</span>
+                    <span className="text-muted-foreground ml-2">{err.error}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground">Completed at {new Date(dcRunSummary.runAt).toLocaleString()}</p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════
+           MODULE 3: Inventory
+          ══════════════════════════════════════════════════════════════════════ */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Inventory Sort</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-xs text-muted-foreground">
+            Sort products by stock level to drive urgency or clear overstock.
+          </p>
+
+          {/* Sort rule selector */}
+          <div className="flex items-center gap-3">
+            <Label className="shrink-0 text-sm font-medium">Sort Rule</Label>
+            <Select value={invSortRule} onValueChange={(v) => setInvSortRule(v as typeof invSortRule)}>
+              <SelectTrigger className="w-[320px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="low_stock_first">Low Stock First (Urgency)</SelectItem>
+                <SelectItem value="overstock_first">Overstock First (Clearance)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Threshold inputs */}
+          <div className="flex items-center gap-6">
+            <div className="flex items-center gap-2">
+              <Label className="text-xs shrink-0">Low stock threshold</Label>
+              <Input
+                type="number"
+                min={1}
+                value={lowStockThreshold}
+                onChange={(e) => setLowStockThreshold(Math.max(1, Number(e.target.value)))}
+                className="h-7 w-20 text-xs"
+              />
+              <span className="text-xs text-muted-foreground">units</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Label className="text-xs shrink-0">Overstock threshold</Label>
+              <Input
+                type="number"
+                min={1}
+                value={overstockThreshold}
+                onChange={(e) => setOverstockThreshold(Math.max(1, Number(e.target.value)))}
+                className="h-7 w-20 text-xs"
+              />
+              <span className="text-xs text-muted-foreground">units</span>
+            </div>
+          </div>
+
+          {/* Two-panel collection selector */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="border rounded-md flex flex-col">
+              <div className="p-3 border-b bg-muted/30">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium">
+                    Include Collections
+                    <Badge variant="secondary" className="ml-2">{invIncludedCollections.length}</Badge>
+                  </span>
+                  <div className="flex gap-1">
+                    <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={invSelectAll}>
+                      <CheckSquare className="h-3 w-3 mr-1" /> All
+                    </Button>
+                    <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={invDeselectAll}>
+                      <Square className="h-3 w-3 mr-1" /> None
+                    </Button>
+                  </div>
+                </div>
+                <Input placeholder="Search collections…" value={invIncludeSearch} onChange={(e) => setInvIncludeSearch(e.target.value)} className="h-7 text-xs" />
+              </div>
+              <ScrollArea className="h-56">
+                <div className="p-1">
+                  {invFilteredIncluded.length === 0 && (
+                    <p className="text-xs text-muted-foreground p-3 text-center">{loadingCollections ? "Loading…" : "No collections"}</p>
+                  )}
+                  {invFilteredIncluded.map((c) => (
+                    <div key={c.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted/50 group">
+                      <Checkbox checked={invCheckedIds.has(c.id)} onCheckedChange={() => invToggleChecked(c.id)} />
+                      <span className="text-xs flex-1 truncate" title={c.title}>{c.title}</span>
+                      <Button variant="ghost" size="sm" className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive" title="Move to Exclude" onClick={() => invMoveToExclude(c.id)}>
+                        <ChevronRight className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+              <div className="p-2 border-t bg-muted/20 text-xs text-muted-foreground">
+                {invSortableCollections.length} selected for sort
+              </div>
+            </div>
+            <div className="border rounded-md flex flex-col">
+              <div className="p-3 border-b bg-muted/30">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium">
+                    Exclude Collections
+                    <Badge variant="outline" className="ml-2">{invExcludedCollections.length}</Badge>
+                  </span>
+                </div>
+                <Input placeholder="Search excluded…" value={invExcludeSearch} onChange={(e) => setInvExcludeSearch(e.target.value)} className="h-7 text-xs" />
+              </div>
+              <ScrollArea className="h-56">
+                <div className="p-1">
+                  {invFilteredExcluded.length === 0 && (
+                    <p className="text-xs text-muted-foreground p-3 text-center">No excluded collections</p>
+                  )}
+                  {invFilteredExcluded.map((c) => (
+                    <div key={c.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted/50 group">
+                      <Button variant="ghost" size="sm" className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-primary" title="Move back to Include" onClick={() => invMoveToInclude(c.id)}>
+                        <ChevronLeft className="h-3 w-3" />
+                      </Button>
+                      <span className="text-xs flex-1 truncate line-through text-muted-foreground" title={c.title}>{c.title}</span>
+                      <X className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 cursor-pointer hover:text-destructive" onClick={() => invMoveToInclude(c.id)} />
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+              <div className="p-2 border-t bg-muted/20 text-xs text-muted-foreground">These will be skipped</div>
+            </div>
+          </div>
+
+          <div className="flex justify-end">
+            <Button size="lg" className="px-10 text-base font-semibold" onClick={openInvConfirmModal} disabled={invRunning || invSortableCollections.length === 0 || loadingCollections}>
+              {invRunning ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Sorting…</> : <><ArrowUpDown className="h-4 w-4 mr-2" /> Run Inventory Sort</>}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Module 3 progress */}
+      {invCollectionProgress.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center justify-between">
+              <span>Inventory Sort Progress</span>
+              <Badge variant={invRunning ? "secondary" : invRunSummary ? "default" : "outline"}>
+                {invRunning ? "Running" : invRunSummary ? "Complete" : "Idle"}
+              </Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <div className="flex justify-between text-xs text-muted-foreground mb-1">
+                <span>{invDoneCount} / {invCollectionProgress.length} collections</span>
+                <span>{invProgressPercent}%</span>
+              </div>
+              <Progress value={invProgressPercent} className="h-2" />
+            </div>
+            {invCurrentlyProcessing && (
+              <div className="flex items-center gap-2 text-sm">
+                <Loader2 className="h-4 w-4 animate-spin text-primary shrink-0" />
+                <span>Processing: <strong>{invCurrentlyProcessing.title}</strong></span>
+              </div>
+            )}
+            <ScrollArea className="h-64">
+              <div className="space-y-1">
+                {invCollectionProgress.map((item) => (
+                  <div key={item.id} className="flex items-center gap-3 px-2 py-1.5 rounded text-sm">
+                    <span className="shrink-0">
+                      {item.status === "pending" && <span className="h-2 w-2 rounded-full bg-muted-foreground/30 inline-block" />}
+                      {item.status === "processing" && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
+                      {item.status === "done" && <span className="h-2 w-2 rounded-full bg-emerald-500 inline-block" />}
+                      {item.status === "failed" && <span className="h-2 w-2 rounded-full bg-destructive inline-block" />}
+                    </span>
+                    <span className="flex-1 truncate">{item.title}</span>
+                    {item.status === "done" && <span className="text-xs text-muted-foreground shrink-0">{item.productsReordered} products</span>}
+                    {item.status === "failed" && <span className="text-xs text-destructive shrink-0 max-w-[180px] truncate" title={item.error}>{item.error}</span>}
+                    <Badge variant={item.status === "done" ? "default" : item.status === "failed" ? "destructive" : item.status === "processing" ? "secondary" : "outline"} className="text-xs h-5 shrink-0">
+                      {item.status}
+                    </Badge>
+                  </div>
+                ))}
+              </div>
+            </ScrollArea>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Module 3 run summary */}
+      {invRunSummary && (
+        <Card>
+          <CardHeader><CardTitle className="text-base">Inventory Sort Summary</CardTitle></CardHeader>
+          <CardContent className="space-y-3">
+            <div className="grid grid-cols-3 gap-3">
+              <div className="bg-muted rounded-md p-3 text-center">
+                <p className="text-2xl font-bold">{invRunSummary.collectionsSorted}</p>
+                <p className="text-xs text-muted-foreground">Collections sorted</p>
+              </div>
+              <div className="bg-muted rounded-md p-3 text-center">
+                <p className="text-2xl font-bold">{invRunSummary.totalProductsReordered}</p>
+                <p className="text-xs text-muted-foreground">Products reordered</p>
+              </div>
+              <div className="bg-muted rounded-md p-3 text-center">
+                <p className={`text-2xl font-bold ${invRunSummary.errors.length > 0 ? "text-destructive" : "text-emerald-500"}`}>{invRunSummary.errors.length}</p>
+                <p className="text-xs text-muted-foreground">Errors</p>
+              </div>
+            </div>
+            {invRunSummary.errors.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-destructive">Failed collections:</p>
+                {invRunSummary.errors.map((err, i) => (
+                  <div key={i} className="text-xs bg-destructive/10 rounded p-2">
+                    <span className="font-medium">{err.title}</span>
+                    <span className="text-muted-foreground ml-2">{err.error}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground">Completed at {new Date(invRunSummary.runAt).toLocaleString()}</p>
+          </CardContent>
+        </Card>
+      )}
+
       {/* ── Confirmation Modal ── */}
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogContent className="sm:max-w-lg">
@@ -1011,6 +2015,133 @@ export default function CollectionSortManager() {
             <Button onClick={confirmAndRun}>
               Confirm &amp; Run Sort
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Module 1 Confirmation Modal ── */}
+      <Dialog open={spConfirmOpen} onOpenChange={setSpConfirmOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Confirm Sales Sort Run</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 text-sm">
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Store</p>
+              <p className="font-medium">{selectedStore?.store_name ?? "Unknown"}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Sort Rule</p>
+              <p className="font-medium">{spSortRule === "best_selling_first" ? "Best Selling First (by order count)" : "Revenue First (quantity × price)"}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                Collections to sort ({spSortableCollections.length})
+              </p>
+              <ScrollArea className="h-32 border rounded-md">
+                <div className="p-2 space-y-0.5">
+                  {spSortableCollections.map((c) => (
+                    <p key={c.id} className="text-xs py-0.5">{c.title}</p>
+                  ))}
+                </div>
+              </ScrollArea>
+            </div>
+            <div className="flex gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3">
+              <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
+              <p className="text-xs text-amber-700 dark:text-amber-400">
+                This will permanently reorder products in the selected collections. This cannot be automatically undone.
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSpConfirmOpen(false)}>Cancel</Button>
+            <Button onClick={spConfirmAndRun}>Confirm &amp; Run Sales Sort</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Module 2 Confirmation Modal ── */}
+      <Dialog open={dcConfirmOpen} onOpenChange={setDcConfirmOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Confirm Discount Sort Run</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 text-sm">
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Store</p>
+              <p className="font-medium">{selectedStore?.store_name ?? "Unknown"}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Sort Rule</p>
+              <p className="font-medium">{dcSortRule === "discounted_first" ? "Discounted Products First" : "Highest Discount % First"}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                Collections to sort ({dcSortableCollections.length})
+              </p>
+              <ScrollArea className="h-32 border rounded-md">
+                <div className="p-2 space-y-0.5">
+                  {dcSortableCollections.map((c) => (
+                    <p key={c.id} className="text-xs py-0.5">{c.title}</p>
+                  ))}
+                </div>
+              </ScrollArea>
+            </div>
+            <div className="flex gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3">
+              <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
+              <p className="text-xs text-amber-700 dark:text-amber-400">
+                This will permanently reorder products in the selected collections. This cannot be automatically undone.
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDcConfirmOpen(false)}>Cancel</Button>
+            <Button onClick={dcConfirmAndRun}>Confirm &amp; Run Discount Sort</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Module 3 Confirmation Modal ── */}
+      <Dialog open={invConfirmOpen} onOpenChange={setInvConfirmOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Confirm Inventory Sort Run</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 text-sm">
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Store</p>
+              <p className="font-medium">{selectedStore?.store_name ?? "Unknown"}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Sort Rule</p>
+              <p className="font-medium">
+                {invSortRule === "low_stock_first"
+                  ? `Low Stock First — threshold: ${lowStockThreshold} units`
+                  : `Overstock First — threshold: ${overstockThreshold} units`}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                Collections to sort ({invSortableCollections.length})
+              </p>
+              <ScrollArea className="h-32 border rounded-md">
+                <div className="p-2 space-y-0.5">
+                  {invSortableCollections.map((c) => (
+                    <p key={c.id} className="text-xs py-0.5">{c.title}</p>
+                  ))}
+                </div>
+              </ScrollArea>
+            </div>
+            <div className="flex gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3">
+              <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
+              <p className="text-xs text-amber-700 dark:text-amber-400">
+                This will permanently reorder products in the selected collections. This cannot be automatically undone.
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setInvConfirmOpen(false)}>Cancel</Button>
+            <Button onClick={invConfirmAndRun}>Confirm &amp; Run Inventory Sort</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

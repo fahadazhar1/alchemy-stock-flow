@@ -39,20 +39,14 @@ export default function CampaignPerformance() {
   const handleDeactivate = async (campaignId: string, currentStatus: string) => {
     try {
       if (currentStatus === "Executed") {
-        const { data: items, error: itemsErr } = await supabase
-          .from("pricing_campaign_items").select("variant_id").eq("campaign_id", campaignId);
-        if (itemsErr) throw itemsErr;
-        const variantIds = (items ?? []).map(item => item.variant_id).filter(Boolean);
-        if (variantIds.length > 0) {
-          const { error: rpcError } = await supabase.rpc("revert_multiple_variant_pricing", { p_variant_ids: variantIds });
-          if (rpcError) throw rpcError;
-          const { data, error: pushErr } = await supabase.functions.invoke("shopify-sync", {
-            body: { action: "revert_prices", campaign_id: campaignId },
-          });
-          if (pushErr || (data && !data.ok)) {
-            const msg = data?.error ?? data?.errors?.[0] ?? pushErr?.message ?? "Unknown error";
-            toast.warning("Campaign ended but Shopify revert failed: " + msg);
-          }
+        const { error: rpcError } = await supabase.rpc("revert_variant_pricing", { p_campaign_id: campaignId });
+        if (rpcError) throw rpcError;
+        const { data, error: pushErr } = await supabase.functions.invoke("shopify-sync", {
+          body: { action: "revert_prices", campaign_id: campaignId },
+        });
+        if (pushErr || (data && !data.ok)) {
+          const msg = data?.error ?? data?.errors?.[0] ?? pushErr?.message ?? "Unknown error";
+          toast.warning("Campaign ended but Shopify revert failed: " + msg);
         }
       }
       const { error } = await supabase.from("pricing_campaigns")
@@ -66,16 +60,10 @@ export default function CampaignPerformance() {
 
   const handleRemoveDiscounts = async (campaignId: string, campaignName: string) => {
     try {
-      const { data: items, error: itemsErr } = await supabase
-        .from("pricing_campaign_items").select("variant_id").eq("campaign_id", campaignId);
-      if (itemsErr) throw itemsErr;
-      const variantIdsToRevert = (items ?? []).map(item => item.variant_id).filter(Boolean);
-      const { data: rpcResult, error: rpcError } = await supabase.rpc("revert_multiple_variant_pricing", { p_variant_ids: variantIdsToRevert });
+      const { data: rpcResult, error: rpcError } = await supabase.rpc("revert_variant_pricing", { p_campaign_id: campaignId });
       if (rpcError) throw rpcError;
       const revertedCount = Number((rpcResult as Record<string, unknown>)?.affected_count || 0);
-      // ... rest of the code
       toast.success(`Reverted ${revertedCount} variants — pushing original prices to Shopify…`);
-
       const { data, error: pushErr } = await supabase.functions.invoke("shopify-sync", {
         body: { action: "revert_prices", campaign_id: campaignId },
       });

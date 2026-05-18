@@ -324,6 +324,272 @@ async function reorderCollectionProducts(
   }
 }
 
+// ── Extract numeric Shopify ID from GID ─────────────────────────────────────
+
+function extractShopifyNumericId(gid: string): string {
+  const parts = gid.split("/");
+  return parts[parts.length - 1];
+}
+
+// ── Fetch products with pricing for discount sort ────────────────────────────
+
+interface CollectionProductWithPricing {
+  id: string;
+  title: string;
+  price: number;
+  compareAtPrice: number | null;
+}
+
+async function fetchCollectionProductsWithPricing(
+  domain: string,
+  token: string,
+  collectionId: string,
+): Promise<{ products: CollectionProductWithPricing[]; title: string }> {
+  const products: CollectionProductWithPricing[] = [];
+  let cursor: string | null = null;
+  let collectionTitle = collectionId;
+
+  const query = `
+    query GetCollectionProductsPricing($id: ID!, $first: Int!, $after: String) {
+      collection(id: $id) {
+        title
+        products(first: $first, after: $after) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            id title
+            variants(first: 1) { nodes { price compareAtPrice } }
+          }
+        }
+      }
+    }
+  `;
+
+  do {
+    const res = await shopifyGQL(domain, token, query, { id: collectionId, first: 250, after: cursor ?? undefined });
+    if (!res.ok) throw new Error(`Product fetch failed [${res.status}]`);
+    const json = await res.json();
+    if (json.errors?.length) throw new Error(json.errors[0].message);
+    const collection = json.data?.collection;
+    if (!collection) throw new Error(`Collection ${collectionId} not found`);
+    collectionTitle = collection.title;
+    for (const p of collection.products.nodes) {
+      const v = p.variants?.nodes?.[0];
+      products.push({
+        id: p.id,
+        title: p.title,
+        price: parseFloat(v?.price ?? "0"),
+        compareAtPrice: v?.compareAtPrice ? parseFloat(v.compareAtPrice) : null,
+      });
+    }
+    cursor = collection.products.pageInfo.hasNextPage ? collection.products.pageInfo.endCursor : null;
+  } while (cursor);
+
+  return { products, title: collectionTitle };
+}
+
+// ── Fetch products with inventory quantity for inventory sort ─────────────────
+
+interface CollectionProductWithInventory {
+  id: string;
+  title: string;
+  inventoryQuantity: number;
+}
+
+async function fetchCollectionProductsWithInventory(
+  domain: string,
+  token: string,
+  collectionId: string,
+): Promise<{ products: CollectionProductWithInventory[]; title: string }> {
+  const products: CollectionProductWithInventory[] = [];
+  let cursor: string | null = null;
+  let collectionTitle = collectionId;
+
+  const query = `
+    query GetCollectionProductsInventory($id: ID!, $first: Int!, $after: String) {
+      collection(id: $id) {
+        title
+        products(first: $first, after: $after) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            id title
+            variants(first: 250) { nodes { inventoryQuantity } }
+          }
+        }
+      }
+    }
+  `;
+
+  do {
+    const res = await shopifyGQL(domain, token, query, { id: collectionId, first: 250, after: cursor ?? undefined });
+    if (!res.ok) throw new Error(`Product fetch failed [${res.status}]`);
+    const json = await res.json();
+    if (json.errors?.length) throw new Error(json.errors[0].message);
+    const collection = json.data?.collection;
+    if (!collection) throw new Error(`Collection ${collectionId} not found`);
+    collectionTitle = collection.title;
+    for (const p of collection.products.nodes) {
+      const totalQty = (p.variants?.nodes ?? []).reduce(
+        (sum: number, v: { inventoryQuantity: number | null }) => sum + (v.inventoryQuantity ?? 0),
+        0,
+      );
+      products.push({ id: p.id, title: p.title, inventoryQuantity: totalQty });
+    }
+    cursor = collection.products.pageInfo.hasNextPage ? collection.products.pageInfo.endCursor : null;
+  } while (cursor);
+
+  return { products, title: collectionTitle };
+}
+
+// ── Sales data from Supabase ─────────────────────────────────────────────────
+
+async function fetchSalesData(
+  supabase: ReturnType<typeof createClient>,
+  storeId: string,
+  shopifyGids: string[],
+): Promise<Map<string, { orderCount: number; revenue: number }>> {
+  // Use an RPC that does the join + aggregation server-side, scoped to this store.
+  // Prior in-memory approach hit two bugs: PostgREST 1000-row default limit (truncated results)
+  // and nginx 8KB URL limit (silent empty results when using .in() with large arrays).
+  const numericIds = shopifyGids.map(extractShopifyNumericId);
+
+  const { data: rows, error } = await supabase.rpc("get_store_sales_data", {
+    p_store_id: storeId,
+    p_numeric_product_ids: numericIds,
+  });
+
+  if (error) {
+    console.error("[fetchSalesData] RPC error:", error.message);
+    return new Map();
+  }
+
+  const result = new Map<string, { orderCount: number; revenue: number }>();
+  for (const row of (rows ?? []) as Array<{ shopify_product_id: string; order_count: number; revenue: number }>) {
+    const gid = shopifyGids.find((g) => extractShopifyNumericId(g) === row.shopify_product_id);
+    if (gid) {
+      result.set(gid, {
+        orderCount: Number(row.order_count),
+        revenue: Number(row.revenue),
+      });
+    }
+  }
+  return result;
+}
+
+// ── Sort: discount ───────────────────────────────────────────────────────────
+
+function sortProductsByDiscount(
+  products: CollectionProductWithPricing[],
+  sortRule: string,
+): CollectionProductWithPricing[] {
+  return [...products].sort((a, b) => {
+    const aDiscount = a.compareAtPrice !== null && a.compareAtPrice > a.price
+      ? ((a.compareAtPrice - a.price) / a.compareAtPrice) * 100 : 0;
+    const bDiscount = b.compareAtPrice !== null && b.compareAtPrice > b.price
+      ? ((b.compareAtPrice - b.price) / b.compareAtPrice) * 100 : 0;
+    if (sortRule === "discounted_first") {
+      return (bDiscount > 0 ? 1 : 0) - (aDiscount > 0 ? 1 : 0);
+    }
+    // highest_discount_first
+    return bDiscount - aDiscount;
+  });
+}
+
+// ── Sort: inventory ──────────────────────────────────────────────────────────
+
+function sortProductsByInventory(
+  products: CollectionProductWithInventory[],
+  sortRule: string,
+  lowStockThreshold: number,
+  overstockThreshold: number,
+): CollectionProductWithInventory[] {
+  if (sortRule === "low_stock_first") {
+    return [...products].sort((a, b) => {
+      const aLow = a.inventoryQuantity > 0 && a.inventoryQuantity < lowStockThreshold ? 1 : 0;
+      const bLow = b.inventoryQuantity > 0 && b.inventoryQuantity < lowStockThreshold ? 1 : 0;
+      if (aLow !== bLow) return bLow - aLow;
+      return a.inventoryQuantity - b.inventoryQuantity;
+    });
+  }
+  // overstock_first
+  return [...products].sort((a, b) => {
+    const aOver = a.inventoryQuantity > overstockThreshold ? 1 : 0;
+    const bOver = b.inventoryQuantity > overstockThreshold ? 1 : 0;
+    if (aOver !== bOver) return bOver - aOver;
+    return b.inventoryQuantity - a.inventoryQuantity;
+  });
+}
+
+// ── Shared streaming run helper ───────────────────────────────────────────────
+
+type AnyProduct = { id: string; title: string };
+
+async function runStreamingSort<T extends AnyProduct>(
+  supabase: ReturnType<typeof createClient>,
+  storeId: string,
+  collections: string[],
+  domain: string,
+  token: string,
+  fetchFn: (domain: string, token: string, id: string) => Promise<{ products: T[]; title: string }>,
+  sortFn: (products: T[]) => T[],
+  actionLabel: string,
+): Promise<Response> {
+  const encoder = new TextEncoder();
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+  const writer = writable.getWriter();
+
+  (async () => {
+    let totalProductsReordered = 0;
+    let collectionsSorted = 0;
+    const errors: Array<{ collectionId: string; title: string; error: string }> = [];
+
+    for (const collectionId of collections) {
+      let collectionTitle = collectionId;
+      try {
+        const { products, title } = await fetchFn(domain, token, collectionId);
+        collectionTitle = title;
+        const sorted = sortFn(products);
+        const productIds = sorted.map((p) => p.id);
+        await setCollectionManual(domain, token, collectionId);
+        await reorderCollectionProducts(domain, token, collectionId, productIds);
+        totalProductsReordered += products.length;
+        collectionsSorted++;
+        await writer.write(encoder.encode(JSON.stringify({ collectionId, title, status: "done", productsReordered: products.length }) + "\n"));
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        errors.push({ collectionId, title: collectionTitle, error: msg });
+        await writer.write(encoder.encode(JSON.stringify({ collectionId, title: collectionTitle, status: "failed", error: msg }) + "\n"));
+      }
+      await sleep(500);
+    }
+
+    try {
+      await supabase.from("collection_sort_runs").insert({
+        store_id: storeId,
+        run_at: new Date().toISOString(),
+        collections_sorted: collectionsSorted,
+        products_reordered: totalProductsReordered,
+        errors,
+        sort_rules: [{ type: actionLabel }],
+        collection_scope: collections,
+      });
+    } catch (e) {
+      console.error("Failed to save run log:", e);
+    }
+
+    await writer.write(encoder.encode(JSON.stringify({ type: "summary", collectionsTotal: collections.length, collectionsSorted, totalProductsReordered, errors, runAt: new Date().toISOString() }) + "\n"));
+    await writer.close();
+  })();
+
+  return new Response(readable, {
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "application/x-ndjson",
+      "Transfer-Encoding": "chunked",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
+}
+
 // ── Main handler ─────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request) => {
@@ -343,11 +609,14 @@ Deno.serve(async (req: Request) => {
     });
   }
 
-  const { action, storeId, collections, sortRules } = body as {
+  const { action, storeId, collections, sortRules, sortRule, lowStockThreshold, overstockThreshold } = body as {
     action: string;
     storeId: string;
     collections?: string[];
     sortRules?: SortRule[];
+    sortRule?: string;
+    lowStockThreshold?: number;
+    overstockThreshold?: number;
   };
 
   if (!storeId) {
@@ -502,6 +771,97 @@ Deno.serve(async (req: Request) => {
         "X-Content-Type-Options": "nosniff",
       },
     });
+  }
+
+  // ── RUN SALES SORT ──────────────────────────────────────────────────────────
+  if (action === "run_sales_sort") {
+    if (!collections?.length) {
+      return new Response(JSON.stringify({ error: "collections is required" }), {
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const rule = sortRule ?? "best_selling_first";
+
+    // Pre-fetch all product GIDs across every selected collection so we can
+    // build the sales data map before the streaming sort loop begins.
+    const allProductGids: string[] = [];
+    for (const collectionId of collections) {
+      try {
+        const { products } = await fetchCollectionProducts(domain, conn.access_token, collectionId);
+        allProductGids.push(...products.map((p) => p.id));
+      } catch {
+        // If one collection fails here we still proceed; it will fail again
+        // (and be recorded) inside runStreamingSort.
+      }
+    }
+    const salesData = await fetchSalesData(supabase, storeId, allProductGids);
+    console.log(`[sales-sort] salesData size=${salesData.size}, top5=`, JSON.stringify(
+      [...salesData.entries()]
+        .sort((a, b) => b[1].orderCount - a[1].orderCount)
+        .slice(0, 5)
+        .map(([gid, s]) => ({ gid, ...s }))
+    ));
+
+    return runStreamingSort(
+      supabase, storeId, collections, domain, conn.access_token,
+      (d, t, id) => fetchCollectionProducts(d, t, id).then(({ products, title }) => ({
+        products: products as CollectionProduct[],
+        title,
+      })),
+      (products) => {
+        const sorted = [...products].sort((a, b) => {
+          const aStats = salesData.get(a.id) ?? { orderCount: 0, revenue: 0 };
+          const bStats = salesData.get(b.id) ?? { orderCount: 0, revenue: 0 };
+          if (rule === "revenue_first") return bStats.revenue - aStats.revenue;
+          return bStats.orderCount - aStats.orderCount;
+        });
+        // Log top 3 for first collection to verify scoring
+        console.log(`[sales-sort] top3 for collection=`, JSON.stringify(
+          sorted.slice(0, 3).map(p => ({
+            id: p.id,
+            score: (salesData.get(p.id) ?? { orderCount: 0 }).orderCount,
+          }))
+        ));
+        return sorted;
+      },
+      rule,
+    );
+  }
+
+  // ── RUN DISCOUNT SORT ────────────────────────────────────────────────────────
+  if (action === "run_discount_sort") {
+    if (!collections?.length) {
+      return new Response(JSON.stringify({ error: "collections is required" }), {
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const rule = sortRule ?? "discounted_first";
+
+    return runStreamingSort(
+      supabase, storeId, collections, domain, conn.access_token,
+      fetchCollectionProductsWithPricing,
+      (products) => sortProductsByDiscount(products, rule),
+      rule,
+    );
+  }
+
+  // ── RUN INVENTORY SORT ───────────────────────────────────────────────────────
+  if (action === "run_inventory_sort") {
+    if (!collections?.length) {
+      return new Response(JSON.stringify({ error: "collections is required" }), {
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const rule = sortRule ?? "low_stock_first";
+    const lowThreshold = lowStockThreshold ?? 5;
+    const highThreshold = overstockThreshold ?? 50;
+
+    return runStreamingSort(
+      supabase, storeId, collections, domain, conn.access_token,
+      fetchCollectionProductsWithInventory,
+      (products) => sortProductsByInventory(products, rule, lowThreshold, highThreshold),
+      rule,
+    );
   }
 
   return new Response(JSON.stringify({ error: `Unknown action: ${action}` }), {

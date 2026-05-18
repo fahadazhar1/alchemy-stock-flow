@@ -14,7 +14,7 @@ const corsHeaders = {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function detectCourier(tn: string): "mandp" | "sonic" {
-  return /^\d{15}$/.test(tn) ? "mandp" : "sonic";
+  return /^560\d{12}$/.test(tn) ? "mandp" : "sonic";
 }
 
 function toNum(v: unknown): number | null {
@@ -29,23 +29,41 @@ async function fetchFromSonic(tn: string) {
   const headers = { "Authorization": SONIC_API_KEY };
   const enc     = encodeURIComponent(tn);
   try {
-    const [statusRes, chargesRes, paymentsRes] = await Promise.all([
-      fetch(`https://sonic.pk/api/shipment/status?tracking_number=${enc}&type=0`,  { headers, signal: AbortSignal.timeout(10_000) }),
-      fetch(`https://sonic.pk/api/shipment/charges?tracking_number=${enc}`,        { headers, signal: AbortSignal.timeout(10_000) }),
-      fetch(`https://sonic.pk/api/shipment/payments?tracking_number=${enc}`,       { headers, signal: AbortSignal.timeout(10_000) }),
+    // tracking (type=0) gives current status + COD amount; charges + payments for financials
+    const [trackRes, chargesRes, paymentsRes] = await Promise.all([
+      fetch(`https://sonic.pk/api/shipment/track?tracking_number=${enc}&type=0`, { headers, signal: AbortSignal.timeout(10_000) }),
+      fetch(`https://sonic.pk/api/shipment/charges?tracking_number=${enc}`,      { headers, signal: AbortSignal.timeout(10_000) }),
+      fetch(`https://sonic.pk/api/shipment/payments?tracking_number=${enc}`,     { headers, signal: AbortSignal.timeout(10_000) }),
     ]);
-    const [statusData, chargesData, paymentsData] = await Promise.all([
-      statusRes.ok   ? statusRes.json()   : null,
+    const [trackData, chargesData, paymentsData] = await Promise.all([
+      trackRes.ok    ? trackRes.json()    : null,
       chargesRes.ok  ? chargesRes.json()  : null,
       paymentsRes.ok ? paymentsRes.json() : null,
     ]);
 
-    if (!statusData || statusData.status !== 0) return null;
+    if (!trackData || trackData.status !== 0) return null;
+
+    const details  = trackData.details;
+    const history: any[] = details?.tracking_history ?? [];
+    const currentStatus  = history[0]?.status ?? null;
 
     const c = chargesData?.status === 0 ? chargesData.charges : null;
+    const shippingCharges = toNum(c?.total_charges);
+    const fuelSurcharge   = toNum(c?.fuel_surcharge);
+    const gstValue        = toNum(c?.gst);
+
     const paymentStatus: string | null = paymentsData?.status === 0
       ? paymentsData?.current_payment_status ?? null
       : null;
+
+    // payments[0].amount = actual COD collected/remitted (matches SONIC portal)
+    // order_information.amount = COD booked at shipment creation
+    // Use remitted amount when available (released orders); fall back to booked amount (held orders)
+    const remittedAmount = paymentsData?.status === 0
+      ? toNum(paymentsData?.payments?.[0]?.amount)
+      : null;
+    const bookedAmount = toNum(details?.order_information?.amount);
+    const codAmount    = remittedAmount ?? bookedAmount;
 
     let remittanceDate: string | null = null;
     if (paymentsData?.status === 0) {
@@ -57,11 +75,12 @@ async function fetchFromSonic(tn: string) {
     }
 
     return {
-      courier_status:         statusData.current_status ?? null,
+      courier_status:         currentStatus,
       courier_payment_status: paymentStatus,
-      shipping_charges:       toNum(c?.total_charges),
-      fuel_surcharge:         toNum(c?.fuel_surcharge),
-      gst:                    toNum(c?.gst),
+      shipping_charges:       shippingCharges,
+      fuel_surcharge:         fuelSurcharge,
+      gst:                    gstValue,
+      cod_amount:             codAmount,
       remittance_date:        remittanceDate,
     };
   } catch {

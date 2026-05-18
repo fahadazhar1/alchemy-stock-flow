@@ -9,7 +9,7 @@ import {
 import {
   Banknote, ShoppingCart, CreditCard, TrendingUp, Activity,
   Boxes, XCircle, Award, TrendingDown, AlertTriangle, Download,
-  RefreshCw, Filter, MoreHorizontal, Warehouse, Truck, Package,
+  RefreshCw, MoreHorizontal, Warehouse, Truck, Package,
   Clock, Layers, ArrowUp, ArrowDown, ChevronRight, Eye, X,
   CheckSquare, Loader2, ReceiptText, CalendarDays,
   Users, Repeat2, Target, Tag, Globe,
@@ -40,7 +40,7 @@ function Sparkline({ data, color = "#6366f1" }: { data: number[]; color?: string
   return (
     <AreaChart width={70} height={26} data={d} margin={{ top: 2, right: 0, left: 0, bottom: 0 }}>
       <Area type="monotone" dataKey="v" stroke={color} strokeWidth={1.5}
-        fill={color} fillOpacity={0.12} dot={false} isAnimationActive={false} />
+        fill={color} fillOpacity={0.2} dot={false} isAnimationActive={false} />
     </AreaChart>
   );
 }
@@ -64,14 +64,14 @@ function KpiCard({ label, value, unit, delta, deltaUp, deltaLabel, footer, prevV
       <CardContent className="p-4 pb-3">
         <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
           {Icon && (
-            <span className="w-[18px] h-[18px] rounded flex items-center justify-center shrink-0"
+            <span className="w-5 h-5 rounded-md flex items-center justify-center shrink-0"
               style={{ background: iconBg, color: iconColor }}>
-              <Icon size={10} strokeWidth={2.2} />
+              <Icon size={11} strokeWidth={2.2} />
             </span>
           )}
           {label}
         </div>
-        <div className="text-[22px] font-semibold tracking-tight tabular-nums leading-none">
+        <div className="text-[22px] font-bold tracking-tight tabular-nums leading-none">
           {value}{unit && <span className="text-sm font-normal text-muted-foreground ml-0.5">{unit}</span>}
         </div>
         <div className="flex items-center gap-1.5 mt-1.5 text-xs min-h-[16px]">
@@ -92,7 +92,7 @@ function KpiCard({ label, value, unit, delta, deltaUp, deltaLabel, footer, prevV
           </div>
         )}
         {progress != null && (
-          <div className="mt-2 h-1 bg-muted rounded-full overflow-hidden">
+          <div className="mt-2 h-2 bg-muted rounded-full overflow-hidden">
             <div className="h-full rounded-full transition-all" style={{ width: `${progress}%`, background: progressColor }} />
           </div>
         )}
@@ -497,7 +497,7 @@ function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing,
       {/* Section header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2.5 flex-wrap">
-          <span className="text-[10px] font-semibold uppercase tracking-widest px-2 py-0.5 rounded bg-primary/10 text-primary">Sales</span>
+          <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-primary/10 text-primary">Sales</span>
           <h2 className="text-base font-semibold">Sales overview</h2>
           <span className="text-xs text-muted-foreground">{bounds.label} · {comparePeriodLabel(range)}</span>
         </div>
@@ -641,7 +641,7 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
                 <ComposedChart data={extendedTrendData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
                   <defs>
                     <linearGradient id="trendGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#6366f1" stopOpacity={0.18} />
+                      <stop offset="0%" stopColor="#6366f1" stopOpacity={0.25} />
                       <stop offset="100%" stopColor="#6366f1" stopOpacity={0} />
                     </linearGradient>
                   </defs>
@@ -774,7 +774,7 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
                 return collectionData.map(c => (
                   <div key={c.name} className="flex items-center gap-2 text-xs">
                     <span className="w-20 text-muted-foreground truncate">{c.name}</span>
-                    <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                    <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
                       <div className="h-full rounded-full" style={{ width: `${(c.revenue / max) * 100}%`, background: c.color }} />
                     </div>
                     <span className="w-14 text-right font-medium tabular-nums">{fmtGBP(c.revenue)}</span>
@@ -825,7 +825,7 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
                       <span className="font-semibold tabular-nums text-red-500">{salesKPIs?.refundAmountRate ?? 0}%</span>
                     </div>
                   </div>
-                  <div className="mt-3 h-1 bg-muted rounded-full overflow-hidden">
+                  <div className="mt-3 h-1.5 bg-muted rounded-full overflow-hidden">
                     {salesKPIs && salesKPIs.ordersMTD > 0 && (
                       <div className="h-full rounded-full bg-amber-400 transition-all"
                         style={{ width: `${Math.min(100, (salesKPIs.pendingOrders / salesKPIs.ordersMTD) * 100)}%` }} />
@@ -873,7 +873,7 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
                 <p className="text-xs text-muted-foreground mt-1">
                   {fmtNum(discountData?.discountedOrders ?? 0)} of {fmtNum(discountData?.totalOrders ?? 0)} orders used a discount
                 </p>
-                <div className="mt-2 h-1.5 bg-muted rounded-full overflow-hidden">
+                <div className="mt-2 h-2 bg-muted rounded-full overflow-hidden">
                   <div className="h-full rounded-full bg-violet-500 transition-all"
                     style={{ width: `${Math.min(100, discountData?.rate ?? 0)}%` }} />
                 </div>
@@ -881,7 +881,7 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
                 <p className="text-xs text-muted-foreground mt-3">
                   {fmtGBP(discountData?.discountedRevenue ?? 0)} of {fmtGBP(discountData?.totalRevenue ?? 0)} revenue from discounted orders
                 </p>
-                <div className="mt-2 h-1.5 bg-muted rounded-full overflow-hidden">
+                <div className="mt-2 h-2 bg-muted rounded-full overflow-hidden">
                   <div className="h-full rounded-full bg-violet-400 transition-all"
                     style={{ width: `${Math.min(100, discountData?.revenueRate ?? 0)}%` }} />
                 </div>
@@ -915,7 +915,7 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
               return (trafficSources ?? []).map(s => (
                 <div key={s.name} className="flex items-center gap-2 text-xs">
                   <span className="w-20 text-muted-foreground truncate shrink-0">{s.name}</span>
-                  <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                  <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
                     <div className="h-full rounded-full bg-indigo-500"
                       style={{ width: `${maxOrders > 0 ? (s.orders / maxOrders) * 100 : 0}%` }} />
                   </div>
@@ -953,7 +953,7 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
               return (conversionData ?? []).map((c, i) => (
                 <div key={c.name} className="flex items-center gap-2 text-xs">
                   <span className="w-20 text-muted-foreground truncate shrink-0">{c.name}</span>
-                  <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                  <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
                     <div className="h-full rounded-full"
                       style={{ width: `${maxOrders > 0 ? (c.orders / maxOrders) * 100 : 0}%`, background: CONV_COLORS[i % CONV_COLORS.length] }} />
                   </div>
@@ -1027,7 +1027,7 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
                     <td className="px-4 py-2.5 text-right text-muted-foreground tabular-nums">{fmtGBP(c.aov)}</td>
                     <td className="px-4 py-2.5 text-right">
                       <div className="flex items-center justify-end gap-2">
-                        <div className="w-14 h-1 bg-muted rounded-full overflow-hidden">
+                        <div className="w-14 h-2 bg-muted rounded-full overflow-hidden">
                           <div className="h-full rounded-full" style={{ width: `${c.share}%`, background: c.color }} />
                         </div>
                         <span className="tabular-nums w-9 text-right">{c.share}%</span>
@@ -1077,30 +1077,39 @@ function RowSkeleton({ cols = 5 }: { cols?: number }) {
 function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; syncing: boolean }) {
   const navigate = useNavigate();
   const { fmtCurrency: fmtGBP } = useCurrency();
-  const { data, isLoading } = useInventoryDashboard();
+  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "draft">("all");
+  const { data, isLoading } = useInventoryDashboard(statusFilter);
 
-  const onHand      = data?.kpis.onHand ?? 0;
+  const available   = data?.kpis.available ?? 0;
   const stockValue  = data?.stockValue  ?? 0;
   const oos         = data?.kpis.outOfStock ?? 0;
   const winners     = data?.kpis.winners ?? 0;
   const losersCount = data?.kpis.losers ?? 0;
-  const sparkInv    = Array.from({ length: 14 }, (_, i) => Math.max(0, onHand - i * 80 + Math.sin(i) * 200));
+  const sparkInv    = Array.from({ length: 14 }, (_, i) => Math.max(0, available - i * 80 + Math.sin(i) * 200));
   const totalCategoryUnits = data?.categories.reduce((s, c) => s + c.units, 0) ?? 0;
 
   return (
     <div className="space-y-3.5">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2.5 flex-wrap">
-          <span className="text-[10px] font-semibold uppercase tracking-widest px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">Inventory</span>
+          <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">Inventory</span>
           <h2 className="text-base font-semibold">Inventory health</h2>
           <span className="text-xs text-muted-foreground">Across all stores · live</span>
         </div>
         <div className="flex items-center gap-2">
+          <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-muted border text-xs">
+            {(["all", "active", "draft"] as const).map(s => (
+              <button key={s} onClick={() => setStatusFilter(s)}
+                className={cn("px-2.5 py-1 rounded-md font-medium transition-all capitalize",
+                  statusFilter === s ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground")}>
+                {s === "all" ? "All" : s === "active" ? "Active" : "Draft"}
+              </button>
+            ))}
+          </div>
           <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" onClick={onSyncStart} disabled={syncing}>
             {syncing ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
             {syncing ? "Syncing…" : "Sync now"}
           </Button>
-          <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5"><Filter size={12} /> Filter</Button>
         </div>
       </div>
 
@@ -1111,7 +1120,7 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
       ) : (
         <div className="grid grid-cols-5 gap-3.5">
           <KpiCard icon={Boxes} iconColor="#4f46e5" iconBg="#eef2ff"
-            label="On-hand units" value={fmtNum(onHand)}
+            label="Available units" value={fmtNum(available)}
             sparkData={sparkInv} sparkColor="#6366f1" />
           <KpiCard icon={Banknote} iconColor="#059669" iconBg="#d1fae5"
             label="Stock value" value={fmtGBP(stockValue)}
@@ -1174,7 +1183,7 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
 
         <Card>
           <CardHeader className="pb-2 pt-4 px-4">
-            <h3 className="text-sm font-semibold">By category</h3>
+            <h3 className="text-sm font-semibold">By Collections <span className="text-muted-foreground font-normal">Top 5</span></h3>
           </CardHeader>
           <CardContent className="px-4 pb-4">
             {isLoading ? (

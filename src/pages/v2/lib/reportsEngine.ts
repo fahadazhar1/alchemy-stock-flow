@@ -12,12 +12,13 @@ function dateFrom(range: DateRange): string | null {
 
 // ─── Sales by channel ────────────────────────────────────────────────────────
 
-export async function fetchSalesByChannel(range: DateRange = "30d") {
+export async function fetchSalesByChannel(range: DateRange = "30d", storeId?: string | null) {
   let q = supabase
     .from("orders")
     .select("source_name, total_price, financial_status");
   const from = dateFrom(range);
   if (from) q = q.gte("created_at", from);
+  if (storeId) q = q.eq("store_id", storeId);
 
   const { data, error } = await q;
   if (error) throw error;
@@ -37,13 +38,14 @@ export async function fetchSalesByChannel(range: DateRange = "30d") {
 
 // ─── Sales trend (daily/weekly) ───────────────────────────────────────────────
 
-export async function fetchSalesTrend(range: DateRange = "30d") {
+export async function fetchSalesTrend(range: DateRange = "30d", storeId?: string | null) {
   let q = supabase
     .from("orders")
     .select("created_at, total_price")
     .order("created_at", { ascending: true });
   const from = dateFrom(range);
   if (from) q = q.gte("created_at", from);
+  if (storeId) q = q.eq("store_id", storeId);
 
   const { data, error } = await q;
   if (error) throw error;
@@ -65,12 +67,13 @@ export async function fetchSalesTrend(range: DateRange = "30d") {
 
 // ─── Top products by revenue ──────────────────────────────────────────────────
 
-export async function fetchTopProducts(range: DateRange = "30d", limit = 20) {
+export async function fetchTopProducts(range: DateRange = "30d", limit = 20, storeId?: string | null) {
   let q = supabase
     .from("order_items")
     .select("product_id, quantity, unit_price, created_at, products(name, product_type, vendor_id)");
   const from = dateFrom(range);
   if (from) q = q.gte("created_at", from);
+  if (storeId) q = q.eq("store_id", storeId);
 
   const { data, error } = await q;
   if (error) throw error;
@@ -99,10 +102,13 @@ export async function fetchTopProducts(range: DateRange = "30d", limit = 20) {
 
 // ─── Inventory health ─────────────────────────────────────────────────────────
 
-export async function fetchInventoryHealth() {
-  const { data, error } = await supabase
+export async function fetchInventoryHealth(storeId?: string | null) {
+  let q = supabase
     .from("variants")
-    .select("product_id, variant_sku, price, inventory_quantity, committed_quantity, expiry_date, products(name, status)");
+    .select("product_id, variant_sku, price, inventory_quantity, committed_quantity, expiry_date, products!inner(name, status, store_id)");
+  if (storeId) q = (q as any).eq("products.store_id", storeId);
+
+  const { data, error } = await q;
   if (error) throw error;
 
   return (data ?? []).map((row: any) => ({
@@ -125,8 +131,8 @@ export async function fetchInventoryHealth() {
 
 // ─── Inventory summary KPIs ───────────────────────────────────────────────────
 
-export async function fetchInventoryKPIs() {
-  const rows = await fetchInventoryHealth();
+export async function fetchInventoryKPIs(storeId?: string | null) {
+  const rows = await fetchInventoryHealth(storeId);
   const totalSKUs = rows.length;
   const outOfStock = rows.filter(r => r.isOutOfStock).length;
   const lowStock = rows.filter(r => r.isLowStock && !r.isOutOfStock).length;
@@ -138,12 +144,13 @@ export async function fetchInventoryKPIs() {
 
 // ─── Order fulfillment summary ────────────────────────────────────────────────
 
-export async function fetchFulfillmentSummary(range: DateRange = "30d") {
+export async function fetchFulfillmentSummary(range: DateRange = "30d", storeId?: string | null) {
   let q = supabase
     .from("orders")
     .select("fulfillment_status, financial_status, total_price, created_at");
   const from = dateFrom(range);
   if (from) q = q.gte("created_at", from);
+  if (storeId) q = q.eq("store_id", storeId);
 
   const { data, error } = await q;
   if (error) throw error;
@@ -163,13 +170,14 @@ export async function fetchFulfillmentSummary(range: DateRange = "30d") {
 
 // ─── Fulfillment by status over time ─────────────────────────────────────────
 
-export async function fetchFulfillmentTrend(range: DateRange = "30d") {
+export async function fetchFulfillmentTrend(range: DateRange = "30d", storeId?: string | null) {
   let q = supabase
     .from("orders")
     .select("created_at, fulfillment_status")
     .order("created_at", { ascending: true });
   const from = dateFrom(range);
   if (from) q = q.gte("created_at", from);
+  if (storeId) q = q.eq("store_id", storeId);
 
   const { data, error } = await q;
   if (error) throw error;
@@ -193,12 +201,13 @@ export async function fetchFulfillmentTrend(range: DateRange = "30d") {
 
 // ─── Collections performance ──────────────────────────────────────────────────
 
-export async function fetchCollectionPerformance(range: DateRange = "30d") {
+export async function fetchCollectionPerformance(range: DateRange = "30d", storeId?: string | null) {
   let q = supabase
     .from("order_items")
     .select("quantity, unit_price, created_at, products(collection_id, collections(name))");
   const from = dateFrom(range);
   if (from) q = q.gte("created_at", from);
+  if (storeId) q = q.eq("store_id", storeId);
 
   const { data, error } = await q;
   if (error) throw error;
@@ -217,28 +226,28 @@ export async function fetchCollectionPerformance(range: DateRange = "30d") {
 
 // ─── Revenue KPIs ─────────────────────────────────────────────────────────────
 
-export async function fetchRevenueKPIs(range: DateRange = "30d") {
+export async function fetchRevenueKPIs(range: DateRange = "30d", storeId?: string | null) {
   let q = supabase
     .from("orders")
     .select("total_price, created_at, financial_status");
   const from = dateFrom(range);
   if (from) q = q.gte("created_at", from);
+  if (storeId) q = q.eq("store_id", storeId);
 
-  // also fetch prior period for comparison
   const days = range === "all" ? 30 : parseInt(range);
   const priorFrom = new Date();
   priorFrom.setDate(priorFrom.getDate() - days * 2);
   const priorTo = new Date();
   priorTo.setDate(priorTo.getDate() - days);
 
-  const [curr, prior] = await Promise.all([
-    q,
-    supabase
-      .from("orders")
-      .select("total_price")
-      .gte("created_at", priorFrom.toISOString())
-      .lt("created_at", priorTo.toISOString()),
-  ]);
+  let priorQ = supabase
+    .from("orders")
+    .select("total_price")
+    .gte("created_at", priorFrom.toISOString())
+    .lt("created_at", priorTo.toISOString());
+  if (storeId) priorQ = priorQ.eq("store_id", storeId);
+
+  const [curr, prior] = await Promise.all([q, priorQ]);
 
   if (curr.error) throw curr.error;
 
@@ -263,23 +272,18 @@ export type CustomReportConfig = {
   dateRange: DateRange;
 };
 
-export async function runCustomReport(config: CustomReportConfig) {
+export async function runCustomReport(config: CustomReportConfig, storeId?: string | null) {
   const { metrics, dimensions, dateRange } = config;
 
-  // Determine primary dimension to group by
   const dim = dimensions[0] ?? "Channel";
-  const from = dateFrom(dateRange);
 
   if (dim === "Channel" || dim === "Store") {
-    const rows = await fetchSalesByChannel(dateRange);
-    return rows.map(r => ({
-      label: r.channel,
-      ...buildMetricValues(metrics, r),
-    }));
+    const rows = await fetchSalesByChannel(dateRange, storeId);
+    return rows.map(r => ({ label: r.channel, ...buildMetricValues(metrics, r) }));
   }
 
   if (dim === "Collection") {
-    const rows = await fetchCollectionPerformance(dateRange);
+    const rows = await fetchCollectionPerformance(dateRange, storeId);
     return rows.map(r => ({
       label: r.collection,
       ...buildMetricValues(metrics, { revenue: r.revenue, orders: 0, aov: 0, units: r.units }),
@@ -287,7 +291,7 @@ export async function runCustomReport(config: CustomReportConfig) {
   }
 
   if (dim === "Day" || dim === "Week" || dim === "Month") {
-    const rows = await fetchSalesTrend(dateRange);
+    const rows = await fetchSalesTrend(dateRange, storeId);
     return rows.map(r => ({
       label: r.label,
       ...buildMetricValues(metrics, { revenue: r.revenue, orders: r.orders, aov: r.orders ? r.revenue / r.orders : 0, units: 0 }),
@@ -295,19 +299,15 @@ export async function runCustomReport(config: CustomReportConfig) {
   }
 
   if (dim === "SKU" || dim === "Vendor") {
-    const rows = await fetchTopProducts(dateRange);
+    const rows = await fetchTopProducts(dateRange, 20, storeId);
     return rows.map(r => ({
       label: r.name,
       ...buildMetricValues(metrics, { revenue: r.revenue, orders: r.orders, aov: r.orders ? r.revenue / r.orders : 0, units: r.units }),
     }));
   }
 
-  // Default fallback — sales by channel
-  const rows = await fetchSalesByChannel(dateRange);
-  return rows.map(r => ({
-    label: r.channel,
-    ...buildMetricValues(metrics, r),
-  }));
+  const rows = await fetchSalesByChannel(dateRange, storeId);
+  return rows.map(r => ({ label: r.channel, ...buildMetricValues(metrics, r) }));
 }
 
 function buildMetricValues(

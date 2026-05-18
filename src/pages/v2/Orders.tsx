@@ -4,7 +4,7 @@ import {
   MoreHorizontal, CheckCircle, Send, XCircle, Copy, Edit2,
   X, Truck, MapPin, Hash, Banknote, Mail, CreditCard,
   ShoppingCart, Clock, Package, ChevronLeft, ChevronRight,
-  Wallet, CalendarCheck, ChevronDown, RefreshCw,
+  Wallet, CalendarCheck, ChevronDown, RefreshCw, Eye,
 } from "lucide-react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -25,6 +25,7 @@ import {
 import { useSonicTracking, type SonicTrackingData } from "@/hooks/useSonicTracking";
 import { useSonicSyncStatus } from "@/hooks/useSonicSyncStatus";
 import { useCODSummary } from "@/hooks/useCODSummary";
+import { CodDeliveredModal } from "./components/CodDeliveredModal";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -667,6 +668,7 @@ export default function Orders() {
   const [drawer, setDrawer] = useState<OrderRow | null>(null);
   const [codFilter, setCodFilter] = useState<"all" | "held" | "released">("all");
   const [courierStatusFilter, setCourierStatusFilter] = useState<string[]>([]);
+  const [codModal, setCodModal] = useState<"held" | "released" | null>(null);
 
   // Debounce search
   useEffect(() => {
@@ -726,36 +728,42 @@ export default function Orders() {
 
       {/* COD payment KPI cards */}
       <div className="grid grid-cols-2 gap-3">
-        <Card>
+        <Card className="cursor-pointer hover:border-amber-300 dark:hover:border-amber-700 transition-colors group"
+          onClick={() => setCodModal("held")}>
           <CardContent className="p-4 flex items-start gap-3">
             <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 bg-amber-50 dark:bg-amber-950/30">
               <Wallet size={16} className="text-amber-600 dark:text-amber-400" />
             </div>
-            <div className="min-w-0">
-              <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-semibold mb-0.5">Sonic COD Held (Net)</p>
-              <p className="text-xl font-bold tabular-nums leading-tight">
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-semibold mb-0.5">Sonic Receivables Held (Net)</p>
+              <p className={cn("text-xl font-bold tabular-nums leading-tight",
+                codSummary && codSummary.held.amount < 0 ? "text-red-500 dark:text-red-400" : "")}>
                 {codSummary ? fmtPKR(codSummary.held.amount) : "—"}
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
-                {codSummary ? `${codSummary.held.count} delivered · Sonic owes you this` : "Loading…"}
+                {codSummary ? `${codSummary.held.count} delivered · COD + non-COD charges` : "Loading…"}
               </p>
             </div>
+            <Eye size={14} className="text-muted-foreground/40 group-hover:text-amber-500 transition-colors mt-1 shrink-0" />
           </CardContent>
         </Card>
-        <Card>
+        <Card className="cursor-pointer hover:border-emerald-300 dark:hover:border-emerald-700 transition-colors group"
+          onClick={() => setCodModal("released")}>
           <CardContent className="p-4 flex items-start gap-3">
             <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 bg-emerald-50 dark:bg-emerald-950/30">
               <CalendarCheck size={16} className="text-emerald-600 dark:text-emerald-400" />
             </div>
-            <div className="min-w-0">
-              <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-semibold mb-0.5">Sonic COD Released (Net)</p>
-              <p className="text-xl font-bold tabular-nums leading-tight">
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-semibold mb-0.5">Sonic Receivables Released (Net)</p>
+              <p className={cn("text-xl font-bold tabular-nums leading-tight",
+                codSummary && codSummary.released.amount < 0 ? "text-red-500 dark:text-red-400" : "")}>
                 {codSummary ? fmtPKR(codSummary.released.amount) : "—"}
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 {codSummary ? `${codSummary.released.count} order${codSummary.released.count !== 1 ? "s" : ""} · already remitted by Sonic` : "Loading…"}
               </p>
             </div>
+            <Eye size={14} className="text-muted-foreground/40 group-hover:text-emerald-500 transition-colors mt-1 shrink-0" />
           </CardContent>
         </Card>
       </div>
@@ -1001,6 +1009,13 @@ export default function Orders() {
         order={drawer}
         onClose={() => setDrawer(null)}
         trackingData={drawer?.trackingNumber ? sonicMap?.[drawer.trackingNumber] : null}
+      />
+
+      <CodDeliveredModal
+        open={codModal !== null}
+        onClose={() => setCodModal(null)}
+        storeId={storeId}
+        released={codModal === "released"}
       />
     </div>
   );

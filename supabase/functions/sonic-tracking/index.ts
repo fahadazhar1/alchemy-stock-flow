@@ -16,12 +16,13 @@ type CourierData = {
   shipping_charges:       number | null;
   fuel_surcharge:         number | null;
   gst:                    number | null;
+  cod_amount:             number | null;
   remittance_date:        string | null;
 };
 
 // M&P CN numbers are always 15-digit numeric strings
 function detectCourier(tn: string): "mandp" | "sonic" {
-  return /^\d{15}$/.test(tn) ? "mandp" : "sonic";
+  return /^560\d{12}$/.test(tn) ? "mandp" : "sonic";
 }
 
 function toNum(v: unknown): number | null {
@@ -36,20 +37,24 @@ async function fetchFromSonic(tn: string): Promise<CourierData | null> {
   const enc     = encodeURIComponent(tn);
 
   try {
-    // All three SONIC endpoints in parallel — status, charges, payment details
-    const [statusRes, chargesRes, paymentsRes] = await Promise.all([
-      fetch(`https://sonic.pk/api/shipment/status?tracking_number=${enc}&type=0`, { headers, signal: AbortSignal.timeout(10_000) }),
-      fetch(`https://sonic.pk/api/shipment/charges?tracking_number=${enc}`,       { headers, signal: AbortSignal.timeout(10_000) }),
-      fetch(`https://sonic.pk/api/shipment/payments?tracking_number=${enc}`,      { headers, signal: AbortSignal.timeout(10_000) }),
+    // tracking (type=0) gives current status + COD amount; charges + payments for financials
+    const [trackRes, chargesRes, paymentsRes] = await Promise.all([
+      fetch(`https://sonic.pk/api/shipment/track?tracking_number=${enc}&type=0`, { headers, signal: AbortSignal.timeout(10_000) }),
+      fetch(`https://sonic.pk/api/shipment/charges?tracking_number=${enc}`,      { headers, signal: AbortSignal.timeout(10_000) }),
+      fetch(`https://sonic.pk/api/shipment/payments?tracking_number=${enc}`,     { headers, signal: AbortSignal.timeout(10_000) }),
     ]);
 
-    const [statusData, chargesData, paymentsData] = await Promise.all([
-      statusRes.ok   ? statusRes.json()   : null,
+    const [trackData, chargesData, paymentsData] = await Promise.all([
+      trackRes.ok    ? trackRes.json()    : null,
       chargesRes.ok  ? chargesRes.json()  : null,
       paymentsRes.ok ? paymentsRes.json() : null,
     ]);
 
-    if (!statusData || statusData.status !== 0) return null;
+    if (!trackData || trackData.status !== 0) return null;
+
+    const details  = trackData.details;
+    const history: any[] = details?.tracking_history ?? [];
+    const currentStatus  = history[0]?.status ?? null;
 
     const c = chargesData?.status === 0 ? chargesData.charges : null;
     const shippingCharges = toNum(c?.total_charges);
@@ -59,6 +64,15 @@ async function fetchFromSonic(tn: string): Promise<CourierData | null> {
     const paymentStatus: string | null = paymentsData?.status === 0
       ? paymentsData?.current_payment_status ?? null
       : null;
+
+    // payments[0].amount = actual COD collected/remitted (matches SONIC portal)
+    // order_information.amount = COD booked at shipment creation
+    // Use remitted amount when available (released orders); fall back to booked amount (held orders)
+    const remittedAmount = paymentsData?.status === 0
+      ? toNum(paymentsData?.payments?.[0]?.amount)
+      : null;
+    const bookedAmount = toNum(details?.order_information?.amount);
+    const codAmount    = remittedAmount ?? bookedAmount;
 
     let remittanceDate: string | null = null;
     if (paymentsData?.status === 0) {
@@ -70,11 +84,12 @@ async function fetchFromSonic(tn: string): Promise<CourierData | null> {
     }
 
     return {
-      courier_status:         statusData.current_status ?? null,
+      courier_status:         currentStatus,
       courier_payment_status: paymentStatus,
       shipping_charges:       shippingCharges,
       fuel_surcharge:         fuelSurcharge,
       gst:                    gst,
+      cod_amount:             codAmount,
       remittance_date:        remittanceDate,
     };
   } catch (e) {
@@ -146,7 +161,7 @@ Deno.serve(async (req) => {
     const cutoff = new Date(Date.now() - CACHE_TTL_MS).toISOString();
     const { data: cached } = await supabase
       .from("sonic_cache")
-      .select("tracking_number, courier, courier_status, courier_payment_status, shipping_charges, fuel_surcharge, gst, remittance_date")
+      .select("tracking_number, courier, courier_status, courier_payment_status, shipping_charges, fuel_surcharge, gst, cod_amount, remittance_date")
       .in("tracking_number", trackingNumbers)
       .gte("last_synced_at", cutoff);
 
@@ -178,6 +193,7 @@ Deno.serve(async (req) => {
         shipping_charges:       e.shipping_charges,
         fuel_surcharge:         e.fuel_surcharge,
         gst:                    e.gst,
+        cod_amount:             e.cod_amount ?? null,
         remittance_date:        e.remittance_date ?? null,
       } : null;
     }
