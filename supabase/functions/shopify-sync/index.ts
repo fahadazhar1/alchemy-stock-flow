@@ -1030,6 +1030,65 @@ Deno.serve(async (req) => {
       return json(200, { ok: true, variant: data.variant });
     }
 
+    if (action === "push_prices") {
+      const { campaign_id } = body;
+      if (!campaign_id) return json(400, { ok: false, error: "campaign_id required" });
+
+      // Get campaign to find its store
+      const { data: campaign } = await supabase
+        .from("pricing_campaigns").select("store_id").eq("id", campaign_id).single();
+      if (!campaign?.store_id) return json(404, { ok: false, error: "Campaign or store not found" });
+
+      // Get active Shopify connection for this store
+      const { data: conn } = await supabase
+        .from("shopify_connections")
+        .select("shop_domain, access_token")
+        .eq("store_id", campaign.store_id)
+        .eq("is_active", true)
+        .single();
+      if (!conn?.access_token) return json(404, { ok: false, error: "No active Shopify connection for store" });
+
+      // Get all campaign items with their new prices
+      const { data: items, error: itemsErr } = await supabase
+        .from("pricing_campaign_items")
+        .select("variant_id, new_price, new_compare_at_price")
+        .eq("campaign_id", campaign_id);
+      if (itemsErr) throw itemsErr;
+      if (!items?.length) return json(200, { ok: true, pushed: 0 });
+
+      // Get shopify_variant_id for each variant
+      const variantIds = items.map((i: any) => i.variant_id).filter(Boolean);
+      const { data: variants } = await supabase
+        .from("variants").select("id, shopify_variant_id").in("id", variantIds);
+      const variantMap = new Map((variants ?? []).map((v: any) => [v.id, v.shopify_variant_id]));
+
+      const domain = normalizeDomain(conn.shop_domain);
+      let pushed = 0;
+      const failed: string[] = [];
+
+      for (const item of items as any[]) {
+        const shopifyVarId = variantMap.get(item.variant_id);
+        if (!shopifyVarId) { failed.push(String(item.variant_id)); continue; }
+        const res = await shopifyMutate(domain, conn.access_token, "PUT", `/variants/${shopifyVarId}.json`, {
+          variant: {
+            id: Number(shopifyVarId),
+            price: Number(item.new_price).toFixed(2),
+            compare_at_price: item.new_compare_at_price != null
+              ? Number(item.new_compare_at_price).toFixed(2)
+              : null,
+          },
+        });
+        if (res.ok) {
+          pushed++;
+        } else {
+          const txt = await res.text();
+          failed.push(`${shopifyVarId}: ${txt.slice(0, 120)}`);
+        }
+      }
+
+      return json(200, { ok: failed.length === 0, pushed, failed });
+    }
+
     if (action === "revert_prices") {
       const { campaign_id } = body;
       if (!campaign_id) return json(400, { ok: false, error: "campaign_id required" });
