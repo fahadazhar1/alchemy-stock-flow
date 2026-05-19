@@ -18,6 +18,7 @@ import type { LucideIcon } from "lucide-react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Tooltip as UITooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
@@ -528,10 +529,15 @@ function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing,
             disabled={!salesKPIs && !liveProducts}>
             <Download size={12} /> Export
           </Button>
-          <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" onClick={onSyncStart} disabled={syncing}>
-            {syncing ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-            {syncing ? "Syncing…" : "Sync sales"}
-          </Button>
+          <UITooltip>
+            <TooltipTrigger asChild>
+              <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" onClick={onSyncStart} disabled={syncing}>
+                {syncing ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                {syncing ? "Syncing…" : "Sync Sales"}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Fetch latest orders & products from Shopify</TooltipContent>
+          </UITooltip>
         </div>
       </div>
 
@@ -581,16 +587,16 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
       ) : (
         <div className="grid grid-cols-4 gap-3.5">
           <KpiCard icon={Users} iconColor="#0891b2" iconBg="#cffafe"
-            label="Unique Customers"
-            value={customerMetrics?.totalCustomers ? `${customerMetrics.oneTimePct.toFixed(1)}%` : "—"}
-            footer={customerMetrics?.totalCustomers ? `${fmtNum(customerMetrics.oneTimeCustomers)} customers · ${fmtGBP(customerMetrics.oneTimeRevenue)}` : "Sync to populate"}
-            progress={customerMetrics?.totalCustomers ? customerMetrics.oneTimePct : 0}
+            label="New Customers"
+            value={customerMetrics?.totalCustomers ? `${customerMetrics.newPct.toFixed(1)}%` : "—"}
+            footer={customerMetrics?.totalCustomers ? `${fmtNum(customerMetrics.newCustomers)} customers · ${fmtGBP(customerMetrics.newRevenue)}` : "Sync to populate"}
+            progress={customerMetrics?.totalCustomers ? customerMetrics.newPct : 0}
             progressColor="#0891b2" />
           <KpiCard icon={Repeat2} iconColor="#7c3aed" iconBg="#ede9fe"
-            label="Repeat Customers"
-            value={customerMetrics?.totalCustomers ? `${customerMetrics.repeatPct.toFixed(1)}%` : "—"}
-            footer={customerMetrics?.totalCustomers ? `${fmtNum(customerMetrics.repeatCustomers)} customers · ${fmtGBP(customerMetrics.repeatRevenue)}` : "Sync to populate"}
-            progress={customerMetrics?.totalCustomers ? customerMetrics.repeatPct : 0}
+            label="Returning Customers"
+            value={customerMetrics?.totalCustomers ? `${customerMetrics.returningPct.toFixed(1)}%` : "—"}
+            footer={customerMetrics?.totalCustomers ? `${fmtNum(customerMetrics.returningCustomers)} customers · ${fmtGBP(customerMetrics.returningRevenue)}` : "Sync to populate"}
+            progress={customerMetrics?.totalCustomers ? customerMetrics.returningPct : 0}
             progressColor="#7c3aed" />
           <KpiCard icon={Clock} iconColor="#d97706" iconBg="#fef3c7"
             label="Avg. fulfillment time"
@@ -1106,10 +1112,15 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
               </button>
             ))}
           </div>
-          <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" onClick={onSyncStart} disabled={syncing}>
-            {syncing ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-            {syncing ? "Syncing…" : "Sync now"}
-          </Button>
+          <UITooltip>
+            <TooltipTrigger asChild>
+              <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" onClick={onSyncStart} disabled={syncing}>
+                {syncing ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                {syncing ? "Syncing…" : "Sync Inventory"}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Fetch latest inventory levels from Shopify</TooltipContent>
+          </UITooltip>
         </div>
       </div>
 
@@ -1281,7 +1292,17 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
                       </td>
                       <td className="px-4 py-2.5 text-muted-foreground">{l.vendor}</td>
                       <td className="px-4 py-2.5">
-                        <Badge variant="outline" className="text-[10px] px-1.5 py-0">{l.collection}</Badge>
+                        <Badge
+                          variant="outline"
+                          className={cn(
+                            "text-[10px] px-1.5 py-0",
+                            l.collection === "Uncategorised"
+                              ? "text-muted-foreground border-dashed"
+                              : ""
+                          )}
+                        >
+                          {l.collection}
+                        </Badge>
                       </td>
                       <td className="px-4 py-2.5 text-right tabular-nums">{fmtNum(l.stock)}</td>
                       <td className="px-4 py-2.5 text-right">
@@ -1443,7 +1464,7 @@ export default function Dashboard() {
     (supabase as any)
       .from("shopify_sync_logs")
       .select("current_stage, records_synced, status")
-      .order("started_at", { ascending: false })
+      .order("sync_time", { ascending: false })
       .limit(1)
       .single()
       .then(({ data }: { data: SyncLogRow }) => {

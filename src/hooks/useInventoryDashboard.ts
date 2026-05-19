@@ -3,6 +3,12 @@ import { useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useStoreFilter } from "@/hooks/useStoreFilter";
 
+// Collections that exist for internal/storefront purposes only and should never
+// appear as a product's collection label in the dashboard.
+const INTERNAL_COLLECTIONS = new Set(["trending now", "all"]);
+const isInternalCollection = (name: string | null | undefined) =>
+  !name || INTERNAL_COLLECTIONS.has(name.toLowerCase());
+
 // ─── Return types ─────────────────────────────────────────────────────────────
 
 export interface InventoryKPIs {
@@ -148,7 +154,9 @@ export function useInventoryDashboard(statusFilter: ProductStatusFilter = "all")
           const collIds = [...new Set(pcRows.map(r => r.collection_id))];
           const { data: collData } = await (supabase as any)
             .from("collections").select("id, name").in("id", collIds);
-          for (const c of (collData ?? []) as any[]) collIdToName[c.id] = c.name;
+          for (const c of (collData ?? []) as any[]) {
+            if (!isInternalCollection(c.name)) collIdToName[c.id] = c.name;
+          }
         }
       }
 
@@ -213,12 +221,14 @@ export function useInventoryDashboard(statusFilter: ProductStatusFilter = "all")
       // Fallback for products absent from product_collections
       for (const r of inStockRows) {
         if (mappedProductIds.has(r.product_id)) continue;
-        const name = (r.collection_name as string | null) || (r.product_type as string | null);
+        const raw = r.collection_name as string | null;
+        const name = (isInternalCollection(raw) ? null : raw) || (r.product_type as string | null);
         if (name) collInventoryMap.set(name, (collInventoryMap.get(name) ?? 0) + Number(r.total_inventory ?? 0));
       }
     } else {
       for (const r of inStockRows) {
-        const name = (r.collection_name as string | null) || (r.product_type as string | null);
+        const raw = r.collection_name as string | null;
+        const name = (isInternalCollection(raw) ? null : raw) || (r.product_type as string | null);
         if (name) collInventoryMap.set(name, (collInventoryMap.get(name) ?? 0) + Number(r.total_inventory ?? 0));
       }
     }
@@ -229,21 +239,33 @@ export function useInventoryDashboard(statusFilter: ProductStatusFilter = "all")
       .map(([name, units], i) => ({ name, units, color: CAT_COLORS[i % CAT_COLORS.length] }));
 
     // ── Losers ────────────────────────────────────────────────────────────────
+    // Build product → collection name from the junction table (already filtered, no "Trending Now")
+    const productCollMap = new Map<string, string>();
+    for (const r of pcRows) {
+      if (productCollMap.has(r.product_id)) continue;
+      const name = collIdToName[r.collection_id];
+      if (name) productCollMap.set(r.product_id, name);
+    }
+
     const loserProducts: LoserProduct[] = inStockRows
       .filter((r: any) => Number(r.days_old ?? 0) > 20 && Number(r.total_inventory ?? 0) > 10)
       .sort((a: any, b: any) => Number(b.days_old ?? 0) - Number(a.days_old ?? 0))
       .slice(0, 8)
-      .map((r: any) => ({
-        product_id: r.product_id ?? "",
-        name:       r.product_name ?? "—",
-        sku:        r.sku ?? "—",
-        vendor:     r.vendor_name ?? "—",
-        collection: r.collection_name ?? "—",
-        stock:      Number(r.total_inventory ?? 0),
-        days:       Number(r.days_old ?? 0),
-        price:      r.min_current_price  != null ? Number(r.min_current_price)  : null,
-        compare:    r.max_compare_at_price != null ? Number(r.max_compare_at_price) : null,
-      }));
+      .map((r: any) => {
+        const rawColl = isInternalCollection(r.collection_name) ? null : r.collection_name;
+        const collection = productCollMap.get(r.product_id) ?? rawColl ?? r.product_type ?? "Uncategorised";
+        return {
+          product_id: r.product_id ?? "",
+          name:       r.product_name ?? "—",
+          sku:        r.sku ?? "—",
+          vendor:     r.vendor_name ?? "—",
+          collection,
+          stock:      Number(r.total_inventory ?? 0),
+          days:       Number(r.days_old ?? 0),
+          price:      r.min_current_price  != null ? Number(r.min_current_price)  : null,
+          compare:    r.max_compare_at_price != null ? Number(r.max_compare_at_price) : null,
+        };
+      });
 
     // ── Replenishment ─────────────────────────────────────────────────────────
     const replenishment: ReplenItem[] = replenRows.map((r: any) => {

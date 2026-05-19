@@ -15,7 +15,9 @@ import { Label } from "@/components/ui/label";
 import { useCurrency } from "@/hooks/useCurrency";
 import { exportToCSV } from "@/lib/export";
 import { toast } from "sonner";
-import { Download, RotateCcw, Search, ExternalLink, XCircle, Warehouse, PackagePlus, Pencil, Check, X } from "lucide-react";
+import { Download, RotateCcw, Search, ExternalLink, XCircle, Warehouse, PackagePlus, Pencil, Check, X, RefreshCw } from "lucide-react";
+import { Progress } from "@/components/ui/progress";
+import { useCollectionRefresh } from "@/hooks/useCollectionRefresh";
 import { DateRangeFilter, matchesDateFilter } from "@/components/DateRangeFilter";
 import { useStoreFilter } from "@/hooks/useStoreFilter";
 
@@ -85,31 +87,15 @@ export default function ProductMaster() {
   const { data: collections } = useQuery({
     queryKey: ["filter-collections", storeId],
     queryFn: async () => {
-      const names = new Set<string>();
-
-      // Source 1: v_product_inventory_summary (always populated via products.collection_id)
-      let viewQ = supabase.from("v_product_inventory_summary").select("collection_name");
-      if (storeId) viewQ = viewQ.eq("store_id", storeId);
-      const { data: viewData } = await viewQ;
-      (viewData ?? []).forEach(d => { if (d.collection_name) names.add(d.collection_name); });
-
-      // Source 2: product_collections junction (includes smart collections after sync)
-      let prodQ = supabase.from("products").select("id");
-      if (storeId) prodQ = prodQ.eq("store_id", storeId);
-      const { data: prods } = await prodQ;
-      const productIds = (prods ?? []).map(p => p.id);
-      if (productIds.length) {
-        const { data: pcs } = await supabase.from("product_collections").select("collection_id").in("product_id", productIds);
-        const collIds = [...new Set((pcs ?? []).map(p => p.collection_id))];
-        if (collIds.length) {
-          const { data: colls } = await supabase.from("collections").select("name").in("id", collIds);
-          (colls ?? []).forEach(c => { if (c.name) names.add(c.name); });
-        }
-      }
-
-      return [...names].sort().map(name => ({ name }));
+      if (!storeId) return [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data } = await (supabase as any).rpc("get_store_collections", { p_store_id: storeId });
+      return ((data ?? []) as { name: string }[]).map(c => ({ name: c.name }));
     },
   });
+
+  const { progress: collRefreshProgress, isRefreshing: isRefreshingCollections, label: collRefreshLabel, refresh: refreshCollections } =
+    useCollectionRefresh(storeId, [["filter-collections", storeId]]);
 
   const { data: vendors } = useQuery({
     queryKey: ["filter-vendors", storeId],
@@ -138,14 +124,13 @@ export default function ProductMaster() {
     queryFn: async () => {
       try {
         let collectionProductIds: string[] | null = null;
-        if (collectionFilter !== "all") {
-          const { data: coll } = await supabase.from("collections").select("id").eq("name", collectionFilter).maybeSingle();
-          if (coll?.id) {
-            const { data: pcs } = await supabase.from("product_collections").select("product_id").eq("collection_id", coll.id);
-            collectionProductIds = (pcs ?? []).map((p: any) => p.product_id).filter(Boolean);
-          } else {
-            collectionProductIds = [];
-          }
+        if (collectionFilter !== "all" && storeId) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { data: ids } = await (supabase as any).rpc("get_collection_product_ids", {
+            p_collection_name: collectionFilter,
+            p_store_id: storeId,
+          });
+          collectionProductIds = ((ids ?? []) as { product_id: string }[]).map(r => r.product_id);
         }
 
         let q = supabase.from("v_product_inventory_summary").select("*", { count: "exact" });
@@ -540,10 +525,23 @@ export default function ProductMaster() {
               <XCircle className="h-4 w-4 mr-1" /> Remove Discount ({selected.size})
             </Button>
           )}
-          <Button variant="outline" size="sm" onClick={handleForceResync} disabled={resyncing}>
-            <RotateCcw className={`h-4 w-4 mr-1 ${resyncing ? "animate-spin" : ""}`} />
-            {resyncing ? "Syncing..." : "Resync"}
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleForceResync}
+                disabled={resyncing}
+                className="border-amber-300 text-amber-700 hover:bg-amber-50 hover:border-amber-400 dark:border-amber-700 dark:text-amber-400 dark:hover:bg-amber-950/30"
+              >
+                <RotateCcw className={`h-4 w-4 mr-1 ${resyncing ? "animate-spin" : ""}`} />
+                {resyncing ? "Re-syncing…" : "Full Re-sync"}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="max-w-[220px] text-center">
+              Wipes sync history and re-pulls everything from Shopify from scratch. Use when data looks wrong or missing.
+            </TooltipContent>
+          </Tooltip>
           <Button variant="outline" size="sm" onClick={handleExport}><Download className="h-4 w-4 mr-1" />Export CSV</Button>
         </div>
       </div>
@@ -553,13 +551,38 @@ export default function ProductMaster() {
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input placeholder="Search name or SKU..." className="pl-8" value={search} onChange={e => { setSearch(e.target.value); setPage(0); }} />
         </div>
-        <Select value={collectionFilter} onValueChange={v => { setCollectionFilter(v); setPage(0); }}>
-          <SelectTrigger className="w-[160px]"><SelectValue placeholder="Collection" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Collections</SelectItem>
-            {collections?.map(c => <SelectItem key={c.name} value={c.name}>{c.name}</SelectItem>)}
-          </SelectContent>
-        </Select>
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-1">
+            <Select value={collectionFilter} onValueChange={v => { setCollectionFilter(v); setPage(0); }}>
+              <SelectTrigger className="w-[160px]"><SelectValue placeholder="Collection" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Collections</SelectItem>
+                {collections?.map(c => <SelectItem key={c.name} value={c.name}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 px-2 text-xs gap-1 text-muted-foreground shrink-0"
+                  onClick={refreshCollections}
+                  disabled={isRefreshingCollections}
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${isRefreshingCollections ? "animate-spin" : ""}`} />
+                  {isRefreshingCollections ? "Refreshing…" : "Refresh Collections"}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Pull latest collection names from Shopify</TooltipContent>
+            </Tooltip>
+          </div>
+          {isRefreshingCollections && (
+            <div className="w-full space-y-0.5">
+              <Progress value={collRefreshProgress.percent} className="h-1.5" />
+              <p className="text-[10px] text-muted-foreground truncate">{collRefreshLabel}</p>
+            </div>
+          )}
+        </div>
         <Select value={vendorFilter} onValueChange={v => { setVendorFilter(v); setPage(0); }}>
           <SelectTrigger className="w-[160px]"><SelectValue placeholder="Vendor" /></SelectTrigger>
           <SelectContent>

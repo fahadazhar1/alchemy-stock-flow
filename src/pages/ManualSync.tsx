@@ -16,6 +16,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
 import { useCurrency } from "@/hooks/useCurrency";
 import { RefreshCw, Eye, Zap, Filter, ChevronDown, X, Globe } from "lucide-react";
+import { Progress } from "@/components/ui/progress";
+import { useCollectionRefresh } from "@/hooks/useCollectionRefresh";
 import { Json } from "@/integrations/supabase/types";
 import { DateRangeFilter, matchesDateFilter } from "@/components/DateRangeFilter";
 import { useStoreFilter } from "@/hooks/useStoreFilter";
@@ -51,31 +53,15 @@ export default function ManualSync() {
   const { data: collections } = useQuery({
     queryKey: ["sync-collections", storeId],
     queryFn: async () => {
-      const names = new Set<string>();
-
-      // Source 1: v_product_inventory_summary (always populated via products.collection_id)
-      let viewQ = supabase.from("v_product_inventory_summary").select("collection_name");
-      if (storeId) viewQ = viewQ.eq("store_id", storeId);
-      const { data: viewData } = await viewQ;
-      (viewData ?? []).forEach(d => { if (d.collection_name) names.add(d.collection_name); });
-
-      // Source 2: product_collections junction (includes smart collections after sync)
-      let prodQ = supabase.from("products").select("id");
-      if (storeId) prodQ = prodQ.eq("store_id", storeId);
-      const { data: prods } = await prodQ;
-      const productIds = (prods ?? []).map(p => p.id);
-      if (productIds.length) {
-        const { data: pcs } = await supabase.from("product_collections").select("collection_id").in("product_id", productIds);
-        const collIds = [...new Set((pcs ?? []).map(p => p.collection_id))];
-        if (collIds.length) {
-          const { data: colls } = await supabase.from("collections").select("name").in("id", collIds);
-          (colls ?? []).forEach(c => { if (c.name) names.add(c.name); });
-        }
-      }
-
-      return [...names].sort().map(name => ({ name }));
+      if (!storeId) return [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data } = await (supabase as any).rpc("get_store_collections", { p_store_id: storeId });
+      return ((data ?? []) as { name: string }[]).map(c => ({ name: c.name }));
     },
   });
+
+  const { progress: collRefreshProgress, isRefreshing: isRefreshingCollections, label: collRefreshLabel, refresh: refreshCollections } =
+    useCollectionRefresh(storeId, [["sync-collections", storeId]]);
 
   const { data: vendors } = useQuery({
     queryKey: ["sync-vendors", storeId],
@@ -102,16 +88,14 @@ export default function ManualSync() {
     queryKey: ["sync-products", page, search, collectionFilter, vendorFilter, typeFilter, storeId],
     queryFn: async () => {
       try {
-        // Resolve collection filter via junction table (covers smart + custom collections)
         let collectionProductIds: string[] | null = null;
-        if (collectionFilter !== "all") {
-          const { data: coll } = await supabase.from("collections").select("id").eq("name", collectionFilter).maybeSingle();
-          if (coll?.id) {
-            const { data: pcs } = await supabase.from("product_collections").select("product_id").eq("collection_id", coll.id);
-            collectionProductIds = (pcs ?? []).map((p: any) => p.product_id).filter(Boolean);
-          } else {
-            collectionProductIds = [];
-          }
+        if (collectionFilter !== "all" && storeId) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { data: ids } = await (supabase as any).rpc("get_collection_product_ids", {
+            p_collection_name: collectionFilter,
+            p_store_id: storeId,
+          });
+          collectionProductIds = ((ids ?? []) as { product_id: string }[]).map(r => r.product_id);
         }
 
         let q = supabase.from("v_product_inventory_summary").select("*", { count: "exact" });
@@ -169,16 +153,13 @@ export default function ManualSync() {
     try {
       let ids: string[] = [];
       if (filterType === "collection") {
-        const { data: coll } = await supabase.from("collections").select("id").eq("name", filterValue).maybeSingle();
-        if (coll?.id) {
-          const { data: pcs } = await supabase.from("product_collections").select("product_id").eq("collection_id", coll.id);
-          const allIds = (pcs ?? []).map((p: any) => p.product_id).filter(Boolean) as string[];
-          if (storeId && allIds.length) {
-            const { data: filtered } = await supabase.from("v_product_inventory_summary").select("product_id").eq("store_id", storeId).in("product_id", allIds);
-            ids = (filtered ?? []).map(p => p.product_id).filter(Boolean) as string[];
-          } else {
-            ids = allIds;
-          }
+        if (storeId) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { data: rows } = await (supabase as any).rpc("get_collection_product_ids", {
+            p_collection_name: filterValue,
+            p_store_id: storeId,
+          });
+          ids = ((rows ?? []) as { product_id: string }[]).map(r => r.product_id);
         }
       } else {
         let q = supabase.from("v_product_inventory_summary").select("product_id");
@@ -203,17 +184,21 @@ export default function ManualSync() {
     if (checked) {
       await selectByFilter("collection", collectionName);
     } else {
-      // Deselect products that belong only to this collection
+      // Deselect products that belong to this collection
       try {
-        let dq = supabase.from("v_product_inventory_summary").select("product_id").eq("collection_name", collectionName);
-        if (storeId) dq = dq.eq("store_id", storeId);
-        const { data } = await dq;
-        const ids = (data ?? []).map(p => p.product_id).filter(Boolean) as string[];
-        setSelected(prev => {
-          const n = new Set(prev);
-          ids.forEach(id => n.delete(id));
-          return n;
-        });
+        if (storeId) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { data: rows } = await (supabase as any).rpc("get_collection_product_ids", {
+            p_collection_name: collectionName,
+            p_store_id: storeId,
+          });
+          const ids = ((rows ?? []) as { product_id: string }[]).map(r => r.product_id);
+          setSelected(prev => {
+            const n = new Set(prev);
+            ids.forEach(id => n.delete(id));
+            return n;
+          });
+        }
       } catch { toast.error("Failed to deselect collection"); }
     }
   };
@@ -364,6 +349,25 @@ export default function ManualSync() {
                   {selectingAll ? "Loading…" : "Entire Website"}
                 </Button>
                 {/* Multi-select Collections */}
+                <div className="flex flex-col gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 w-full text-xs gap-1.5 justify-start px-2 text-muted-foreground"
+                    onClick={refreshCollections}
+                    disabled={isRefreshingCollections}
+                    title="Pull latest collection names from Shopify"
+                  >
+                    <RefreshCw className={`h-3 w-3 shrink-0 ${isRefreshingCollections ? "animate-spin" : ""}`} />
+                    {isRefreshingCollections ? "Refreshing Collections…" : "Refresh Collections"}
+                  </Button>
+                  {isRefreshingCollections && (
+                    <div className="space-y-0.5">
+                      <Progress value={collRefreshProgress.percent} className="h-1.5" />
+                      <p className="text-[10px] text-muted-foreground truncate">{collRefreshLabel}</p>
+                    </div>
+                  )}
+                </div>
                 <Popover open={collectionPopoverOpen} onOpenChange={setCollectionPopoverOpen}>
                   <PopoverTrigger asChild>
                     <Button variant="outline" className="h-8 w-full text-xs justify-between font-normal">

@@ -123,13 +123,13 @@ export function useSalesKPIs(bounds?: DateBounds) {
 // ─── Customer metrics ──────────────────────────────────────────────────────────
 
 export interface CustomerMetrics {
-  totalCustomers:    number;
-  oneTimeCustomers:  number;
-  repeatCustomers:   number;
-  oneTimePct:        number;
-  repeatPct:         number;
-  oneTimeRevenue:    number;
-  repeatRevenue:     number;
+  totalCustomers:     number;
+  newCustomers:       number;
+  returningCustomers: number;
+  newPct:             number;
+  returningPct:       number;
+  newRevenue:         number;
+  returningRevenue:   number;
 }
 
 export function useCustomerMetrics(bounds?: DateBounds) {
@@ -149,13 +149,13 @@ export function useCustomerMetrics(bounds?: DateBounds) {
 
       const row = (Array.isArray(data) ? data[0] : data) as any;
       return {
-        totalCustomers:   Number(row?.total_customers    ?? 0),
-        oneTimeCustomers: Number(row?.one_time_customers ?? 0),
-        repeatCustomers:  Number(row?.repeat_customers   ?? 0),
-        oneTimePct:       Number(row?.one_time_pct       ?? 0),
-        repeatPct:        Number(row?.repeat_pct         ?? 0),
-        oneTimeRevenue:   Number(row?.one_time_revenue   ?? 0),
-        repeatRevenue:    Number(row?.repeat_revenue     ?? 0),
+        totalCustomers:     Number(row?.total_customers     ?? 0),
+        newCustomers:       Number(row?.new_customers       ?? 0),
+        returningCustomers: Number(row?.returning_customers ?? 0),
+        newPct:             Number(row?.new_pct             ?? 0),
+        returningPct:       Number(row?.returning_pct       ?? 0),
+        newRevenue:         Number(row?.new_revenue         ?? 0),
+        returningRevenue:   Number(row?.returning_revenue   ?? 0),
       };
     },
   });
@@ -464,8 +464,11 @@ export function useCollectionSales(bounds?: DateBounds) {
           .from("collections")
           .select("id, name")
           .in("id", collectionIds);
+        const INTERNAL = new Set(["trending now", "all"]);
         const collIdToName = new Map<string, string>();
-        for (const c of (collRows ?? []) as any[]) collIdToName.set(c.id, c.name);
+        for (const c of (collRows ?? []) as any[]) {
+          if (!INTERNAL.has(c.name?.toLowerCase())) collIdToName.set(c.id, c.name);
+        }
         for (const r of (pcRows as any[])) {
           if (!collectionMap.has(r.product_id)) {
             const name = collIdToName.get(r.collection_id);
