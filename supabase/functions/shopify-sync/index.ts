@@ -336,6 +336,8 @@ async function syncCollections(supabase: any, conn: any, log: any, totalRef: { n
   const savedCursor: string | null = log.cursor ?? null;
   // collection_map persists across invocations in log.metadata: { shopifyCollectionId → dbCollectionId }
   const existingMap: Record<string, string> = (log.metadata?.collection_map ?? {}) as Record<string, string>;
+  // custom_shopify_ids: shopify IDs of manually-curated collections (not smart/automated)
+  const existingCustomIds: string[] = (log.metadata?.custom_shopify_ids ?? []) as string[];
 
   // --- Phase 1a: custom_collections metadata ---
   if (!savedCursor || savedCursor.startsWith("meta:custom:")) {
@@ -347,28 +349,28 @@ async function syncCollections(supabase: any, conn: any, log: any, totalRef: { n
         : `/custom_collections.json?limit=50`;
     const res = await shopifyFetch(domain, conn.access_token, path);
     const pageMap: Record<string, string> = {};
+    const pageCustomIds: string[] = [];
     if (res.ok) {
       const json = await res.json();
       for (const c of json.custom_collections ?? []) {
-        const dbId = await upsertCollection(supabase, c);
-        if (dbId) pageMap[String(c.id)] = dbId;
+        const dbId = await upsertCollection(supabase, c, conn.store_id);
+        if (dbId) { pageMap[String(c.id)] = dbId; pageCustomIds.push(String(c.id)); }
         totalRef.n++;
       }
       const link = res.headers.get("Link") ?? res.headers.get("link");
       const next = parseNextPageInfo(link);
       const merged = { ...existingMap, ...pageMap };
+      const mergedCustomIds = [...existingCustomIds, ...pageCustomIds];
       if (next) {
         await updateLog(supabase, log.id,
-          { current_stage: "collections", cursor: `meta:custom:${next}`, records_synced: totalRef.n, metadata: { collection_map: merged } },
+          { current_stage: "collections", cursor: `meta:custom:${next}`, records_synced: totalRef.n, metadata: { collection_map: merged, custom_shopify_ids: mergedCustomIds } },
           log.metadata);
         return true;
       }
       // All custom pages done — advance to smart
       await updateLog(supabase, log.id,
-        { current_stage: "collections", cursor: "meta:smart:", records_synced: totalRef.n, metadata: { collection_map: merged } },
+        { current_stage: "collections", cursor: "meta:smart:", records_synced: totalRef.n, metadata: { collection_map: merged, custom_shopify_ids: mergedCustomIds } },
         log.metadata);
-      // If incremental and no collections changed, skip straight to next stage
-      if (syncSince && Object.keys(merged).length === 0) return false;
     } else {
       await updateLog(supabase, log.id,
         { current_stage: "collections", cursor: "meta:smart:", records_synced: totalRef.n },
@@ -390,7 +392,7 @@ async function syncCollections(supabase: any, conn: any, log: any, totalRef: { n
     if (res.ok) {
       const json = await res.json();
       for (const c of json.smart_collections ?? []) {
-        const dbId = await upsertCollection(supabase, c);
+        const dbId = await upsertCollection(supabase, c, conn.store_id);
         if (dbId) pageMap[String(c.id)] = dbId;
         totalRef.n++;
       }
@@ -409,10 +411,12 @@ async function syncCollections(supabase: any, conn: any, log: any, totalRef: { n
         await updateLog(supabase, log.id,
           { current_stage: "collections", cursor: `by_coll:${collIds[0]}:`, records_synced: totalRef.n, metadata: { collection_map: merged, collection_ids_ordered: collIds } },
           log.metadata);
+        return true;
       } else {
         await updateLog(supabase, log.id,
           { current_stage: "collections", cursor: null, records_synced: totalRef.n, metadata: { collection_map: merged } },
           log.metadata);
+        return false;
       }
     } else {
       // Smart collections fetch failed — advance using whatever custom collections we have
@@ -421,13 +425,14 @@ async function syncCollections(supabase: any, conn: any, log: any, totalRef: { n
         await updateLog(supabase, log.id,
           { current_stage: "collections", cursor: `by_coll:${collIds[0]}:`, records_synced: totalRef.n, metadata: { collection_ids_ordered: collIds } },
           log.metadata);
+        return true;
       } else {
         await updateLog(supabase, log.id,
           { current_stage: "collections", cursor: null, records_synced: totalRef.n },
           log.metadata);
+        return false;
       }
     }
-    return true;
   }
 
   // --- Phase 2: link products to collections via per-collection fetch ---
@@ -453,6 +458,9 @@ async function syncCollections(supabase: any, conn: any, log: any, totalRef: { n
     const collId = existingMap[shopifyCollId];
     const allCollIds: string[] = ((log.metadata?.collection_ids_ordered) as string[] | undefined) ?? Object.keys(existingMap);
     const currentIdx = allCollIds.indexOf(shopifyCollId);
+    // Custom collections are the authoritative primary collection; smart ones are secondary
+    const customShopifyIds = new Set<string>((log.metadata?.custom_shopify_ids ?? []) as string[]);
+    const isCustomCollection = customShopifyIds.has(shopifyCollId);
 
     if (collId && shopifyCollId) {
       try {
@@ -474,7 +482,12 @@ async function syncCollections(supabase: any, conn: any, log: any, totalRef: { n
             await Promise.all(shopifyProds.map(async (p: any) => {
               const prodId = prodMap.get(String(p.id));
               if (!prodId) return;
-              await supabase.from("products").update({ collection_id: collId }).eq("id", prodId);
+              // Custom collections always win as primary; smart collections only fill in if no primary is set
+              if (isCustomCollection) {
+                await supabase.from("products").update({ collection_id: collId }).eq("id", prodId);
+              } else {
+                await supabase.from("products").update({ collection_id: collId }).eq("id", prodId).is("collection_id", null);
+              }
               await supabase.from("product_collections")
                 .upsert({ product_id: prodId, collection_id: collId }, { onConflict: "product_id,collection_id" });
               totalRef.n++;
@@ -514,35 +527,41 @@ async function syncCollections(supabase: any, conn: any, log: any, totalRef: { n
   return false;
 }
 
-async function upsertCollection(supabase: any, c: any): Promise<string | null> {
+async function upsertCollection(supabase: any, c: any, storeId: string): Promise<string | null> {
   const shopifyId = String(c.id);
-  // Try to find by shopify_collection_id (available if migration 9 has been applied)
+  // Look up by shopify_collection_id scoped to this store (store-specific collections)
   const { data: existing } = await supabase
-    .from("collections").select("id").eq("shopify_collection_id", shopifyId).maybeSingle();
+    .from("collections").select("id").eq("shopify_collection_id", shopifyId).eq("store_id", storeId).maybeSingle();
   if (existing?.id) {
     await supabase.from("collections").update({ name: c.title }).eq("id", existing.id);
     return existing.id;
   }
-  // Find by name (works without shopify_collection_id column)
+  // Fall back: look up by shopify_collection_id only (rows before store_id column existed)
+  const { data: byShopifyId } = await supabase
+    .from("collections").select("id").eq("shopify_collection_id", shopifyId).maybeSingle();
+  if (byShopifyId?.id) {
+    await supabase.from("collections").update({ name: c.title, store_id: storeId }).eq("id", byShopifyId.id);
+    return byShopifyId.id;
+  }
+  // Find by name within the same store
   const { data: byName } = await supabase
-    .from("collections").select("id").eq("name", c.title).maybeSingle();
+    .from("collections").select("id").eq("name", c.title).eq("store_id", storeId).maybeSingle();
   if (byName?.id) {
-    // Try to store shopify_collection_id — silently ignored if column doesn't exist
     await supabase.from("collections").update({ shopify_collection_id: shopifyId }).eq("id", byName.id);
     return byName.id;
   }
-  // Insert — try with shopify_collection_id first; if that fails, insert name-only
-  const withId = await supabase
+  // Insert new store-specific collection row
+  const { data: ins, error } = await supabase
     .from("collections")
-    .insert({ name: c.title, shopify_collection_id: shopifyId })
+    .insert({ name: c.title, shopify_collection_id: shopifyId, store_id: storeId })
     .select("id").single();
-  if (!withId.error) return withId.data?.id ?? null;
-  // shopify_collection_id column doesn't exist yet — insert name only
-  const { data: ins } = await supabase
+  if (!error && ins?.id) return ins.id;
+  // shopify_collection_id conflict (duplicate) — try without it
+  const { data: ins2 } = await supabase
     .from("collections")
-    .insert({ name: c.title })
+    .insert({ name: c.title, store_id: storeId })
     .select("id").single();
-  return ins?.id ?? null;
+  return ins2?.id ?? null;
 }
 
 // FIXED: single page per invocation (was: all pages in one invocation)
@@ -551,12 +570,16 @@ async function syncOrders(supabase: any, conn: any, log: any, totalRef: { n: num
   const pageInfo: string | null = log.current_stage === "orders" ? log.cursor : null;
   const page: number = log.current_stage === "orders" ? (log.current_page ?? 0) : 0;
 
-  const currentYearStart = `${new Date().getFullYear()}-01-01T00:00:00Z`;
+  // Full sync goes back 3 years so historical orders are present for new-vs-returning classification.
+  // Incremental syncs use updated_at_min so they only fetch changed orders.
+  const threeYearsAgo = new Date();
+  threeYearsAgo.setFullYear(threeYearsAgo.getFullYear() - 3);
+  const historicalStart = `${threeYearsAgo.getFullYear()}-01-01T00:00:00Z`;
   const path = pageInfo
     ? `/orders.json?limit=50&page_info=${encodeURIComponent(pageInfo)}`
     : syncSince
       ? `/orders.json?limit=50&status=any&updated_at_min=${encodeURIComponent(syncSince)}`
-      : `/orders.json?limit=50&status=any&created_at_min=${encodeURIComponent(currentYearStart)}`;
+      : `/orders.json?limit=50&status=any&created_at_min=${encodeURIComponent(historicalStart)}`;
   const res = await shopifyFetch(domain, conn.access_token, path);
   if (!res.ok) throw new Error(`orders [${res.status}]: ${(await res.text()).slice(0, 200)}`);
 
@@ -579,6 +602,7 @@ async function syncOrders(supabase: any, conn: any, log: any, totalRef: { n: num
       store_id: conn.store_id,
       customer_email: o.email || o.customer?.email || null,
       shopify_customer_id: o.customer?.id ? String(o.customer.id) : null,
+      customer_first_order_at: o.customer?.created_at || null,
       discount_codes: o.discount_codes?.length ? o.discount_codes : null,
       referring_site: o.referring_site || null,
       landing_site: o.landing_site || null,
@@ -1144,6 +1168,79 @@ Deno.serve(async (req) => {
       }
 
       return json(200, { ok: failed.length === 0, pushed, failed });
+    }
+
+    if (action === "sync_collections_meta") {
+      const storeId = String(body.store_id || "");
+      if (!storeId) return json(400, { ok: false, error: "store_id required" });
+      const { data: conn } = await supabase.from("shopify_connections")
+        .select("shop_domain, access_token, store_id")
+        .eq("store_id", storeId).eq("is_active", true).single();
+      if (!conn?.access_token) return json(404, { ok: false, error: "No active Shopify connection for store" });
+      const domain = normalizeDomain(conn.shop_domain);
+
+      const broadcast = async (stage: string, custom: number, smart: number) => {
+        try {
+          await fetch(`${SUPABASE_URL}/realtime/v1/api/broadcast`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${SERVICE_ROLE}`,
+              "apikey": ANON_KEY,
+            },
+            body: JSON.stringify({
+              messages: [{
+                topic: `realtime:collection-sync-${storeId}`,
+                event: "broadcast",
+                payload: { type: "broadcast", event: "progress", payload: { stage, custom, smart } },
+              }],
+            }),
+          });
+        } catch { /* non-critical */ }
+      };
+
+      let custom = 0, smart = 0;
+
+      await broadcast("fetching_manual", 0, 0);
+
+      // Fetch all custom collections and upsert with store_id
+      let pageInfo: string | null = null;
+      do {
+        const path = pageInfo
+          ? `/custom_collections.json?limit=250&page_info=${encodeURIComponent(pageInfo)}`
+          : `/custom_collections.json?limit=250`;
+        const res = await shopifyFetch(domain, conn.access_token, path);
+        if (!res.ok) break;
+        const data = await res.json();
+        for (const c of data.custom_collections ?? []) {
+          await upsertCollection(supabase, c, conn.store_id);
+          custom++;
+        }
+        await broadcast("fetching_manual", custom, 0);
+        pageInfo = parseNextPageInfo(res.headers.get("Link") ?? res.headers.get("link") ?? "");
+      } while (pageInfo);
+
+      await broadcast("fetching_smart", custom, 0);
+
+      // Fetch all smart collections and upsert with store_id
+      pageInfo = null;
+      do {
+        const path = pageInfo
+          ? `/smart_collections.json?limit=250&page_info=${encodeURIComponent(pageInfo)}`
+          : `/smart_collections.json?limit=250`;
+        const res = await shopifyFetch(domain, conn.access_token, path);
+        if (!res.ok) break;
+        const data = await res.json();
+        for (const c of data.smart_collections ?? []) {
+          await upsertCollection(supabase, c, conn.store_id);
+          smart++;
+        }
+        await broadcast("fetching_smart", custom, smart);
+        pageInfo = parseNextPageInfo(res.headers.get("Link") ?? res.headers.get("link") ?? "");
+      } while (pageInfo);
+
+      await broadcast("done", custom, smart);
+      return json(200, { ok: true, custom, smart });
     }
 
     return json(400, { ok: false, error: "Unknown action" });
