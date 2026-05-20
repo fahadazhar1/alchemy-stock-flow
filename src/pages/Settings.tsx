@@ -57,6 +57,28 @@ export default function Settings() {
       return data as Record<string, unknown> | null;
     },
     enabled: !!selectedStoreId,
+    refetchInterval: (query) =>
+      (query.state.data as Record<string, unknown> | null)?.last_sync_status === "in_progress" ? 8000 : false,
+  });
+
+  const { data: currentSyncLog } = useQuery({
+    queryKey: ["shopify-sync-log", (connection as Record<string, unknown> | null)?.id],
+    queryFn: async () => {
+      const connId = (connection as Record<string, unknown> | null)?.id;
+      if (!connId) return null;
+      const { data } = await supabase
+        .from("shopify_sync_logs" as never)
+        .select("sync_time, status, current_stage, records_synced")
+        .eq("connection_id", connId)
+        .eq("status", "in_progress")
+        .order("sync_time", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      return data as { sync_time: string; status: string; current_stage: string; records_synced: number } | null;
+    },
+    enabled: !!(connection as Record<string, unknown> | null)?.id &&
+      (connection as Record<string, unknown> | null)?.last_sync_status === "in_progress",
+    refetchInterval: 8000,
   });
 
   const isConnected = !!connection;
@@ -245,9 +267,39 @@ export default function Settings() {
               </div>
 
               <div className="text-xs text-muted-foreground border-t pt-3 space-y-1">
-                <div>Last sync: {connection.last_sync_at ? format(new Date(connection.last_sync_at as string), "PPpp") : "Never"}</div>
-                <div>Status: {(connection.last_sync_status as string) ?? "—"}</div>
-                <div>Records synced: {(connection.last_sync_records as number) ?? 0}</div>
+                {connection.last_sync_status === "in_progress" ? (
+                  <>
+                    <div>
+                      <span className="text-muted-foreground">Sync started: </span>
+                      {currentSyncLog?.sync_time
+                        ? format(new Date(currentSyncLog.sync_time), "PPpp")
+                        : "just now"}
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Stage: </span>
+                      {currentSyncLog?.current_stage ?? "—"}
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Records so far: </span>
+                      {currentSyncLog?.records_synced ?? 0}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div>
+                      <span className="text-muted-foreground">Last sync completed: </span>
+                      {connection.last_sync_at ? format(new Date(connection.last_sync_at as string), "PPpp") : "Never"}
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Status: </span>
+                      {(connection.last_sync_status as string) ?? "—"}
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Records synced: </span>
+                      {(connection.last_sync_records as number) ?? 0}
+                    </div>
+                  </>
+                )}
               </div>
             </>
           )}

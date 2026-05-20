@@ -15,6 +15,7 @@ export interface Store {
   updated_at: string | null;
   currency: string | null;
   currency_symbol: string | null;
+  timezone: string | null;
 }
 
 interface StoreContextType {

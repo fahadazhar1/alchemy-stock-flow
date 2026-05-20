@@ -18,7 +18,7 @@ export function useTopProducts(limit = 6, bounds?: DateBounds) {
   const b = bounds ?? getDateBounds("MTD");
 
   return useQuery({
-    queryKey: ["top-products", storeId, limit, b.startISO],
+    queryKey: ["top-products", storeId, limit, b.cacheKey],
     queryFn: async (): Promise<TopProduct[]> => {
       // ── Step 1: collect order IDs in the date window ──────────────────────
       let ordQ = (supabase as any)

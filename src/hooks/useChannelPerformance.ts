@@ -65,7 +65,7 @@ export function useChannelPerformance(days = 30, bounds?: DateBounds) {
   const b = bounds ?? getDateBounds("MTD");
 
   return useQuery({
-    queryKey: ["channel-performance", storeId, b.startISO],
+    queryKey: ["channel-performance", storeId, b.cacheKey],
     queryFn: async (): Promise<ChannelStat[]> => {
       // Use shopify_created_at — the actual order date, not DB insert time
       let q = (supabase as any)

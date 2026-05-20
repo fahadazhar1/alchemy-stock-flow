@@ -876,6 +876,11 @@ Deno.serve(async (req) => {
       if (storeId) {
         await supabase.from("shopify_connections").update({ is_active: false })
           .eq("store_id", storeId).eq("is_active", true);
+        // Persist timezone (and other shop metadata) so date calculations are store-specific
+        if (test.shop?.iana_timezone) {
+          await supabase.from("stores").update({ timezone: test.shop.iana_timezone })
+            .eq("id", storeId);
+        }
       }
       const { data: conn, error: insErr } = await supabase.from("shopify_connections").insert({
         store_id: storeId, shop_domain: domain, access_token: token, is_active: true,

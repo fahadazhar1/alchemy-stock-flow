@@ -7,19 +7,58 @@ export interface DateBounds {
   label: string;
   prevStartISO: string;
   prevEndISO: string;
+  /**
+   * Stable, deterministic string suitable for use in React Query cache keys.
+   * Does NOT contain `now.toISOString()` so it never changes on re-render.
+   * Format: "<Range>|<startDate>|<endDate>" where dates are YYYY-MM-DD in store TZ.
+   */
+  cacheKey: string;
 }
 
-function midnight(d: Date): Date {
-  const r = new Date(d);
-  r.setHours(0, 0, 0, 0);
-  return r;
+// ─── Timezone-aware helpers ───────────────────────────────────────────────────
+
+/**
+ * Returns the UTC instant for midnight (start of day) of `date` in `tz`.
+ *
+ * Strategy: get YYYY-MM-DD in `tz`, then back-solve what UTC time is 00:00:00
+ * on that date in `tz`.
+ */
+function tzMidnight(date: Date, tz: string): Date {
+  const ymd      = date.toLocaleDateString("sv-SE", { timeZone: tz }); // "YYYY-MM-DD"
+  const rough    = new Date(ymd + "T00:00:00Z");
+  const roughYmd = rough.toLocaleDateString("sv-SE", { timeZone: tz });
+  const roughHms = rough.toLocaleTimeString("sv-SE", { timeZone: tz, hour12: false });
+  const [h, m, s] = roughHms.split(":").map(Number);
+  let offsetMs = (h * 3600 + m * 60 + s) * 1000;
+  if (roughYmd < ymd) offsetMs -= 86_400_000; // TZ is behind UTC — rough landed on prev day
+  else if (roughYmd > ymd) offsetMs += 86_400_000;
+  return new Date(rough.getTime() - offsetMs);
 }
 
-export function getDateBounds(range: DateRangeKey): DateBounds {
+/** Returns 23:59:59.999 for the day containing `date` in `tz`. */
+function tzEndOfDay(date: Date, tz: string): Date {
+  return new Date(tzMidnight(date, tz).getTime() + 86_400_000 - 1);
+}
+
+/** UTC-safe noon for a calendar date — avoids day-boundary DST issues. */
+function utcNoon(year: number, month: number, day: number): Date {
+  return new Date(Date.UTC(year, month - 1, day, 12));
+}
+
+// ─── Public API ───────────────────────────────────────────────────────────────
+
+export function getDateBounds(range: DateRangeKey, timezone = "Asia/Karachi"): DateBounds {
   const now = new Date();
-  const today = midnight(now);
   const DAY = 86_400_000;
-  const fmt = (d: Date) => d.toLocaleDateString("en-GB", { month: "short", day: "numeric" });
+  const fmt = (d: Date) =>
+    d.toLocaleDateString("en-GB", { month: "short", day: "numeric", timeZone: timezone });
+
+  // Current date components in the store's timezone
+  const nowYmd = now.toLocaleDateString("sv-SE", { timeZone: timezone }); // "YYYY-MM-DD"
+  const [year, month, day] = nowYmd.split("-").map(Number);
+
+  const today    = tzMidnight(now, timezone);
+  const todayDow = new Date(Date.UTC(year, month - 1, day)).getDay(); // 0=Sun, 1=Mon…
 
   let start: Date;
   let prevStart: Date;
@@ -27,87 +66,100 @@ export function getDateBounds(range: DateRangeKey): DateBounds {
 
   switch (range) {
     case "Today": {
-      start = today;
+      start     = today;
       prevStart = new Date(today.getTime() - DAY);
-      prevEnd = new Date(today.getTime() - 1);
+      prevEnd   = new Date(today.getTime() - 1);
       break;
     }
     case "WTD": {
-      const dow = today.getDay(); // 0=Sun
-      const offset = dow === 0 ? 6 : dow - 1;
-      start = new Date(today.getTime() - offset * DAY);
+      const offset = todayDow === 0 ? 6 : todayDow - 1;
+      start     = new Date(today.getTime() - offset * DAY);
       prevStart = new Date(start.getTime() - 7 * DAY);
-      prevEnd = new Date(today.getTime() - 7 * DAY + DAY - 1);
+      prevEnd   = tzEndOfDay(new Date(today.getTime() - 7 * DAY + 43_200_000), timezone);
       break;
     }
-        case "MTD": {
-      start = new Date(now.getFullYear(), now.getMonth(), 1);
-      prevStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      prevEnd = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate(), 23, 59, 59, 999); // ✅ same day last month
+    case "MTD": {
+      start     = tzMidnight(utcNoon(year, month, 1), timezone);
+      prevStart = tzMidnight(utcNoon(year, month - 1, 1), timezone);
+      const lastOfPrev = new Date(Date.UTC(year, month - 1, 0)).getUTCDate();
+      prevEnd   = tzEndOfDay(utcNoon(year, month - 1, Math.min(day, lastOfPrev)), timezone);
       break;
     }
     case "QTD": {
-      const q = Math.floor(now.getMonth() / 3);
-      start = new Date(now.getFullYear(), q * 3, 1);
-      prevStart = new Date(now.getFullYear(), q * 3 - 3, 1);
-      const elapsed = now.getDate() - 1; // days elapsed since quarter start
-      const prevQStart = new Date(now.getFullYear(), q * 3 - 3, 1);
-      prevEnd = new Date(prevQStart.getTime() + elapsed * DAY + DAY - 1); // ✅ same elapsed days last quarter
+      const q   = Math.floor((month - 1) / 3);
+      start     = tzMidnight(utcNoon(year, q * 3 + 1, 1), timezone);
+      prevStart = tzMidnight(utcNoon(year, q * 3 - 2, 1), timezone); // JS handles negative months
+      const elapsed = Math.round((today.getTime() - start.getTime()) / DAY);
+      prevEnd   = tzEndOfDay(new Date(prevStart.getTime() + elapsed * DAY + 43_200_000), timezone);
       break;
     }
     case "YTD": {
-      start = new Date(now.getFullYear(), 0, 1);
-      prevStart = new Date(now.getFullYear() - 1, 0, 1);
-      prevEnd = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate(), 23, 59, 59, 999); // ✅ same calendar date last year
+      start     = tzMidnight(utcNoon(year, 1, 1), timezone);
+      prevStart = tzMidnight(utcNoon(year - 1, 1, 1), timezone);
+      prevEnd   = tzEndOfDay(utcNoon(year - 1, month, day), timezone);
       break;
     }
     default: {
-      start = new Date(now.getFullYear(), now.getMonth(), 1);
-      prevStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      prevEnd = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate(), 23, 59, 59, 999);
+      start     = tzMidnight(utcNoon(year, month, 1), timezone);
+      prevStart = tzMidnight(utcNoon(year, month - 1, 1), timezone);
+      const lastOfPrevDef = new Date(Date.UTC(year, month - 1, 0)).getUTCDate();
+      prevEnd   = tzEndOfDay(utcNoon(year, month - 1, Math.min(day, lastOfPrevDef)), timezone);
     }
   }
 
-  const days = Math.max(1, Math.ceil((now.getTime() - start.getTime()) / DAY));
-  const label =
-    range === "Today"
-      ? fmt(today)
-      : `${fmt(start)} – ${fmt(now)}`;
+  const days     = Math.max(1, Math.ceil((now.getTime() - start.getTime()) / DAY));
+  const label    = range === "Today" ? fmt(now) : `${fmt(start)} – ${fmt(now)}`;
+  const startKey = start.toLocaleDateString("sv-SE", { timeZone: timezone }); // "YYYY-MM-DD"
+  const cacheKey = `${range}|${startKey}|${nowYmd}`;
 
   return {
-    startISO: start.toISOString(),
-    endISO: now.toISOString(),
+    startISO:     start.toISOString(),
+    endISO:       now.toISOString(),
     days,
     label,
     prevStartISO: prevStart.toISOString(),
-    prevEndISO: prevEnd.toISOString(),
+    prevEndISO:   prevEnd.toISOString(),
+    cacheKey,
   };
 }
 
 export function comparePeriodLabel(range: DateRangeKey): string {
   const map: Record<DateRangeKey, string> = {
-    Today: "vs yesterday",
-    WTD: "vs last week",
-    MTD: "vs last month",
-    QTD: "vs last quarter",
-    YTD: "vs last year",
+    Today:  "vs yesterday",
+    WTD:    "vs last week",
+    MTD:    "vs last month",
+    QTD:    "vs last quarter",
+    YTD:    "vs last year",
     Custom: "vs prev period",
   };
   return map[range];
 }
 
-export function getCustomDateBounds(from: Date, to: Date): DateBounds {
-  const fmt = (d: Date) => d.toLocaleDateString("en-GB", { month: "short", day: "numeric" });
+export function getCustomDateBounds(from: Date, to: Date, timezone = "Asia/Karachi"): DateBounds {
+  const fmt = (d: Date) =>
+    d.toLocaleDateString("en-GB", { month: "short", day: "numeric", timeZone: timezone });
   const DAY = 86_400_000;
-  const days = Math.max(1, Math.ceil((to.getTime() - from.getTime()) / DAY));
-  const prevEnd = new Date(from.getTime() - 1);
-  const prevStart = new Date(from.getTime() - days * DAY);
+
+  const startDay = tzMidnight(from, timezone);
+  const endDay   = tzMidnight(to, timezone);
+  const endOfTo  = tzEndOfDay(to, timezone);
+
+  const days = Math.max(1, Math.round((endDay.getTime() - startDay.getTime()) / DAY) + 1);
+
+  const prevEnd   = new Date(startDay.getTime() - 1);
+  const prevStart = new Date(startDay.getTime() - days * DAY);
+
+  const startKey = startDay.toLocaleDateString("sv-SE", { timeZone: timezone });
+  const endKey   = endDay.toLocaleDateString("sv-SE", { timeZone: timezone });
+  const cacheKey = `Custom|${startKey}|${endKey}`;
+
   return {
-    startISO:    from.toISOString(),
-    endISO:      to.toISOString(),
+    startISO:     startDay.toISOString(),
+    endISO:       endOfTo.toISOString(),
     days,
-    label:       `${fmt(from)} – ${fmt(to)}`,
+    label:        `${fmt(from)} – ${fmt(to)}`,
     prevStartISO: prevStart.toISOString(),
     prevEndISO:   prevEnd.toISOString(),
+    cacheKey,
   };
 }

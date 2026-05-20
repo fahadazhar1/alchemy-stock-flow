@@ -32,6 +32,7 @@ import { useInventoryDashboard } from "@/hooks/useInventoryDashboard";
 import { OutOfStockWidget } from "./components/OutOfStockWidget";
 import { useSalesKPIs, useCollectionSales, useCustomerMetrics, useFulfillmentMetrics, useDiscountUsage, useTrafficSources, useChannelConversion } from "@/hooks/useSalesKPIs";
 import { supabase } from "@/integrations/supabase/client";
+import { useStore } from "@/contexts/StoreContext";
 import { type DateRangeKey, type DateBounds, getDateBounds, getCustomDateBounds, comparePeriodLabel } from "@/lib/dateRanges";
 
 // ─── Sparkline ───────────────────────────────────────────────────────────────
@@ -252,56 +253,67 @@ const STAGE_PCT: Record<string, number> = {
   complete:    100,
 };
 
-function SyncProgressBanner({ stage, recordsSynced, status }: {
+function SyncProgressBanner({ storeName, stage, recordsSynced, status }: {
+  storeName: string;
   stage: string | null;
   recordsSynced: number;
   status: string | null;
 }) {
-  const pct   = STAGE_PCT[stage ?? "products"] ?? 10;
-  const label = STAGE_LABELS[stage ?? "products"] ?? "Syncing…";
-  const done  = status === "success" || stage === "complete";
+  const pct    = STAGE_PCT[stage ?? "products"] ?? 10;
+  const label  = STAGE_LABELS[stage ?? "products"] ?? "Syncing…";
+  const done   = status === "success" || stage === "complete";
   const failed = status === "failed";
 
   return (
-    <div className={cn(
-      "flex items-center gap-3 px-4 py-2.5 rounded-lg border text-sm",
-      failed
-        ? "border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-950/30"
-        : done
-          ? "border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/30"
-          : "border-indigo-300 bg-indigo-50/60 dark:border-indigo-800 dark:bg-indigo-950/30"
-    )}>
-      <div className="flex items-center gap-2 shrink-0">
-        {failed ? (
-          <XCircle size={14} className="text-red-500" />
-        ) : done ? (
-          <CheckSquare size={14} className="text-emerald-600" />
-        ) : (
-          <Loader2 size={14} className="animate-spin text-indigo-600 dark:text-indigo-400" />
-        )}
-        <span className={cn("font-semibold text-xs",
-          failed ? "text-red-600" : done ? "text-emerald-700 dark:text-emerald-400" : "text-indigo-700 dark:text-indigo-300")}>
-          {failed ? "Sync failed" : done ? "Sync complete" : `${label}…`}
-        </span>
-      </div>
-      {!done && !failed && (
+    <div className="flex items-center gap-3 py-2.5 px-1 text-sm">
+      {/* Store label */}
+      <span className={cn(
+        "shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold tracking-wide",
+        failed
+          ? "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300"
+          : done
+            ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
+            : "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300"
+      )}>
+        {storeName}
+      </span>
+
+      {/* Spinner / icon */}
+      {failed ? (
+        <XCircle size={13} className="shrink-0 text-red-500" />
+      ) : done ? (
+        <CheckSquare size={13} className="shrink-0 text-emerald-600" />
+      ) : (
+        <Loader2 size={13} className="shrink-0 animate-spin text-indigo-500 dark:text-indigo-400" />
+      )}
+
+      {/* Stage label */}
+      <span className={cn("shrink-0 text-xs font-medium w-36",
+        failed ? "text-red-600" : done ? "text-emerald-700 dark:text-emerald-400" : "text-indigo-700 dark:text-indigo-300")}>
+        {failed ? "Sync failed" : done ? "Sync complete" : `${label}…`}
+      </span>
+
+      {/* Progress bar */}
+      {!done && !failed ? (
         <>
-          <div className="flex-1 h-1.5 bg-indigo-200/60 dark:bg-indigo-900/60 rounded-full overflow-hidden min-w-[80px]">
+          <div className="flex-1 h-1.5 bg-indigo-200/60 dark:bg-indigo-900/60 rounded-full overflow-hidden min-w-[60px]">
             <div className="h-full rounded-full bg-indigo-500 dark:bg-indigo-400 transition-all duration-700 ease-out"
               style={{ width: `${pct}%` }} />
           </div>
           <span className="text-xs font-bold tabular-nums text-indigo-600 dark:text-indigo-400 shrink-0 w-9 text-right">
             {pct}%
           </span>
+          <span className="text-xs text-muted-foreground shrink-0">
+            {fmtNum(recordsSynced)} records synced
+          </span>
         </>
+      ) : (
+        <span className="text-xs text-muted-foreground shrink-0">
+          {done
+            ? "All data refreshed"
+            : "Check your Shopify connection and try again"}
+        </span>
       )}
-      <span className="text-xs text-muted-foreground shrink-0">
-        {done
-          ? "All data refreshed — reloading dashboard…"
-          : failed
-            ? "Check your Shopify connection and try again"
-            : `${fmtNum(recordsSynced)} records synced`}
-      </span>
     </div>
   );
 }
@@ -312,22 +324,29 @@ function DateRangePicker({ from, to, isActive, onChange, onOpen }: {
   from: Date | null;
   to: Date | null;
   isActive: boolean;
-  onChange: (from: Date | null, to: Date | null) => void;
+  onChange: (from: Date, to: Date) => void;
   onOpen: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [selecting, setSelecting] = useState<{ from: Date; to?: Date } | undefined>(undefined);
 
   const label = from && to
     ? `${format(from, "dd MMM")} – ${format(to, "dd MMM")}`
-    : from
-    ? `${format(from, "dd MMM")} – …`
     : "Custom";
 
+  function handleOpenChange(next: boolean) {
+    if (next) {
+      // Reset to last confirmed range (or clear) each time user opens the picker
+      setSelecting(from && to ? { from, to } : undefined);
+      onOpen();
+    }
+    setOpen(next);
+  }
+
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
         <button
-          onClick={() => { onOpen(); setOpen(true); }}
           className={cn(
             "px-2.5 py-1 text-xs font-medium transition-colors border-l flex items-center gap-1",
             isActive ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground"
@@ -339,20 +358,20 @@ function DateRangePicker({ from, to, isActive, onChange, onOpen }: {
       <PopoverContent className="w-auto p-0" align="end" sideOffset={8}>
         <Calendar
           mode="range"
-          selected={
-            from && to ? { from, to }
-            : from ? { from, to: undefined }
-            : undefined
-          }
+          selected={selecting}
           onSelect={(range) => {
-            onChange(range?.from ?? null, range?.to ?? null);
-            if (range?.from && range?.to) setOpen(false);
+            const next = range?.from ? { from: range.from, to: range.to } : undefined;
+            setSelecting(next);
+            if (next?.from && next?.to) {
+              onChange(next.from, next.to);
+              setOpen(false);
+            }
           }}
           numberOfMonths={2}
           disabled={{ after: new Date() }}
           initialFocus
         />
-        {from && !to && (
+        {selecting?.from && !selecting?.to && (
           <p className="text-[11px] text-muted-foreground text-center pb-3">
             Click a second date to complete the range
           </p>
@@ -1428,26 +1447,33 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
 
 // ─── Page ────────────────────────────────────────────────────────────────────
 
-type SyncLogRow = { current_stage: string | null; records_synced: number; status: string } | null;
+type SyncLogRow = { current_stage: string | null; records_synced: number; status: string; store_id: string } | null;
 
 export default function Dashboard() {
   const [showBanner, setShowBanner] = useState(true);
   const [range, setRange]           = useState<DateRangeKey>("MTD");
   const [customFrom, setCustomFrom] = useState<Date | null>(null);
   const [customTo, setCustomTo]     = useState<Date | null>(null);
+  const queryClient                 = useQueryClient();
+  const { stores, selectedStore }   = useStore();
+
+  // Use the selected store's IANA timezone; fall back to browser timezone for "All Stores"
+  const tz = selectedStore?.timezone
+    ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+
   const bounds = range === "Custom" && customFrom && customTo
-    ? getCustomDateBounds(customFrom, customTo)
-    : getDateBounds(range as Exclude<DateRangeKey, "Custom">);
-  const queryClient             = useQueryClient();
+    ? getCustomDateBounds(customFrom, customTo, tz)
+    : getDateBounds(range as Exclude<DateRangeKey, "Custom">, tz);
+
   const { data: inventoryData } = useInventoryDashboard();
   const { data: globalKPIs }    = useSalesKPIs();
 
-  const [syncLog, setSyncLog]             = useState<SyncLogRow>(null);
+  const [syncLogs, setSyncLogs]           = useState<Record<string, SyncLogRow>>({});
   const [buttonPending, setButtonPending] = useState(false);
   const pendingTimerRef                   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const didInvalidateRef                  = useRef(false);
 
-  const isActivelySyncing = syncLog?.status === "in_progress";
+  const isActivelySyncing = Object.values(syncLogs).some(log => log?.status === "in_progress");
   const syncing = buttonPending || isActivelySyncing;
 
   const invalidateAll = useCallback(async () => {
@@ -1461,14 +1487,22 @@ export default function Dashboard() {
 
   useEffect(() => {
     let alive = true;
+
+    // Fetch the latest log per store (grab enough rows to cover all stores)
     (supabase as any)
       .from("shopify_sync_logs")
-      .select("current_stage, records_synced, status")
+      .select("current_stage, records_synced, status, store_id")
       .order("sync_time", { ascending: false })
-      .limit(1)
-      .single()
-      .then(({ data }: { data: SyncLogRow }) => {
-        if (alive) setSyncLog(data ?? null);
+      .limit(20)
+      .then(({ data }: { data: SyncLogRow[] | null }) => {
+        if (!alive) return;
+        const latestPerStore: Record<string, SyncLogRow> = {};
+        for (const row of data ?? []) {
+          if (row?.store_id && !latestPerStore[row.store_id]) {
+            latestPerStore[row.store_id] = row;
+          }
+        }
+        setSyncLogs(latestPerStore);
       });
 
     const channel = (supabase as any)
@@ -1477,7 +1511,9 @@ export default function Dashboard() {
         "postgres_changes",
         { event: "*", schema: "public", table: "shopify_sync_logs" },
         (payload: { new: SyncLogRow }) => {
-          if (alive) setSyncLog(payload.new ?? null);
+          const newLog = payload.new;
+          if (!alive || !newLog?.store_id) return;
+          setSyncLogs(prev => ({ ...prev, [newLog.store_id]: newLog }));
         }
       )
       .subscribe();
@@ -1489,18 +1525,18 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-    if (syncLog?.status === "in_progress") {
+    if (isActivelySyncing) {
       didInvalidateRef.current = false;
       return;
     }
-    if (
-      (syncLog?.status === "success" || syncLog?.current_stage === "complete") &&
-      !didInvalidateRef.current
-    ) {
+    const anySuccess = Object.values(syncLogs).some(
+      log => log?.status === "success" || log?.current_stage === "complete"
+    );
+    if (anySuccess && !didInvalidateRef.current) {
       didInvalidateRef.current = true;
       invalidateAll();
     }
-  }, [syncLog?.status, syncLog?.current_stage, invalidateAll]);
+  }, [isActivelySyncing, syncLogs, invalidateAll]);
 
   useEffect(() => {
     if (buttonPending && isActivelySyncing) {
@@ -1545,12 +1581,18 @@ export default function Dashboard() {
           pendingApprovals={globalKPIs?.pendingApprovals ?? null}
         />
       )}
-      {syncing && (
-        <SyncProgressBanner
-          stage={syncLog?.current_stage ?? null}
-          recordsSynced={syncLog?.records_synced ?? 0}
-          status={syncLog?.status ?? "in_progress"}
-        />
+      {syncing && stores.length > 0 && (
+        <div className="rounded-lg border border-indigo-200 bg-indigo-50/40 dark:border-indigo-800 dark:bg-indigo-950/20 px-4 divide-y divide-indigo-100 dark:divide-indigo-900">
+          {stores.map(store => (
+            <SyncProgressBanner
+              key={store.id}
+              storeName={store.store_name}
+              stage={syncLogs[store.id]?.current_stage ?? null}
+              recordsSynced={syncLogs[store.id]?.records_synced ?? 0}
+              status={syncLogs[store.id]?.status ?? (buttonPending ? "in_progress" : null)}
+            />
+          ))}
+        </div>
       )}
       <SalesSection
         bounds={bounds}

@@ -29,7 +29,7 @@ export function useSalesTrend(days = 30, bounds?: DateBounds) {
   })();
 
   return useQuery({
-    queryKey: ["sales-trend", storeId, b.startISO, b.prevStartISO],
+    queryKey: ["sales-trend", storeId, b.cacheKey],
     queryFn: async (): Promise<TrendPoint[]> => {
       // Fetch current + prev period in parallel
       let curQ = (supabase as any)

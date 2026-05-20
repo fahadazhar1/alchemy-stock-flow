@@ -39,7 +39,7 @@ export function useSalesKPIs(bounds?: DateBounds) {
   const b = bounds ?? getDateBounds("MTD");
 
   return useQuery({
-    queryKey: ["sales-kpis", storeId, b.startISO],
+    queryKey: ["sales-kpis", storeId, b.cacheKey],
     queryFn: async (): Promise<SalesKPIs> => {
       let mtdQ = (supabase as any)
         .from("orders")
@@ -137,7 +137,7 @@ export function useCustomerMetrics(bounds?: DateBounds) {
   const b = bounds ?? getDateBounds("MTD");
 
   return useQuery({
-    queryKey: ["customer-metrics", storeId, b.startISO, b.endISO],
+    queryKey: ["customer-metrics", storeId, b.cacheKey],
     queryFn: async (): Promise<CustomerMetrics> => {
       const { data, error } = await (supabase as any).rpc("get_customer_metrics", {
         p_start_iso: b.startISO,
@@ -173,7 +173,7 @@ export function useFulfillmentMetrics(bounds?: DateBounds) {
   const b = bounds ?? getDateBounds("MTD");
 
   return useQuery({
-    queryKey: ["fulfillment-metrics", storeId, b.startISO, b.endISO],
+    queryKey: ["fulfillment-metrics", storeId, b.cacheKey],
     queryFn: async (): Promise<FulfillmentMetrics> => {
       let q = (supabase as any)
         .from("orders")
@@ -225,7 +225,7 @@ export function useDiscountUsage(bounds?: DateBounds) {
   const b = bounds ?? getDateBounds("MTD");
 
   return useQuery({
-    queryKey: ["discount-usage", storeId, b.startISO, b.endISO],
+    queryKey: ["discount-usage", storeId, b.cacheKey],
     queryFn: async (): Promise<DiscountUsage> => {
       let q = (supabase as any)
         .from("orders")
@@ -336,7 +336,7 @@ export function useTrafficSources(bounds?: DateBounds) {
   const b = bounds ?? getDateBounds("MTD");
 
   return useQuery({
-    queryKey: ["traffic-sources", storeId, b.startISO, b.endISO],
+    queryKey: ["traffic-sources", storeId, b.cacheKey],
     queryFn: async (): Promise<TrafficSource[]> => {
       let q = (supabase as any)
         .from("orders")
@@ -380,7 +380,7 @@ export function useChannelConversion(bounds?: DateBounds) {
   const b = bounds ?? getDateBounds("MTD");
 
   return useQuery({
-    queryKey: ["channel-conversion", storeId, b.startISO, b.endISO],
+    queryKey: ["channel-conversion", storeId, b.cacheKey],
     queryFn: async (): Promise<ChannelConversion[]> => {
       let q = (supabase as any)
         .from("orders")
@@ -420,7 +420,7 @@ export function useCollectionSales(bounds?: DateBounds) {
   const b = bounds ?? getDateBounds("MTD");
 
   return useQuery({
-    queryKey: ["collection-sales", storeId, b.startISO, b.endISO],
+    queryKey: ["collection-sales", storeId, b.cacheKey],
     queryFn: async (): Promise<CollectionSale[]> => {
       let ordQ = (supabase as any)
         .from("orders")
