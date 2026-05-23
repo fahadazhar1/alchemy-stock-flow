@@ -34,7 +34,7 @@ const fmtChannel = (s: string | null) => {
 function sonicPaymentCls(status: string | null) {
   if (!status) return "text-amber-600 border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-400";
   const s = status.toLowerCase();
-  if (s.includes("processed") || s === "paid")
+  if (s.startsWith("payment -") || s === "paid")
     return "text-emerald-600 border-emerald-200 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-800 dark:text-emerald-400";
   return "text-amber-600 border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-400";
 }
@@ -44,8 +44,9 @@ function sonicPaymentCls(status: string | null) {
 const HEADERS = [
   "Order #", "Date", "Customer Email", "Channel", "Store",
   "Tracking #", "Courier", "Courier Status", "Payment Status",
-  "Order Total (PKR)", "COD Amount (PKR)", "Courier Charges (PKR)",
-  "Fuel Surcharge (PKR)", "GST (PKR)", "Net Receivable (PKR)", "Remittance Date",
+  "Order Total (PKR)", "COD Amount (PKR)", "Weight Charges (PKR)",
+  "Fuel Surcharge (PKR)", "GST (PKR)", "WHT (PKR)", "COD SST (PKR)",
+  "Net Receivable (PKR)", "Remittance Date",
 ];
 
 function rowToArray(r: CodDeliveredOrder): (string | number)[] {
@@ -64,6 +65,8 @@ function rowToArray(r: CodDeliveredOrder): (string | number)[] {
     r.shipping_charges ?? "",
     r.fuel_surcharge ?? "",
     r.gst ?? "",
+    r.wht ?? "",
+    r.cod_sst ?? "",
     r.net_receivable ?? "",
     r.remittance_date ? new Date(r.remittance_date).toLocaleDateString("en-GB") : "",
   ];
@@ -130,32 +133,38 @@ function triggerDownload(blob: Blob, filename: string) {
 // ─── Summary row ──────────────────────────────────────────────────────────────
 
 function SummaryBar({ rows }: { rows: CodDeliveredOrder[] }) {
-  const totals = useMemo(() => rows.reduce((acc, r) => ({
+  const t = useMemo(() => rows.reduce((acc, r) => ({
     order_total:      acc.order_total      + (r.order_total      ?? 0),
     cod_amount:       acc.cod_amount       + (r.cod_amount       ?? 0),
     shipping_charges: acc.shipping_charges + (r.shipping_charges ?? 0),
     fuel_surcharge:   acc.fuel_surcharge   + (r.fuel_surcharge   ?? 0),
     gst:              acc.gst              + (r.gst              ?? 0),
+    wht:              acc.wht              + (r.wht              ?? 0),
+    cod_sst:          acc.cod_sst          + (r.cod_sst          ?? 0),
     net_receivable:   acc.net_receivable   + (r.net_receivable   ?? 0),
-  }), { order_total: 0, cod_amount: 0, shipping_charges: 0, fuel_surcharge: 0, gst: 0, net_receivable: 0 }), [rows]);
+  }), { order_total: 0, cod_amount: 0, shipping_charges: 0, fuel_surcharge: 0, gst: 0, wht: 0, cod_sst: 0, net_receivable: 0 }), [rows]);
+
+  const items = [
+    { label: "COD Amount",      val: t.cod_amount,        deduction: false },
+    { label: "Weight Charges",  val: t.shipping_charges,  deduction: true  },
+    { label: "Fuel Surcharge",  val: t.fuel_surcharge,    deduction: true  },
+    { label: "GST",             val: t.gst,               deduction: true  },
+    { label: "WHT (2%)",        val: t.wht,               deduction: true  },
+    { label: "COD SST (2%)",    val: t.cod_sst,           deduction: true  },
+    { label: "Net Receivable",  val: t.net_receivable,    deduction: false },
+  ];
 
   return (
-    <div className="grid grid-cols-6 gap-2 p-3 rounded-lg border bg-muted/40 text-xs">
-      {[
-        { label: "Order Total",       val: totals.order_total,      neutral: true },
-        { label: "COD Amount",        val: totals.cod_amount,       neutral: true },
-        { label: "Courier Charges",   val: -totals.shipping_charges, neutral: false },
-        { label: "Fuel Surcharge",    val: -totals.fuel_surcharge,  neutral: false },
-        { label: "GST",               val: -totals.gst,             neutral: false },
-        { label: "Net Receivable",    val: totals.net_receivable,   neutral: false },
-      ].map(({ label, val, neutral }) => (
+    <div className="grid grid-cols-7 gap-2 p-3 rounded-lg border bg-muted/40 text-xs">
+      {items.map(({ label, val, deduction }) => (
         <div key={label} className="text-center">
-          <p className="text-muted-foreground mb-0.5">{label}</p>
+          <p className="text-muted-foreground mb-0.5 leading-tight">{label}</p>
           <p className={cn("font-bold tabular-nums",
-            neutral ? "" :
-            val < 0 ? "text-red-500 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"
+            !deduction
+              ? (val < 0 ? "text-red-500 dark:text-red-400" : val > 0 ? "text-emerald-600 dark:text-emerald-400" : "")
+              : "text-red-500 dark:text-red-400"
           )}>
-            {fmtPKR(Math.abs(val)) + (val < 0 ? " ▼" : "")}
+            {deduction ? "− " : ""}{fmtPKR(Math.abs(val))}
           </p>
         </div>
       ))}
@@ -176,7 +185,7 @@ function OrdersTable({ rows }: { rows: CodDeliveredOrder[] }) {
   }
 
   return (
-    <table className="w-full text-xs min-w-[1400px]">
+    <table className="w-full text-xs min-w-[1600px]">
       <thead className="sticky top-0 z-10">
         <tr className="border-b bg-muted/80 backdrop-blur">
           {[
@@ -190,9 +199,11 @@ function OrdersTable({ rows }: { rows: CodDeliveredOrder[] }) {
             { label: "Payment Status",  right: false },
             { label: "Order Total",     right: true  },
             { label: "COD Amount",      right: true  },
-            { label: "Courier Chg.",    right: true  },
+            { label: "Weight Chg.",     right: true  },
             { label: "Fuel",            right: true  },
             { label: "GST",             right: true  },
+            { label: "WHT",             right: true  },
+            { label: "COD SST",         right: true  },
             { label: "Net Receivable",  right: true  },
             { label: "Remitted On",     right: false },
           ].map((h, i) => (
@@ -235,6 +246,8 @@ function OrdersTable({ rows }: { rows: CodDeliveredOrder[] }) {
               <td className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">{fmtPKR(r.shipping_charges)}</td>
               <td className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">{fmtPKR(r.fuel_surcharge)}</td>
               <td className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">{fmtPKR(r.gst)}</td>
+              <td className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">{fmtPKR(r.wht)}</td>
+              <td className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">{fmtPKR(r.cod_sst)}</td>
               <td className={cn("px-3 py-2.5 text-right tabular-nums font-semibold",
                 net < 0 ? "text-red-500 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"
               )}>

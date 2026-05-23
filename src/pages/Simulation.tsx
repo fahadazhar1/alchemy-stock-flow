@@ -61,8 +61,8 @@ export default function Simulation() {
   const { data: settings } = useQuery({
     queryKey: ["app-settings"],
     queryFn: async () => {
-      const { data } = await supabase.from("app_settings").select("*").eq("setting_key", "pricing_config").single();
-      return data?.setting_value as Record<string, unknown> | null;
+      const { data } = await supabase.from("app_settings").select("*").eq("setting_key", "pricing_config").maybeSingle();
+      return (data?.setting_value ?? null) as Record<string, unknown> | null;
     },
   });
 

@@ -1,4 +1,4 @@
-export const UAE_TIMEZONE = 'Asia/Dubai';
+export const UAE_TIMEZONE = 'Asia/Karachi';
 
 export function formatUAEDate(date: string | Date, options?: Intl.DateTimeFormatOptions): string {
   const d = typeof date === 'string' ? new Date(date) : date;

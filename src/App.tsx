@@ -16,6 +16,7 @@ import AutoPilot from "@/pages/AutoPilot";
 import AuditLogs from "@/pages/AuditLogs";
 import CampaignPerformance from "@/pages/CampaignPerformance";
 import Replenishment from "@/pages/Replenishment";
+import ProductVelocity from "@/pages/ProductVelocity";
 import ApprovalQueue from "@/pages/ApprovalQueue";
 import Simulation from "@/pages/Simulation";
 import ExpiryMonitoring from "@/pages/ExpiryMonitoring";
@@ -50,6 +51,7 @@ const App = () => (
                   <Route path="/audit-logs" element={<AuditLogs />} />
                   <Route path="/campaigns" element={<CampaignPerformance />} />
                   <Route path="/replenishment" element={<Replenishment />} />
+                  <Route path="/product-velocity" element={<ProductVelocity />} />
                   <Route path="/approvals" element={<ApprovalQueue />} />
                   <Route path="/simulation" element={<Simulation />} />
                   <Route path="/expiry" element={<ExpiryMonitoring />} />

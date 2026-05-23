@@ -16,7 +16,7 @@ export function AppLayout() {
           <div className="flex-1" />
           <GlobalSearch />
           <ThemeToggle />
-          <span className="text-xs text-muted-foreground">UAE (UTC+4)</span>
+          <span className="text-xs text-muted-foreground">Pakistan (UTC+5)</span>
         </header>
         <main className="flex-1 overflow-auto p-6">
           <Outlet />

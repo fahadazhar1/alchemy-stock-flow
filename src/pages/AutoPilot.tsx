@@ -124,9 +124,8 @@ export default function AutoPilot() {
   const { data: settings, isLoading } = useQuery({
     queryKey: ["autopilot-settings"],
     queryFn: async () => {
-      const { data, error } = await supabase.from("app_settings").select("*").eq("setting_key", "autopilot_rules").single();
-      if (error && error.code !== "PGRST116") throw error;
-      return (data?.setting_value as unknown) as AutoPilotRule[] | null;
+      const { data } = await supabase.from("app_settings").select("*").eq("setting_key", "autopilot_rules").maybeSingle();
+      return ((data?.setting_value ?? null) as unknown) as AutoPilotRule[] | null;
     },
   });
 
@@ -134,7 +133,7 @@ export default function AutoPilot() {
 
   const saveRules = async (updatedRules: AutoPilotRule[]) => {
     try {
-      const { data: existing } = await supabase.from("app_settings").select("id").eq("setting_key", "autopilot_rules").single();
+      const { data: existing } = await supabase.from("app_settings").select("id").eq("setting_key", "autopilot_rules").maybeSingle();
       if (existing) {
         const { error } = await supabase.from("app_settings").update({ setting_value: updatedRules as unknown as Json }).eq("setting_key", "autopilot_rules");
         if (error) throw error;

@@ -5,7 +5,7 @@ import { useStoreFilter } from "@/hooks/useStoreFilter";
 
 // Collections that exist for internal/storefront purposes only and should never
 // appear as a product's collection label in the dashboard.
-const INTERNAL_COLLECTIONS = new Set(["trending now", "all"]);
+const INTERNAL_COLLECTIONS = new Set(["trending now", "all", "top selling"]);
 const isInternalCollection = (name: string | null | undefined) =>
   !name || INTERNAL_COLLECTIONS.has(name.toLowerCase());
 
@@ -56,6 +56,8 @@ export interface ReplenItem {
   urgency: "High" | "Medium" | "Low";
   available: number;
   suggested: number;
+  daysOfStock: number | null;
+  velocity: number;
 }
 
 export interface ExpiryItem {
@@ -92,7 +94,11 @@ const CAT_COLORS = [
 ];
 
 const URGENCY_MAP: Record<string, "High" | "Medium" | "Low"> = {
-  critical: "High", high: "High", medium: "Medium", low: "Low",
+  "out of stock":  "High",
+  "critical":      "High",
+  "replenish now": "High",
+  "low stock":     "Medium",
+  "watch closely": "Low",
 };
 
 // ─── Raw query shape (all statuses, fetched once per store) ──────────────────
@@ -127,8 +133,8 @@ export function useInventoryDashboard(statusFilter: ProductStatusFilter = "all")
 
       let replenQ = (supabase as any)
         .from("v_replenishment_candidates")
-        .select("product_name, sku, replenishment_status, velocity, available_units")
-        .order("available_units", { ascending: true })
+        .select("product_name, sku, replenishment_status, velocity, available_units, days_of_stock")
+        .order("days_of_stock", { ascending: true })
         .limit(5);
       if (storeId) replenQ = replenQ.eq("store_id", storeId);
 
@@ -269,14 +275,16 @@ export function useInventoryDashboard(statusFilter: ProductStatusFilter = "all")
 
     // ── Replenishment ─────────────────────────────────────────────────────────
     const replenishment: ReplenItem[] = replenRows.map((r: any) => {
-      const vel = Number(r.velocity ?? 0);
+      const vel   = Number(r.velocity ?? 0);
       const avail = Number(r.available_units ?? 0);
       return {
-        name:      r.product_name ?? "—",
-        sku:       r.sku ?? "—",
-        urgency:   URGENCY_MAP[(r.replenishment_status ?? "").toLowerCase()] ?? "Medium",
-        available: avail,
-        suggested: Math.max(0, Math.round(vel * 14 - avail)),
+        name:        r.product_name ?? "—",
+        sku:         r.sku ?? "—",
+        urgency:     URGENCY_MAP[(r.replenishment_status ?? "").toLowerCase()] ?? "Medium",
+        available:   avail,
+        suggested:   Math.max(0, Math.round(vel * 2 - avail)), // 2 weeks demand (vel = units/week)
+        daysOfStock: r.days_of_stock != null ? Number(r.days_of_stock) : null,
+        velocity:    vel,
       };
     });
 

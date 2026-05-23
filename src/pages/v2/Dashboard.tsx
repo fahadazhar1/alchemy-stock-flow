@@ -1374,24 +1374,46 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
                 <div className="px-4 py-5 text-center text-xs text-muted-foreground">No items need replenishment</div>
               ) : (
                 data.replenishment.map(r => (
-                  <div key={r.sku} className="flex items-center gap-3 px-4 py-2.5 border-t first:border-t-0">
-                    <div className="w-7 h-7 rounded-md bg-muted flex items-center justify-center shrink-0">
-                      <Package size={13} className="text-muted-foreground" />
+                  <div key={r.sku} className="px-4 py-2.5 border-t first:border-t-0">
+                    <div className="flex items-center gap-3">
+                      <div className="w-7 h-7 rounded-md bg-muted flex items-center justify-center shrink-0">
+                        <Package size={13} className="text-muted-foreground" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs font-medium truncate">{r.name}</div>
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          <span className="font-mono text-[10px] text-muted-foreground">{r.sku}</span>
+                          {r.daysOfStock !== null && (
+                            <span className="text-[10px] text-muted-foreground">· {r.daysOfStock}d left</span>
+                          )}
+                          {r.velocity > 0 && (
+                            <span className="text-[10px] text-muted-foreground">· {r.velocity}/wk</span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <Badge variant="outline" className={cn("text-[10px] px-1.5 py-0",
+                          r.urgency === "High"
+                            ? "text-red-500 border-red-200 bg-red-50 dark:bg-red-950/30 dark:border-red-800 dark:text-red-400"
+                            : r.urgency === "Medium"
+                              ? "text-amber-600 border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-400"
+                              : "text-muted-foreground border-border")}>
+                          {r.urgency}
+                        </Badge>
+                        {r.suggested > 0 && (
+                          <span className="text-xs font-semibold tabular-nums">+{r.suggested}</span>
+                        )}
+                      </div>
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-xs font-medium truncate">{r.name}</div>
-                      <div className="font-mono text-[10px] text-muted-foreground">{r.sku}</div>
-                    </div>
-                    <Badge variant="outline" className={cn("text-[10px] px-1.5 py-0 shrink-0",
-                      r.urgency === "High"
-                        ? "text-red-500 border-red-200 bg-red-50 dark:bg-red-950/30 dark:border-red-800 dark:text-red-400"
-                        : r.urgency === "Medium"
-                          ? "text-amber-600 border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-400"
-                          : "")}>
-                      {r.urgency}
-                    </Badge>
-                    {r.suggested > 0 && (
-                      <span className="text-xs font-semibold tabular-nums shrink-0">+{r.suggested}</span>
+                    {r.daysOfStock !== null && (
+                      <div className="mt-1.5 ml-10 h-1 w-[calc(100%-2.5rem)] rounded-full bg-muted overflow-hidden">
+                        <div
+                          className={cn("h-full rounded-full transition-all",
+                            r.urgency === "High" ? "bg-red-500" : r.urgency === "Medium" ? "bg-amber-500" : "bg-blue-400"
+                          )}
+                          style={{ width: `${Math.min((r.daysOfStock / 14) * 100, 100)}%` }}
+                        />
+                      </div>
                     )}
                   </div>
                 ))

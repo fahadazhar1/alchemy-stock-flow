@@ -393,6 +393,7 @@ interface CollectionProductWithPricing {
   title: string;
   price: number;
   compareAtPrice: number | null;
+  availableForSale: boolean;
 }
 
 async function fetchCollectionProductsWithPricing(
@@ -412,7 +413,7 @@ async function fetchCollectionProductsWithPricing(
           pageInfo { hasNextPage endCursor }
           nodes {
             id title
-            variants(first: 1) { nodes { price compareAtPrice } }
+            variants(first: 1) { nodes { price compareAtPrice availableForSale } }
           }
         }
       }
@@ -434,6 +435,7 @@ async function fetchCollectionProductsWithPricing(
         title: p.title,
         price: parseFloat(v?.price ?? "0"),
         compareAtPrice: v?.compareAtPrice ? parseFloat(v.compareAtPrice) : null,
+        availableForSale: v?.availableForSale ?? false,
       });
     }
     cursor = collection.products.pageInfo.hasNextPage ? collection.products.pageInfo.endCursor : null;
@@ -448,6 +450,7 @@ interface CollectionProductWithInventory {
   id: string;
   title: string;
   inventoryQuantity: number;
+  availableForSale: boolean;
 }
 
 async function fetchCollectionProductsWithInventory(
@@ -467,7 +470,7 @@ async function fetchCollectionProductsWithInventory(
           pageInfo { hasNextPage endCursor }
           nodes {
             id title
-            variants(first: 250) { nodes { inventoryQuantity } }
+            variants(first: 250) { nodes { inventoryQuantity availableForSale } }
           }
         }
       }
@@ -483,11 +486,10 @@ async function fetchCollectionProductsWithInventory(
     if (!collection) throw new Error(`Collection ${collectionId} not found`);
     collectionTitle = collection.title;
     for (const p of collection.products.nodes) {
-      const totalQty = (p.variants?.nodes ?? []).reduce(
-        (sum: number, v: { inventoryQuantity: number | null }) => sum + (v.inventoryQuantity ?? 0),
-        0,
-      );
-      products.push({ id: p.id, title: p.title, inventoryQuantity: totalQty });
+      const variantNodes = (p.variants?.nodes ?? []) as Array<{ inventoryQuantity: number | null; availableForSale: boolean }>;
+      const totalQty = variantNodes.reduce((sum, v) => sum + (v.inventoryQuantity ?? 0), 0);
+      const availableForSale = variantNodes.some((v) => v.availableForSale);
+      products.push({ id: p.id, title: p.title, inventoryQuantity: totalQty, availableForSale });
     }
     cursor = collection.products.pageInfo.hasNextPage ? collection.products.pageInfo.endCursor : null;
   } while (cursor);
@@ -501,6 +503,7 @@ async function fetchSalesData(
   supabase: ReturnType<typeof createClient>,
   storeId: string,
   shopifyGids: string[],
+  since?: string,
 ): Promise<Map<string, { orderCount: number; revenue: number }>> {
   // Use an RPC that does the join + aggregation server-side, scoped to this store.
   // Prior in-memory approach hit two bugs: PostgREST 1000-row default limit (truncated results)
@@ -510,6 +513,7 @@ async function fetchSalesData(
   const { data: rows, error } = await supabase.rpc("get_store_sales_data", {
     p_store_id: storeId,
     p_numeric_product_ids: numericIds,
+    p_since: since ?? null,
   });
 
   if (error) {
@@ -535,8 +539,15 @@ async function fetchSalesData(
 function sortProductsByDiscount(
   products: CollectionProductWithPricing[],
   sortRule: string,
+  inStockFirst: boolean,
 ): CollectionProductWithPricing[] {
   return [...products].sort((a, b) => {
+    // Stock tier: separate in-stock from out-of-stock first
+    if (a.availableForSale !== b.availableForSale) {
+      return inStockFirst
+        ? (a.availableForSale ? -1 : 1)
+        : (a.availableForSale ? 1 : -1);
+    }
     const aDiscount = a.compareAtPrice !== null && a.compareAtPrice > a.price
       ? ((a.compareAtPrice - a.price) / a.compareAtPrice) * 100 : 0;
     const bDiscount = b.compareAtPrice !== null && b.compareAtPrice > b.price
@@ -556,9 +567,16 @@ function sortProductsByInventory(
   sortRule: string,
   lowStockThreshold: number,
   overstockThreshold: number,
+  inStockFirst: boolean,
 ): CollectionProductWithInventory[] {
   if (sortRule === "low_stock_first") {
     return [...products].sort((a, b) => {
+      // Stock tier first
+      if (a.availableForSale !== b.availableForSale) {
+        return inStockFirst
+          ? (a.availableForSale ? -1 : 1)
+          : (a.availableForSale ? 1 : -1);
+      }
       const aLow = a.inventoryQuantity > 0 && a.inventoryQuantity < lowStockThreshold ? 1 : 0;
       const bLow = b.inventoryQuantity > 0 && b.inventoryQuantity < lowStockThreshold ? 1 : 0;
       if (aLow !== bLow) return bLow - aLow;
@@ -567,6 +585,12 @@ function sortProductsByInventory(
   }
   // overstock_first
   return [...products].sort((a, b) => {
+    // Stock tier first
+    if (a.availableForSale !== b.availableForSale) {
+      return inStockFirst
+        ? (a.availableForSale ? -1 : 1)
+        : (a.availableForSale ? 1 : -1);
+    }
     const aOver = a.inventoryQuantity > overstockThreshold ? 1 : 0;
     const bOver = b.inventoryQuantity > overstockThreshold ? 1 : 0;
     if (aOver !== bOver) return bOver - aOver;
@@ -664,7 +688,7 @@ Deno.serve(async (req: Request) => {
     });
   }
 
-  const { action, storeId, collections, sortRules, sortRule, lowStockThreshold, overstockThreshold } = body as {
+  const { action, storeId, collections, sortRules, sortRule, lowStockThreshold, overstockThreshold, inStockFirst, salesWindowDays } = body as {
     action: string;
     storeId: string;
     collections?: string[];
@@ -672,6 +696,8 @@ Deno.serve(async (req: Request) => {
     sortRule?: string;
     lowStockThreshold?: number;
     overstockThreshold?: number;
+    inStockFirst?: boolean;
+    salesWindowDays?: number;
   };
 
   if (!storeId) {
@@ -853,6 +879,8 @@ Deno.serve(async (req: Request) => {
       });
     }
     const rule = sortRule ?? "best_selling_first";
+    const windowDays = salesWindowDays && salesWindowDays > 0 ? salesWindowDays : 30;
+    const since = new Date(Date.now() - windowDays * 86_400_000).toISOString();
 
     // Pre-fetch all product GIDs across every selected collection so we can
     // build the sales data map before the streaming sort loop begins.
@@ -866,7 +894,7 @@ Deno.serve(async (req: Request) => {
         // (and be recorded) inside runStreamingSort.
       }
     }
-    const salesData = await fetchSalesData(supabase, storeId, allProductGids);
+    const salesData = await fetchSalesData(supabase, storeId, allProductGids, since);
     console.log(`[sales-sort] salesData size=${salesData.size}, top5=`, JSON.stringify(
       [...salesData.entries()]
         .sort((a, b) => b[1].orderCount - a[1].orderCount)
@@ -874,6 +902,7 @@ Deno.serve(async (req: Request) => {
         .map(([gid, s]) => ({ gid, ...s }))
     ));
 
+    const stockFirst = inStockFirst !== false; // default true
     return runStreamingSort(
       supabase, storeId, collections, domain, conn.access_token,
       (d, t, id) => fetchCollectionProducts(d, t, id).then(({ products, title }) => ({
@@ -882,6 +911,12 @@ Deno.serve(async (req: Request) => {
       })),
       (products) => {
         const sorted = [...products].sort((a, b) => {
+          // Stock tier first
+          if (a.availableForSale !== b.availableForSale) {
+            return stockFirst
+              ? (a.availableForSale ? -1 : 1)
+              : (a.availableForSale ? 1 : -1);
+          }
           const aStats = salesData.get(a.id) ?? { orderCount: 0, revenue: 0 };
           const bStats = salesData.get(b.id) ?? { orderCount: 0, revenue: 0 };
           if (rule === "revenue_first") return bStats.revenue - aStats.revenue;
@@ -912,7 +947,7 @@ Deno.serve(async (req: Request) => {
     return runStreamingSort(
       supabase, storeId, collections, domain, conn.access_token,
       fetchCollectionProductsWithPricing,
-      (products) => sortProductsByDiscount(products, rule),
+      (products) => sortProductsByDiscount(products, rule, inStockFirst !== false),
       rule,
     );
   }
@@ -931,7 +966,7 @@ Deno.serve(async (req: Request) => {
     return runStreamingSort(
       supabase, storeId, collections, domain, conn.access_token,
       fetchCollectionProductsWithInventory,
-      (products) => sortProductsByInventory(products, rule, lowThreshold, highThreshold),
+      (products) => sortProductsByInventory(products, rule, lowThreshold, highThreshold, inStockFirst !== false),
       rule,
     );
   }

@@ -229,9 +229,10 @@ export function useDiscountUsage(bounds?: DateBounds) {
     queryFn: async (): Promise<DiscountUsage> => {
       let q = (supabase as any)
         .from("orders")
-        .select("discount_codes, cancelled_at, total_price")
+        .select("discount_codes, total_discounts, cancelled_at, total_price")
         .gte("shopify_created_at", b.startISO)
-        .lte("shopify_created_at", b.endISO);
+        .lte("shopify_created_at", b.endISO)
+        .limit(10000);
       if (storeId) q = q.eq("store_id", storeId);
 
       const { data, error } = await q;
@@ -239,7 +240,9 @@ export function useDiscountUsage(bounds?: DateBounds) {
 
       const rows = ((data ?? []) as any[]).filter((r: any) => !r.cancelled_at);
       const total = rows.length;
-      const discountedRows = rows.filter((r: any) => r.discount_codes != null);
+      const discountedRows = rows.filter(
+        (r: any) => r.discount_codes != null || Number(r.total_discounts ?? 0) > 0
+      );
       const discounted = discountedRows.length;
       const rate = total > 0 ? Math.round((discounted / total) * 1000) / 10 : 0;
 
@@ -464,7 +467,7 @@ export function useCollectionSales(bounds?: DateBounds) {
           .from("collections")
           .select("id, name")
           .in("id", collectionIds);
-        const INTERNAL = new Set(["trending now", "all"]);
+        const INTERNAL = new Set(["trending now", "all", "top selling"]);
         const collIdToName = new Map<string, string>();
         for (const c of (collRows ?? []) as any[]) {
           if (!INTERNAL.has(c.name?.toLowerCase())) collIdToName.set(c.id, c.name);

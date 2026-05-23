@@ -604,6 +604,7 @@ async function syncOrders(supabase: any, conn: any, log: any, totalRef: { n: num
       shopify_customer_id: o.customer?.id ? String(o.customer.id) : null,
       customer_first_order_at: o.customer?.created_at || null,
       discount_codes: o.discount_codes?.length ? o.discount_codes : null,
+      total_discounts: o.total_discounts ? Number(o.total_discounts) : null,
       referring_site: o.referring_site || null,
       landing_site: o.landing_site || null,
       tracking_number: o.fulfillments?.[0]?.tracking_number
@@ -707,43 +708,48 @@ async function refreshVelocityMetrics(supabase: any, storeId: string | null) {
       { col: "units_sold_30d", days: 30 },
     ];
 
-    // Get all products for this store that have order_items
+    // Get all products for this store
     const productQ = storeId
       ? supabase.from("products").select("id").eq("store_id", storeId)
       : supabase.from("products").select("id");
     const { data: products } = await productQ;
     if (!products?.length) return;
 
+    const allProductIds = (products as { id: string }[]).map(p => p.id);
+
     for (const { col, days } of windows) {
       const cutoff = new Date(now.getTime() - days * 86_400_000).toISOString();
-      // For each window, sum quantities from order_items joined with non-cancelled orders
-      const { data: agg } = await supabase.rpc("calc_velocity_window", {
-        p_cutoff: cutoff,
-        p_store_id: storeId,
-      }).maybeSingle();
 
-      // Fallback: client-side aggregation if RPC doesn't exist
-      if (!agg) {
-        let q = (supabase as any)
-          .from("order_items")
-          .select("product_id, quantity, orders!inner(cancelled_at, shopify_created_at)")
-          .gte("orders.shopify_created_at", cutoff)
-          .is("orders.cancelled_at", null);
-        if (storeId) q = q.eq("store_id", storeId);
-        const { data: items } = await q;
+      // Aggregate actual sales from order_items within the window
+      let q = (supabase as any)
+        .from("order_items")
+        .select("product_id, quantity, orders!inner(cancelled_at, shopify_created_at)")
+        .gte("orders.shopify_created_at", cutoff)
+        .is("orders.cancelled_at", null);
+      if (storeId) q = q.eq("store_id", storeId);
+      const { data: items } = await q;
 
-        const map = new Map<string, number>();
-        for (const item of (items ?? []) as any[]) {
-          const pid = item.product_id as string;
-          map.set(pid, (map.get(pid) ?? 0) + Number(item.quantity ?? 0));
-        }
+      // Build map of actual counts — products not in map get 0
+      const map = new Map<string, number>();
+      for (const item of (items ?? []) as any[]) {
+        const pid = item.product_id as string;
+        map.set(pid, (map.get(pid) ?? 0) + Number(item.quantity ?? 0));
+      }
 
-        for (const [productId, units] of map.entries()) {
-          await supabase.from("product_velocity_metrics").upsert(
-            { product_id: productId, [col]: units, updated_at: now.toISOString() },
-            { onConflict: "product_id", ignoreDuplicates: false }
-          );
-        }
+      // Upsert every product: real count if it sold, 0 if it didn't
+      // This ensures stale values are always cleared on each refresh
+      const upsertRows = allProductIds.map(productId => ({
+        product_id: productId,
+        [col]: map.get(productId) ?? 0,
+        updated_at: now.toISOString(),
+      }));
+
+      // Batch in chunks of 500 to avoid request size limits
+      for (let i = 0; i < upsertRows.length; i += 500) {
+        await supabase.from("product_velocity_metrics").upsert(
+          upsertRows.slice(i, i + 500),
+          { onConflict: "product_id", ignoreDuplicates: false }
+        );
       }
     }
   } catch (e) {

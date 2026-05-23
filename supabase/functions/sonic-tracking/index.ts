@@ -13,21 +13,24 @@ const corsHeaders = {
 type CourierData = {
   courier_status:         string | null;
   courier_payment_status: string | null;
-  shipping_charges:       number | null;
+  shipping_charges:       number | null; // weight charges (base freight)
   fuel_surcharge:         number | null;
-  gst:                    number | null;
+  gst:                    number | null; // actual billed GST from payments endpoint
   cod_amount:             number | null;
+  wht:                    number | null; // withholding tax (2%)
+  cod_sst:                number | null; // COD sales service tax (2%)
   remittance_date:        string | null;
 };
 
-// M&P CN numbers are always 15-digit numeric strings
+// M&P CN numbers are always 15-digit numeric strings starting with 560
 function detectCourier(tn: string): "mandp" | "sonic" {
   return /^560\d{12}$/.test(tn) ? "mandp" : "sonic";
 }
 
 function toNum(v: unknown): number | null {
   if (v == null) return null;
-  const n = Number(v);
+  // handle formatted strings like "1,680.20"
+  const n = typeof v === "string" ? Number(v.replace(/,/g, "")) : Number(v);
   return isNaN(n) ? null : n;
 }
 
@@ -37,7 +40,6 @@ async function fetchFromSonic(tn: string): Promise<CourierData | null> {
   const enc     = encodeURIComponent(tn);
 
   try {
-    // tracking (type=0) gives current status + COD amount; charges + payments for financials
     const [trackRes, chargesRes, paymentsRes] = await Promise.all([
       fetch(`https://sonic.pk/api/shipment/track?tracking_number=${enc}&type=0`, { headers, signal: AbortSignal.timeout(10_000) }),
       fetch(`https://sonic.pk/api/shipment/charges?tracking_number=${enc}`,      { headers, signal: AbortSignal.timeout(10_000) }),
@@ -56,40 +58,53 @@ async function fetchFromSonic(tn: string): Promise<CourierData | null> {
     const history: any[] = details?.tracking_history ?? [];
     const currentStatus  = history[0]?.status ?? null;
 
-    const c = chargesData?.status === 0 ? chargesData.charges : null;
-    const shippingCharges = toNum(c?.total_charges);
-    const fuelSurcharge   = toNum(c?.fuel_surcharge);
-    const gst             = toNum(c?.gst);
+    // /charges endpoint — weight_charges is the base freight (not total_charges which excludes GST)
+    const c            = chargesData?.status === 0 ? chargesData.charges : null;
+    const weightCharges = toNum(c?.weight_charges);
+    const fuelSurcharge = toNum(c?.fuel_surcharge);
+
+    // /payments endpoint — two distinct entry types:
+    //   charge entry (amount = 0, type = 3): delivery fee billed to shipper, has actual GST
+    //   remittance entry (amount > 0, type = 0): COD collected, has WHT + COD SST
+    const payments: any[] = paymentsData?.status === 0 ? (paymentsData.payments ?? []) : [];
+
+    const chargeEntry     = payments.find(p => (toNum(p.amount) ?? 0) === 0);
+    const remittanceEntry = payments.find(p => (toNum(p.amount) ?? 0) > 0);
+
+    // Actual billed GST comes from the charge entry in payments (not the /charges estimate)
+    const gstActual = chargeEntry
+      ? toNum(chargeEntry.gst)
+      : toNum(c?.gst); // fall back to /charges estimate if not yet billed
 
     const paymentStatus: string | null = paymentsData?.status === 0
       ? paymentsData?.current_payment_status ?? null
       : null;
 
-    // payments[0].amount = actual COD collected/remitted (matches SONIC portal)
-    // order_information.amount = COD booked at shipment creation
-    // Use remitted amount when available (released orders); fall back to booked amount (held orders)
-    const remittedAmount = paymentsData?.status === 0
-      ? toNum(paymentsData?.payments?.[0]?.amount)
-      : null;
+    // COD amount: from remittance entry (actual collected), fall back to booked amount
     const bookedAmount = toNum(details?.order_information?.amount);
-    const codAmount    = remittedAmount ?? bookedAmount;
+    const codAmount    = remittanceEntry ? toNum(remittanceEntry.amount) : bookedAmount;
 
+    // WHT and COD SST: from remittance entry, fall back to top-level payments.charges
+    const wht    = toNum(remittanceEntry?.wht)     ?? toNum(paymentsData?.charges?.wht);
+    const codSst = toNum(remittanceEntry?.cod_sst) ?? toNum(paymentsData?.charges?.cod_sst);
+
+    // Remittance date: from the COD remittance entry
     let remittanceDate: string | null = null;
-    if (paymentsData?.status === 0) {
-      const rawDate: string | null = paymentsData?.payments?.[0]?.datetime ?? null;
-      if (rawDate) {
-        const d = new Date(rawDate);
-        remittanceDate = !isNaN(d.getTime()) ? d.toISOString() : rawDate;
-      }
+    const rawDate: string | null = remittanceEntry?.datetime ?? null;
+    if (rawDate) {
+      const d = new Date(rawDate);
+      remittanceDate = !isNaN(d.getTime()) ? d.toISOString() : rawDate;
     }
 
     return {
       courier_status:         currentStatus,
       courier_payment_status: paymentStatus,
-      shipping_charges:       shippingCharges,
+      shipping_charges:       weightCharges,
       fuel_surcharge:         fuelSurcharge,
-      gst:                    gst,
+      gst:                    gstActual,
       cod_amount:             codAmount,
+      wht,
+      cod_sst:                codSst,
       remittance_date:        remittanceDate,
     };
   } catch (e) {
@@ -99,7 +114,6 @@ async function fetchFromSonic(tn: string): Promise<CourierData | null> {
 }
 
 // ─── M&P ─────────────────────────────────────────────────────────────────────
-// Public tracking endpoint — no credentials required
 async function fetchFromMandP(cn: string): Promise<CourierData | null> {
   try {
     const res = await fetch(
@@ -132,8 +146,11 @@ async function fetchFromMandP(cn: string): Promise<CourierData | null> {
       courier_status:         lastEvent?.TrackingStatus ?? null,
       courier_payment_status: paymentStatus,
       shipping_charges:       toNum(inv?.AmountInvoiced),
-      fuel_surcharge:         null, // M&P API does not expose this separately
-      gst:                    null, // M&P API does not expose this separately
+      fuel_surcharge:         null,
+      gst:                    null,
+      cod_amount:             amountPaid > 0 ? amountPaid : null,
+      wht:                    null,
+      cod_sst:                null,
       remittance_date:        remittanceDate,
     };
   } catch {
@@ -161,7 +178,7 @@ Deno.serve(async (req) => {
     const cutoff = new Date(Date.now() - CACHE_TTL_MS).toISOString();
     const { data: cached } = await supabase
       .from("sonic_cache")
-      .select("tracking_number, courier, courier_status, courier_payment_status, shipping_charges, fuel_surcharge, gst, cod_amount, remittance_date")
+      .select("tracking_number, courier, courier_status, courier_payment_status, shipping_charges, fuel_surcharge, gst, cod_amount, wht, cod_sst, remittance_date")
       .in("tracking_number", trackingNumbers)
       .gte("last_synced_at", cutoff);
 
@@ -194,6 +211,8 @@ Deno.serve(async (req) => {
         fuel_surcharge:         e.fuel_surcharge,
         gst:                    e.gst,
         cod_amount:             e.cod_amount ?? null,
+        wht:                    e.wht ?? null,
+        cod_sst:                e.cod_sst ?? null,
         remittance_date:        e.remittance_date ?? null,
       } : null;
     }

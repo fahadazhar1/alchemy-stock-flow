@@ -135,6 +135,7 @@ export default function ProductMaster() {
 
         let q = supabase.from("v_product_inventory_summary").select("*", { count: "exact" });
         if (storeId) q = q.eq("store_id", storeId);
+        q = q.not("collection_name", "eq", "Trending Now").not("collection_name", "eq", "Top Selling");
         if (search) q = q.or(`product_name.ilike.%${search}%,sku.ilike.%${search}%`);
         if (collectionProductIds !== null) {
           if (!collectionProductIds.length) return { data: [], count: 0 };
@@ -557,7 +558,7 @@ export default function ProductMaster() {
               <SelectTrigger className="w-[160px]"><SelectValue placeholder="Collection" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Collections</SelectItem>
-                {collections?.map(c => <SelectItem key={c.name} value={c.name}>{c.name}</SelectItem>)}
+                {collections?.filter(c => !["trending now", "top selling"].includes(c.name.toLowerCase())).map(c => <SelectItem key={c.name} value={c.name}>{c.name}</SelectItem>)}
               </SelectContent>
             </Select>
             <Tooltip>

@@ -19,7 +19,7 @@ export default function Settings() {
   const { data: settings } = useQuery({
     queryKey: ["app-settings"],
     queryFn: async () => {
-      const { data } = await supabase.from("app_settings").select("*").eq("setting_key", "pricing_config").single();
+      const { data } = await supabase.from("app_settings").select("*").eq("setting_key", "pricing_config").maybeSingle();
       return (data?.setting_value ?? {}) as Record<string, unknown>;
     },
   });

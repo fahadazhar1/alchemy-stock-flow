@@ -5,9 +5,12 @@ export interface SonicTrackingData {
   courier:                "sonic" | "mandp" | null;
   courier_status:         string | null;
   courier_payment_status: string | null;
-  shipping_charges:       number | null;
+  shipping_charges:       number | null; // weight charges (base freight)
   fuel_surcharge:         number | null;
-  gst:                    number | null;
+  gst:                    number | null; // actual billed GST from payments
+  cod_amount:             number | null;
+  wht:                    number | null; // withholding tax (2%)
+  cod_sst:                number | null; // COD sales service tax (2%)
   remittance_date:        string | null;
 }
 

@@ -13,9 +13,11 @@ export interface CodDeliveredOrder {
   courier_payment_status: string | null;
   order_total:            number | null;
   cod_amount:             number | null;
-  shipping_charges:       number | null;
+  shipping_charges:       number | null; // weight charges
   fuel_surcharge:         number | null;
   gst:                    number | null;
+  wht:                    number | null;
+  cod_sst:                number | null;
   net_receivable:         number | null;
   remittance_date:        string | null;
 }

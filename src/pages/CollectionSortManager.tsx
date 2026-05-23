@@ -145,6 +145,7 @@ export default function CollectionSortManager() {
   const [spIncludeSearch, setSpIncludeSearch] = useState("");
   const [spExcludeSearch, setSpExcludeSearch] = useState("");
   const [spSortRule, setSpSortRule] = useState<"best_selling_first" | "revenue_first">("best_selling_first");
+  const [spSalesWindow, setSpSalesWindow] = useState<30 | 60 | 90>(30);
   const [spConfirmOpen, setSpConfirmOpen] = useState(false);
   const [spRunning, setSpRunning] = useState(false);
   const [spCollectionProgress, setSpCollectionProgress] = useState<CollectionProgress[]>([]);
@@ -160,6 +161,11 @@ export default function CollectionSortManager() {
   const [dcRunning, setDcRunning] = useState(false);
   const [dcCollectionProgress, setDcCollectionProgress] = useState<CollectionProgress[]>([]);
   const [dcRunSummary, setDcRunSummary] = useState<RunSummary | null>(null);
+
+  // ── In-stock-first toggles (one per module, default on) ────────────────────
+  const [spInStockFirst, setSpInStockFirst] = useState(true);
+  const [dcInStockFirst, setDcInStockFirst] = useState(true);
+  const [invInStockFirst, setInvInStockFirst] = useState(true);
 
   // ── Module 3: Inventory ─────────────────────────────────────────────────────
   const [invExcludedIds, setInvExcludedIds] = useState<Set<string>>(new Set());
@@ -737,6 +743,8 @@ export default function CollectionSortManager() {
           storeId: selectedStoreId,
           collections: spSortableCollections.map((c) => c.id),
           sortRule: spSortRule,
+          inStockFirst: spInStockFirst,
+          salesWindowDays: spSalesWindow,
         }),
       });
       if (!response.ok || !response.body) throw new Error(`Edge function returned ${response.status}`);
@@ -810,6 +818,7 @@ export default function CollectionSortManager() {
           storeId: selectedStoreId,
           collections: dcSortableCollections.map((c) => c.id),
           sortRule: dcSortRule,
+          inStockFirst: dcInStockFirst,
         }),
       });
       if (!response.ok || !response.body) throw new Error(`Edge function returned ${response.status}`);
@@ -885,6 +894,7 @@ export default function CollectionSortManager() {
           sortRule: invSortRule,
           lowStockThreshold,
           overstockThreshold,
+          inStockFirst: invInStockFirst,
         }),
       });
       if (!response.ok || !response.body) throw new Error(`Edge function returned ${response.status}`);
@@ -1421,6 +1431,34 @@ export default function CollectionSortManager() {
             </Select>
           </div>
 
+          {/* Sales window selector */}
+          <div className="flex items-center gap-3">
+            <Label className="shrink-0 text-sm font-medium">Sales Window</Label>
+            <Select value={String(spSalesWindow)} onValueChange={(v) => setSpSalesWindow(Number(v) as 30 | 60 | 90)}>
+              <SelectTrigger className="w-[280px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="30">Last 30 days</SelectItem>
+                <SelectItem value="60">Last 60 days</SelectItem>
+                <SelectItem value="90">Last 90 days</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Stock status toggle */}
+          <div className="flex items-center justify-between">
+            <div>
+              <Label className="text-sm font-medium">Stock Status</Label>
+              <p className="text-xs text-muted-foreground">Push out-of-stock products to the bottom</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className={`text-xs ${!spInStockFirst ? "text-foreground font-medium" : "text-muted-foreground"}`}>OOS First</span>
+              <Switch checked={spInStockFirst} onCheckedChange={setSpInStockFirst} />
+              <span className={`text-xs ${spInStockFirst ? "text-foreground font-medium" : "text-muted-foreground"}`}>In-Stock First</span>
+            </div>
+          </div>
+
           {/* Two-panel collection selector */}
           <div className="grid grid-cols-2 gap-4">
             <div className="border rounded-md flex flex-col">
@@ -1607,6 +1645,19 @@ export default function CollectionSortManager() {
                 <SelectItem value="highest_discount_first">Highest Discount % First</SelectItem>
               </SelectContent>
             </Select>
+          </div>
+
+          {/* Stock status toggle */}
+          <div className="flex items-center justify-between">
+            <div>
+              <Label className="text-sm font-medium">Stock Status</Label>
+              <p className="text-xs text-muted-foreground">Push out-of-stock products to the bottom</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className={`text-xs ${!dcInStockFirst ? "text-foreground font-medium" : "text-muted-foreground"}`}>OOS First</span>
+              <Switch checked={dcInStockFirst} onCheckedChange={setDcInStockFirst} />
+              <span className={`text-xs ${dcInStockFirst ? "text-foreground font-medium" : "text-muted-foreground"}`}>In-Stock First</span>
+            </div>
           </div>
 
           {/* Two-panel collection selector */}
@@ -1820,6 +1871,19 @@ export default function CollectionSortManager() {
                 className="h-7 w-20 text-xs"
               />
               <span className="text-xs text-muted-foreground">units</span>
+            </div>
+          </div>
+
+          {/* Stock status toggle */}
+          <div className="flex items-center justify-between">
+            <div>
+              <Label className="text-sm font-medium">Stock Status</Label>
+              <p className="text-xs text-muted-foreground">Push out-of-stock products to the bottom</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className={`text-xs ${!invInStockFirst ? "text-foreground font-medium" : "text-muted-foreground"}`}>OOS First</span>
+              <Switch checked={invInStockFirst} onCheckedChange={setInvInStockFirst} />
+              <span className={`text-xs ${invInStockFirst ? "text-foreground font-medium" : "text-muted-foreground"}`}>In-Stock First</span>
             </div>
           </div>
 
@@ -2076,6 +2140,14 @@ export default function CollectionSortManager() {
               <p className="font-medium">{spSortRule === "best_selling_first" ? "Best Selling First (by order count)" : "Revenue First (quantity × price)"}</p>
             </div>
             <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Sales Window</p>
+              <p className="font-medium">Last {spSalesWindow} days</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Stock Status</p>
+              <p className="font-medium">{spInStockFirst ? "In-Stock First" : "Out-of-Stock First"}</p>
+            </div>
+            <div>
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
                 Collections to sort ({spSortableCollections.length})
               </p>
@@ -2115,6 +2187,10 @@ export default function CollectionSortManager() {
             <div>
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Sort Rule</p>
               <p className="font-medium">{dcSortRule === "discounted_first" ? "Discounted Products First" : "Highest Discount % First"}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Stock Status</p>
+              <p className="font-medium">{dcInStockFirst ? "In-Stock First" : "Out-of-Stock First"}</p>
             </div>
             <div>
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
@@ -2160,6 +2236,10 @@ export default function CollectionSortManager() {
                   ? `Low Stock First — threshold: ${lowStockThreshold} units`
                   : `Overstock First — threshold: ${overstockThreshold} units`}
               </p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Stock Status</p>
+              <p className="font-medium">{invInStockFirst ? "In-Stock First" : "Out-of-Stock First"}</p>
             </div>
             <div>
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
