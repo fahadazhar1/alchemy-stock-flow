@@ -504,7 +504,7 @@ async function fetchSalesData(
   storeId: string,
   shopifyGids: string[],
   since?: string,
-): Promise<Map<string, { orderCount: number; revenue: number }>> {
+): Promise<Map<string, { orderCount: number; unitsSold: number; revenue: number }>> {
   // Use an RPC that does the join + aggregation server-side, scoped to this store.
   // Prior in-memory approach hit two bugs: PostgREST 1000-row default limit (truncated results)
   // and nginx 8KB URL limit (silent empty results when using .in() with large arrays).
@@ -521,13 +521,14 @@ async function fetchSalesData(
     return new Map();
   }
 
-  const result = new Map<string, { orderCount: number; revenue: number }>();
-  for (const row of (rows ?? []) as Array<{ shopify_product_id: string; order_count: number; revenue: number }>) {
+  const result = new Map<string, { orderCount: number; unitsSold: number; revenue: number }>();
+  for (const row of (rows ?? []) as Array<{ shopify_product_id: string; order_count: number; units_sold: number; revenue: number }>) {
     const gid = shopifyGids.find((g) => extractShopifyNumericId(g) === row.shopify_product_id);
     if (gid) {
       result.set(gid, {
         orderCount: Number(row.order_count),
-        revenue: Number(row.revenue),
+        unitsSold:  Number(row.units_sold),
+        revenue:    Number(row.revenue),
       });
     }
   }
@@ -917,9 +918,10 @@ Deno.serve(async (req: Request) => {
               ? (a.availableForSale ? -1 : 1)
               : (a.availableForSale ? 1 : -1);
           }
-          const aStats = salesData.get(a.id) ?? { orderCount: 0, revenue: 0 };
-          const bStats = salesData.get(b.id) ?? { orderCount: 0, revenue: 0 };
-          if (rule === "revenue_first") return bStats.revenue - aStats.revenue;
+          const aStats = salesData.get(a.id) ?? { orderCount: 0, unitsSold: 0, revenue: 0 };
+          const bStats = salesData.get(b.id) ?? { orderCount: 0, unitsSold: 0, revenue: 0 };
+          if (rule === "revenue_first")    return bStats.revenue    - aStats.revenue;
+          if (rule === "units_sold_first") return bStats.unitsSold  - aStats.unitsSold;
           return bStats.orderCount - aStats.orderCount;
         });
         // Log top 3 for first collection to verify scoring

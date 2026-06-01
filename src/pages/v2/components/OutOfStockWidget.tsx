@@ -8,17 +8,16 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { fmtNum } from "../mockData";
-import { useOutOfStockLast7Days, type OosProduct } from "@/hooks/useOutOfStockLast7Days";
+import { useOutOfStockBestSellers, type OosProduct } from "@/hooks/useOutOfStockLast7Days";
 import { useCurrency } from "@/hooks/useCurrency";
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+const DAY_OPTIONS = [7, 15, 30, 60] as const;
+type DayOption = typeof DAY_OPTIONS[number];
 
 function fmtDate(iso: string | null): string {
   if (!iso) return "—";
   return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 }
-
-// ─── Skeleton ────────────────────────────────────────────────────────────────
 
 function OosRowSkeleton() {
   return (
@@ -32,8 +31,6 @@ function OosRowSkeleton() {
   );
 }
 
-// ─── OOS badge ───────────────────────────────────────────────────────────────
-
 const OOS_BADGE = (
   <Badge variant="outline"
     className="text-[10px] px-1.5 py-0 text-red-500 border-red-200 bg-red-50 dark:bg-red-950/30 dark:border-red-800 dark:text-red-400">
@@ -41,17 +38,14 @@ const OOS_BADGE = (
   </Badge>
 );
 
-// ─── Table ───────────────────────────────────────────────────────────────────
-
-const HEADERS = ["Product", "Price", "Sold 7d", "Revenue 7d", "Est. loss/day", "Last sold", "Current"];
-
-function OosTable({ rows }: { rows: OosProduct[] }) {
+function OosTable({ rows, days }: { rows: OosProduct[]; days: number }) {
   const { fmtCurrency: fmtGBP } = useCurrency();
+  const headers = ["Product", "Price", `Sold ${days}d`, `Revenue ${days}d`, "Est. loss/day", "Last sold", "Current"];
   return (
     <table className="w-full text-xs">
       <thead>
         <tr className="border-b">
-          {HEADERS.map((h, i) => (
+          {headers.map((h, i) => (
             <th key={i} className={cn(
               "px-4 py-2 font-medium text-muted-foreground text-left",
               i >= 1 && "text-right",
@@ -67,8 +61,8 @@ function OosTable({ rows }: { rows: OosProduct[] }) {
               <div className="font-mono text-[10px] text-muted-foreground">{r.sku}</div>
             </td>
             <td className="px-4 py-2.5 text-right tabular-nums">{fmtGBP(r.price)}</td>
-            <td className="px-4 py-2.5 text-right tabular-nums">{fmtNum(r.unitsSold7d)}</td>
-            <td className="px-4 py-2.5 text-right tabular-nums font-medium">{fmtGBP(r.revenue7d)}</td>
+            <td className="px-4 py-2.5 text-right tabular-nums">{fmtNum(r.unitsSold)}</td>
+            <td className="px-4 py-2.5 text-right tabular-nums font-medium">{fmtGBP(r.revenue)}</td>
             <td className="px-4 py-2.5 text-right tabular-nums text-red-600 dark:text-red-400 font-medium">
               {fmtGBP(r.estimatedLostRevenuePerDay)}
             </td>
@@ -81,10 +75,9 @@ function OosTable({ rows }: { rows: OosProduct[] }) {
   );
 }
 
-// ─── Widget ──────────────────────────────────────────────────────────────────
-
 export function OutOfStockWidget() {
-  const { data, isLoading } = useOutOfStockLast7Days();
+  const [days, setDays] = useState<DayOption>(7);
+  const { data, isLoading } = useOutOfStockBestSellers(days);
   const [open, setOpen] = useState(false);
 
   const preview = useMemo(() => (data ?? []).slice(0, 7), [data]);
@@ -98,7 +91,7 @@ export function OutOfStockWidget() {
             <div className="flex items-center gap-2">
               <XCircle size={14} className="text-red-500" />
               <h3 className="text-sm font-semibold">Out of stock</h3>
-              <span className="text-xs text-muted-foreground">best sellers, last 7 days</span>
+              <span className="text-xs text-muted-foreground">best sellers</span>
               {!isLoading && total > 0 && (
                 <Badge variant="outline"
                   className="text-[10px] px-1.5 py-0 text-red-500 border-red-200 bg-red-50 dark:bg-red-950/30 dark:border-red-800 dark:text-red-400">
@@ -106,12 +99,29 @@ export function OutOfStockWidget() {
                 </Badge>
               )}
             </div>
-            {total > 7 && (
-              <Button size="sm" variant="outline" className="h-7 text-xs"
-                onClick={() => setOpen(true)}>
-                View all {total}
-              </Button>
-            )}
+
+            <div className="flex items-center gap-1">
+              {DAY_OPTIONS.map(d => (
+                <button
+                  key={d}
+                  onClick={() => setDays(d)}
+                  className={cn(
+                    "px-2 py-0.5 rounded text-[11px] font-medium transition-colors",
+                    days === d
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-muted",
+                  )}
+                >
+                  {d}d
+                </button>
+              ))}
+              {total > 7 && (
+                <Button size="sm" variant="outline" className="h-7 text-xs ml-1"
+                  onClick={() => setOpen(true)}>
+                  View all {total}
+                </Button>
+              )}
+            </div>
           </div>
         </CardHeader>
 
@@ -122,10 +132,10 @@ export function OutOfStockWidget() {
             </table>
           ) : !preview.length ? (
             <div className="px-4 py-6 text-center text-xs text-muted-foreground">
-              No recently sold products are currently out of stock.
+              No best-selling products are currently out of stock.
             </div>
           ) : (
-            <OosTable rows={preview} />
+            <OosTable rows={preview} days={days} />
           )}
         </CardContent>
       </Card>
@@ -135,7 +145,7 @@ export function OutOfStockWidget() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <XCircle size={16} className="text-red-500" />
-              Out of stock — best sellers, last 7 days
+              Out of stock — best sellers, last {days} days
               <Badge variant="outline"
                 className="text-[10px] px-1.5 py-0 text-red-500 border-red-200 bg-red-50 dark:bg-red-950/30 dark:border-red-800 dark:text-red-400 ml-1">
                 {total}
@@ -143,7 +153,7 @@ export function OutOfStockWidget() {
             </DialogTitle>
           </DialogHeader>
           <div className="mt-2 rounded-md border overflow-hidden">
-            <OosTable rows={data ?? []} />
+            <OosTable rows={data ?? []} days={days} />
           </div>
         </DialogContent>
       </Dialog>

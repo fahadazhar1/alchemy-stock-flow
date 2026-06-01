@@ -16,7 +16,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
 import {
   ArrowUpDown, GripVertical, Plus, X, CheckSquare, Square,
-  AlertTriangle, ChevronRight, ChevronLeft, Loader2, ListOrdered,
+  AlertTriangle, ChevronRight, ChevronLeft, Loader2, ListOrdered, RefreshCw,
 } from "lucide-react";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
@@ -144,7 +144,7 @@ export default function CollectionSortManager() {
   const [spCheckedIds, setSpCheckedIds] = useState<Set<string>>(new Set());
   const [spIncludeSearch, setSpIncludeSearch] = useState("");
   const [spExcludeSearch, setSpExcludeSearch] = useState("");
-  const [spSortRule, setSpSortRule] = useState<"best_selling_first" | "revenue_first">("best_selling_first");
+  const [spSortRule, setSpSortRule] = useState<"best_selling_first" | "revenue_first" | "units_sold_first">("best_selling_first");
   const [spSalesWindow, setSpSalesWindow] = useState<30 | 60 | 90>(30);
   const [spConfirmOpen, setSpConfirmOpen] = useState(false);
   const [spRunning, setSpRunning] = useState(false);
@@ -993,10 +993,20 @@ export default function CollectionSortManager() {
                 ))}
               </SelectContent>
             </Select>
-            {loadingCollections && (
+            {loadingCollections ? (
               <span className="text-xs text-muted-foreground flex items-center gap-1">
                 <Loader2 className="h-3 w-3 animate-spin" /> Loading collections…
               </span>
+            ) : selectedStoreId && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 px-2 text-xs text-muted-foreground"
+                onClick={() => fetchCollections(selectedStoreId)}
+                title="Refresh collection names from Shopify"
+              >
+                <RefreshCw className="h-3 w-3 mr-1" /> Refresh
+              </Button>
             )}
           </div>
 
@@ -1426,6 +1436,7 @@ export default function CollectionSortManager() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="best_selling_first">Best Selling First (by order count)</SelectItem>
+                <SelectItem value="units_sold_first">Most Units Sold (by quantity)</SelectItem>
                 <SelectItem value="revenue_first">Revenue First (quantity × price)</SelectItem>
               </SelectContent>
             </Select>
