@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "sonner";
-import { Store as StoreIcon, Plus, Pencil, Link, RefreshCw, Warehouse } from "lucide-react";
+import { Store as StoreIcon, Plus, Pencil, RefreshCw, Warehouse, Trash2 } from "lucide-react";
 import { formatUAEDateTime } from "@/lib/timezone";
 import { useCentralInventoryKPIs } from "@/hooks/useCentralInventory";
 
@@ -30,6 +30,37 @@ export default function StoreManagement() {
   const [editId, setEditId] = useState<string | null>(null);
   const [form, setForm] = useState<StoreForm>(emptyForm);
   const { data: centralKPIs } = useCentralInventoryKPIs();
+
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [deleteName, setDeleteName] = useState("");
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDelete = async () => {
+    if (!deleteId) return;
+    setDeleting(true);
+    try {
+      const tables = [
+        "products", "variants", "orders", "order_items",
+        "pricing_campaigns", "pricing_campaign_items",
+        "inventory_sync_logs", "product_velocity_metrics",
+        "simulation_logs", "inventory_batches", "ai_recommendations",
+      ] as const;
+      for (const table of tables) {
+        const { error } = await supabase.from(table as any).update({ store_id: null } as any).eq("store_id", deleteId);
+        if (error) throw error;
+      }
+      const { error } = await supabase.from("stores").delete().eq("id", deleteId);
+      if (error) throw error;
+      toast.success(`"${deleteName}" deleted`);
+      queryClient.invalidateQueries({ queryKey: ["all-stores"] });
+      queryClient.invalidateQueries({ queryKey: ["stores"] });
+    } catch (e: any) {
+      toast.error(e?.message || "Delete failed");
+    } finally {
+      setDeleting(false);
+      setDeleteId(null);
+    }
+  };
 
   const { data: stores, isLoading } = useQuery({
     queryKey: ["all-stores"],
@@ -125,6 +156,7 @@ export default function StoreManagement() {
                     <div className="flex gap-1">
                       <Button variant="ghost" size="sm" onClick={() => openEdit(s)}><Pencil className="h-3 w-3" /></Button>
                       <Button variant="ghost" size="sm" title="Sync Store Data"><RefreshCw className="h-3 w-3" /></Button>
+                      <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" title="Delete Store" onClick={() => { setDeleteId(s.id); setDeleteName(s.store_name); }}><Trash2 className="h-3 w-3" /></Button>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -133,6 +165,17 @@ export default function StoreManagement() {
           </Table>
         </div>
       )}
+
+      <Dialog open={!!deleteId} onOpenChange={open => { if (!open && !deleting) setDeleteId(null); }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Delete Store</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">This will permanently delete <strong>{deleteName}</strong> and unlink all associated products, orders, and data. This cannot be undone.</p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteId(null)} disabled={deleting}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDelete} disabled={deleting}>{deleting ? "Deleting…" : "Delete"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent>
