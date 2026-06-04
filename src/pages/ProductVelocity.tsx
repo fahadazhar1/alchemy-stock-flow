@@ -187,36 +187,31 @@ export default function ProductVelocity() {
   const [trendFilter, setTrendFilter] = useState<Trend | "All">("All");
 
   const { data: rows = [], isLoading } = useQuery({
-    queryKey: ["product-velocity", storeId],
+    queryKey: ["product-velocity-live", storeId],
     queryFn: async () => {
-      // store_id on product_velocity_metrics is NULL for all rows — filter via products join instead
       let q = (supabase as any)
-        .from("product_velocity_metrics")
-        .select("product_id, units_sold_7d, units_sold_14d, units_sold_30d, last_sale_at, products!inner(id, name, sku, store_id, variants(inventory_quantity, committed_quantity))")
+        .from("v_product_velocity_live")
+        .select("product_id, name, sku, store_id, units_sold_7d, units_sold_14d, units_sold_30d, last_sale_at, total_inventory, available_units")
         .order("units_sold_7d", { ascending: false })
         .limit(500);
-      if (storeId) q = q.eq("products.store_id", storeId);
+      if (storeId) q = q.eq("store_id", storeId);
       const { data, error } = await q;
       if (error) throw error;
-      return ((data ?? []) as any[]).map((r: any): VelocityRow => {
-        const variants = (r.products?.variants ?? []) as any[];
-        const total    = variants.reduce((s: number, v: any) => s + Number(v.inventory_quantity ?? 0), 0);
-        const avail    = variants.reduce((s: number, v: any) => s + Number(v.inventory_quantity ?? 0) - Number(v.committed_quantity ?? 0), 0);
-        return {
-          product_id:      r.product_id,
-          product_name:    r.products?.name     ?? "—",
-          sku:             r.products?.sku      ?? "—",
-          units_sold_7d:   Number(r.units_sold_7d  ?? 0),
-          units_sold_14d:  Number(r.units_sold_14d ?? 0),
-          units_sold_30d:  Number(r.units_sold_30d ?? 0),
-          last_sale_at:    r.last_sale_at,
-          store_id:        r.products?.store_id ?? null,
-          total_inventory: total,
-          available_units: Math.max(0, avail),
-        };
-      });
+      return ((data ?? []) as any[]).map((r: any): VelocityRow => ({
+        product_id:      r.product_id,
+        product_name:    r.name          ?? "—",
+        sku:             r.sku           ?? "—",
+        units_sold_7d:   Number(r.units_sold_7d  ?? 0),
+        units_sold_14d:  Number(r.units_sold_14d ?? 0),
+        units_sold_30d:  Number(r.units_sold_30d ?? 0),
+        last_sale_at:    r.last_sale_at,
+        store_id:        r.store_id      ?? null,
+        total_inventory: Number(r.total_inventory ?? 0),
+        available_units: Math.max(0, Number(r.available_units ?? 0)),
+      }));
     },
     staleTime: 60_000,
+    refetchInterval: 3 * 60 * 1000,
   });
 
   // ── Derived ──

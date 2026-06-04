@@ -589,6 +589,107 @@ async function upsertCollection(supabase: any, c: any, storeId: string): Promise
   return ins2?.id ?? null;
 }
 
+// Fetches a missing variant from Shopify and inserts it into the DB.
+// Returns the variant row ({ id, product_id }) or null if it can't be resolved.
+async function fetchAndInsertVariant(supabase: any, conn: any, shopifyVariantId: string): Promise<{ id: string; product_id: string } | null> {
+  const domain = normalizeDomain(conn.shop_domain);
+  const res = await shopifyFetch(domain, conn.access_token, `/variants/${shopifyVariantId}.json`);
+  if (!res.ok) return null;
+  const { variant: v } = await res.json();
+  if (!v) return null;
+
+  const { data: product } = await supabase
+    .from("products")
+    .select("id")
+    .eq("shopify_product_id", String(v.product_id))
+    .maybeSingle();
+  if (!product?.id) return null;
+
+  const variantRow = {
+    product_id: product.id,
+    variant_sku: v.sku || `shopify-v-${v.id}`,
+    size: v.option1 || v.title || "Default",
+    price: Number(v.price ?? 0),
+    compare_at_price: v.compare_at_price ? Number(v.compare_at_price) : null,
+    inventory_quantity: Number(v.inventory_quantity ?? 0),
+    shopify_variant_id: String(v.id),
+    shopify_inventory_item_id: v.inventory_item_id ? String(v.inventory_item_id) : null,
+    store_id: conn.store_id,
+  };
+
+  const { data: inserted } = await supabase
+    .from("variants")
+    .upsert(variantRow, { onConflict: "shopify_variant_id" })
+    .select("id, product_id")
+    .single();
+
+  return inserted ?? null;
+}
+
+// Upserts a single Shopify order and its line items.
+// Used by both the bulk sync loop and the real-time webhook handler.
+async function processSingleOrder(supabase: any, conn: any, o: any): Promise<void> {
+  const orderRow = {
+    order_number: String(o.name || o.order_number || o.id),
+    status: o.financial_status || o.fulfillment_status || "unknown",
+    financial_status: o.financial_status || null,
+    fulfillment_status: o.fulfillment_status || null,
+    order_status: o.cancelled_at ? "cancelled" : o.closed_at ? "closed" : "open",
+    closed_at: o.closed_at || null,
+    cancelled_at: o.cancelled_at || null,
+    source_name: o.source_name || null,
+    shopify_created_at: o.created_at || null,
+    total_price: o.total_price ? Number(o.total_price) : null,
+    shopify_order_id: String(o.id),
+    store_id: conn.store_id,
+    customer_email: o.email || o.customer?.email || null,
+    shopify_customer_id: o.customer?.id ? String(o.customer.id) : null,
+    customer_first_order_at: o.customer?.created_at || null,
+    discount_codes: o.discount_codes?.length ? o.discount_codes : null,
+    total_discounts: o.total_discounts ? Number(o.total_discounts) : null,
+    referring_site: o.referring_site || null,
+    landing_site: o.landing_site || null,
+    tracking_number: o.fulfillments?.[0]?.tracking_number
+      ?? o.fulfillments?.[0]?.tracking_numbers?.[0]
+      ?? null,
+  };
+
+  const { data: existing } = await supabase
+    .from("orders").select("id").eq("shopify_order_id", String(o.id)).maybeSingle();
+
+  let orderId: string;
+  if (existing?.id) {
+    await supabase.from("orders").update(orderRow).eq("id", existing.id);
+    orderId = existing.id;
+    await supabase.from("order_items").delete().eq("order_id", orderId);
+  } else {
+    const { data: ins, error } = await supabase.from("orders").insert(orderRow).select("id").single();
+    if (error) return;
+    orderId = ins.id;
+  }
+
+  for (const li of o.line_items ?? []) {
+    if (!li.variant_id) continue;
+    let variant = (await supabase.from("variants").select("id, product_id")
+      .eq("shopify_variant_id", String(li.variant_id)).maybeSingle()).data;
+
+    // Variant not in DB yet — fetch from Shopify and insert on the fly
+    if (!variant?.id) {
+      variant = await fetchAndInsertVariant(supabase, conn, String(li.variant_id));
+    }
+    if (!variant?.id) continue;
+
+    await supabase.from("order_items").insert({
+      order_id: orderId,
+      variant_id: variant.id,
+      product_id: variant.product_id,
+      quantity: Number(li.quantity ?? 0),
+      unit_price: Number(li.price ?? 0),
+      store_id: conn.store_id,
+    });
+  }
+}
+
 // FIXED: single page per invocation (was: all pages in one invocation)
 async function syncOrders(supabase: any, conn: any, log: any, totalRef: { n: number }, syncSince: string | null): Promise<boolean> {
   const domain = normalizeDomain(conn.shop_domain);
@@ -612,57 +713,7 @@ async function syncOrders(supabase: any, conn: any, log: any, totalRef: { n: num
   const orders = json.orders ?? [];
 
   for (const o of orders) {
-    const orderRow = {
-      order_number: String(o.name || o.order_number || o.id),
-      status: o.financial_status || o.fulfillment_status || "unknown",
-      financial_status: o.financial_status || null,
-      fulfillment_status: o.fulfillment_status || null,
-      order_status: o.cancelled_at ? "cancelled" : o.closed_at ? "closed" : "open",
-      closed_at: o.closed_at || null,
-      cancelled_at: o.cancelled_at || null,
-      source_name: o.source_name || null,
-      shopify_created_at: o.created_at || null,
-      total_price: o.total_price ? Number(o.total_price) : null,
-      shopify_order_id: String(o.id),
-      store_id: conn.store_id,
-      customer_email: o.email || o.customer?.email || null,
-      shopify_customer_id: o.customer?.id ? String(o.customer.id) : null,
-      customer_first_order_at: o.customer?.created_at || null,
-      discount_codes: o.discount_codes?.length ? o.discount_codes : null,
-      total_discounts: o.total_discounts ? Number(o.total_discounts) : null,
-      referring_site: o.referring_site || null,
-      landing_site: o.landing_site || null,
-      tracking_number: o.fulfillments?.[0]?.tracking_number
-        ?? o.fulfillments?.[0]?.tracking_numbers?.[0]
-        ?? null,
-    };
-    const { data: existing } = await supabase
-      .from("orders").select("id").eq("shopify_order_id", String(o.id)).maybeSingle();
-    let orderId: string;
-    if (existing?.id) {
-      await supabase.from("orders").update(orderRow).eq("id", existing.id);
-      orderId = existing.id;
-      await supabase.from("order_items").delete().eq("order_id", orderId);
-    } else {
-      const { data: ins, error } = await supabase.from("orders").insert(orderRow).select("id").single();
-      if (error) continue;
-      orderId = ins.id;
-    }
-
-    for (const li of o.line_items ?? []) {
-      if (!li.variant_id) continue;
-      const { data: variant } = await supabase.from("variants").select("id, product_id")
-        .eq("shopify_variant_id", String(li.variant_id)).maybeSingle();
-      if (!variant?.id) continue;
-      await supabase.from("order_items").insert({
-        order_id: orderId,
-        variant_id: variant.id,
-        product_id: variant.product_id,
-        quantity: Number(li.quantity ?? 0),
-        unit_price: Number(li.price ?? 0),
-        store_id: conn.store_id,
-      });
-    }
+    await processSingleOrder(supabase, conn, o);
     totalRef.n++;
   }
 
@@ -876,12 +927,24 @@ Deno.serve(async (req) => {
     // Shopify webhook receiver — identified by ?action=webhook&token=SECRET in URL
     const reqUrl = new URL(req.url);
     if (reqUrl.searchParams.get("action") === "webhook") {
-      const token = reqUrl.searchParams.get("token") ?? "";
+      const token  = reqUrl.searchParams.get("token") ?? "";
+      const topic  = req.headers.get("X-Shopify-Topic") ?? "";
       const { data: conn } = await supabase.from("shopify_connections")
-        .select("id").eq("webhook_secret", token).eq("is_active", true).maybeSingle();
+        .select("id, store_id, shop_domain, access_token")
+        .eq("webhook_secret", token).eq("is_active", true).maybeSingle();
       if (!conn?.id) return json(401, { ok: false, error: "Invalid webhook token" });
-      // @ts-ignore
-      EdgeRuntime.waitUntil(syncShopifyData(supabase, conn.id));
+
+      const payload = await req.json().catch(() => null);
+
+      if ((topic === "orders/create" || topic === "orders/updated") && payload) {
+        // Process just this order directly — no full sync needed
+        // @ts-ignore
+        EdgeRuntime.waitUntil(processSingleOrder(supabase, conn, payload));
+      } else {
+        // Products, collections, inventory — trigger incremental sync
+        // @ts-ignore
+        EdgeRuntime.waitUntil(syncShopifyData(supabase, conn.id));
+      }
       return json(200, { ok: true });
     }
 

@@ -496,7 +496,7 @@ function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing,
     rows.push(["Top Products"]);
     rows.push(["Name", "SKU", "Vendor", "Units", "Revenue", "Trend %"]);
     (liveProducts ?? []).forEach(p => {
-      rows.push([p.name, p.sku, p.vendor, String(p.units), p.revenue.toFixed(2), String(p.trend)]);
+      rows.push([p.name, p.sku, p.vendor, String(p.units), p.revenue.toFixed(2), p.trend === null ? "N/A" : String(p.trend)]);
     });
     rows.push([]);
     rows.push(["Channel Performance"]);
@@ -772,16 +772,22 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
                   </div>
                   <div className="w-[70px] shrink-0">
                     <Sparkline
-                      data={Array.from({ length: 12 }, (_, k) => 50 + Math.sin(i + k * 0.7) * 25 + (p.trend > 0 ? k : -k) * 2)}
-                      color={p.trend > 0 ? "#10b981" : "#ef4444"} />
+                      data={Array.from({ length: 12 }, (_, k) => 50 + Math.sin(i + k * 0.7) * 25 + ((p.trend ?? 0) > 0 ? k : -k) * 2)}
+                      color={p.trend === null ? "#94a3b8" : p.trend > 0 ? "#10b981" : "#ef4444"} />
                   </div>
-                  <Badge variant="outline" className={cn("text-[10px] px-1.5 py-0 shrink-0 gap-0.5",
-                    p.trend > 0
-                      ? "text-emerald-600 border-emerald-200 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-800 dark:text-emerald-400"
-                      : "text-red-500 border-red-200 bg-red-50 dark:bg-red-950/30 dark:border-red-800 dark:text-red-400")}>
-                    {p.trend > 0 ? <ArrowUp size={8} strokeWidth={2.5} /> : <ArrowDown size={8} strokeWidth={2.5} />}
-                    {Math.abs(p.trend)}%
-                  </Badge>
+                  {p.trend === null ? (
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 shrink-0 text-muted-foreground border-muted-foreground/30 bg-muted/40">
+                      —
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className={cn("text-[10px] px-1.5 py-0 shrink-0 gap-0.5",
+                      p.trend > 0
+                        ? "text-emerald-600 border-emerald-200 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-800 dark:text-emerald-400"
+                        : "text-red-500 border-red-200 bg-red-50 dark:bg-red-950/30 dark:border-red-800 dark:text-red-400")}>
+                      {p.trend > 0 ? <ArrowUp size={8} strokeWidth={2.5} /> : <ArrowDown size={8} strokeWidth={2.5} />}
+                      {Math.abs(p.trend)}%
+                    </Badge>
+                  )}
                 </div>
               ))
             )}
