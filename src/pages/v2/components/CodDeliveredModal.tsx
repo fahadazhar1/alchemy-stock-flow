@@ -4,7 +4,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { useCODDeliveredOrders, type CodDeliveredOrder } from "@/hooks/useCODDeliveredOrders";
 
@@ -294,7 +293,7 @@ export function CodDeliveredModal({ open, onClose, storeId, released = false }: 
 
   return (
     <Dialog open={open} onOpenChange={o => !o && onClose()}>
-      <DialogContent className="max-w-[96vw] w-[96vw] h-[90vh] flex flex-col p-0 gap-0">
+      <DialogContent className="max-w-[96vw] w-[96vw] h-[90vh] flex flex-col p-0 gap-0 [&>button:last-child]:hidden">
         {/* Header */}
         <DialogHeader className="px-5 py-4 border-b shrink-0">
           <div className="flex items-center justify-between">
@@ -353,11 +352,9 @@ export function CodDeliveredModal({ open, onClose, storeId, released = false }: 
               <Loader2 size={16} className="animate-spin" /> Loading orders…
             </div>
           ) : (
-            <ScrollArea className="h-full">
-              <div className="overflow-x-auto">
-                <OrdersTable rows={filtered} />
-              </div>
-            </ScrollArea>
+            <div className="h-full overflow-auto">
+              <OrdersTable rows={filtered} />
+            </div>
           )}
         </div>
       </DialogContent>

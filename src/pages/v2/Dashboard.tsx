@@ -31,6 +31,7 @@ import { useChannelPerformance } from "@/hooks/useChannelPerformance";
 import { useInventoryDashboard } from "@/hooks/useInventoryDashboard";
 import { OutOfStockWidget } from "./components/OutOfStockWidget";
 import { useSalesKPIs, useCollectionSales, useCustomerMetrics, useFulfillmentMetrics, useDiscountUsage, useTrafficSources, useChannelConversion } from "@/hooks/useSalesKPIs";
+import { useBundleSales } from "@/hooks/useBundleSales";
 import { supabase } from "@/integrations/supabase/client";
 import { useStore } from "@/contexts/StoreContext";
 import { type DateRangeKey, type DateBounds, getDateBounds, getCustomDateBounds, comparePeriodLabel } from "@/lib/dateRanges";
@@ -435,6 +436,7 @@ function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing,
   const { data: collectionData, isLoading: collectionsLoading } = useCollectionSales(bounds);
   const { data: customerMetrics, isLoading: customerLoading }   = useCustomerMetrics(bounds);
   const { data: fulfillmentMetrics, isLoading: fulfillmentLoading } = useFulfillmentMetrics(bounds);
+  const { data: bundleSales, isLoading: bundleLoading } = useBundleSales(bounds);
   // ── new marketing cards ──────────────────────────────────────────────────────
   const { data: discountData,    isLoading: discountLoading }    = useDiscountUsage(bounds);
   const { data: trafficSources,  isLoading: trafficLoading }     = useTrafficSources(bounds);
@@ -598,13 +600,13 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
         </div>
       )}
 
-      {/* CEO insights row — 4 cols */}
-      {(customerLoading || fulfillmentLoading || kpisLoading) ? (
-        <div className="grid grid-cols-4 gap-3.5">
-          {Array.from({ length: 4 }).map((_, i) => <KpiSkeleton key={i} />)}
+      {/* CEO insights row — 5 cols */}
+      {(customerLoading || fulfillmentLoading || kpisLoading || bundleLoading) ? (
+        <div className="grid grid-cols-5 gap-3.5">
+          {Array.from({ length: 5 }).map((_, i) => <KpiSkeleton key={i} />)}
         </div>
       ) : (
-        <div className="grid grid-cols-4 gap-3.5">
+        <div className="grid grid-cols-5 gap-3.5">
           <KpiCard icon={Users} iconColor="#0891b2" iconBg="#cffafe"
             label="New Customers"
             value={customerMetrics?.totalCustomers ? `${customerMetrics.newPct.toFixed(1)}%` : "—"}
@@ -627,6 +629,16 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
             footer={`at current run rate · ${fmtNum(daysRemaining)}d remaining`}
             progress={Math.round((daysElapsed / daysInMonth) * 100)}
             progressColor="#059669" />
+          <KpiCard icon={Layers} iconColor="#b45309" iconBg="#fef3c7"
+            label="Bundle vs Others"
+            value={fmtGBP(bundleSales?.totalRevenue ?? 0)}
+            delta={bundleSales?.bundleDelta ?? undefined}
+            deltaUp={(bundleSales?.bundleDelta ?? 0) >= 0}
+            footer={bundleSales
+              ? `Bundle ${fmtGBP(bundleSales.bundleRevenue)} · Others ${fmtGBP(bundleSales.othersRevenue)}`
+              : "Loading…"}
+            progress={bundleSales?.bundleShare ?? 0}
+            progressColor="#b45309" />
         </div>
       )}
 

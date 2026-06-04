@@ -405,25 +405,42 @@ async function syncCollections(supabase: any, conn: any, log: any, totalRef: { n
           log.metadata);
         return true;
       }
-      // All smart pages done — advance to per-collection product linking
-      const collIds = Object.keys(merged);
+      // All smart pages done — advance to per-collection product linking.
+      // Expand merged with ALL DB collections for this store so incremental syncs
+      // (which only fetch recently-updated collections in Phase 1) still relink every product.
+      const { data: allStoreCols } = await supabase
+        .from("collections").select("id, shopify_collection_id")
+        .eq("store_id", conn.store_id).not("shopify_collection_id", "is", null);
+      const fullMap = { ...merged };
+      for (const row of (allStoreCols ?? []) as { id: string; shopify_collection_id: string }[]) {
+        if (!fullMap[row.shopify_collection_id]) fullMap[row.shopify_collection_id] = row.id;
+      }
+      const collIds = Object.keys(fullMap);
       if (collIds.length > 0) {
         await updateLog(supabase, log.id,
-          { current_stage: "collections", cursor: `by_coll:${collIds[0]}:`, records_synced: totalRef.n, metadata: { collection_map: merged, collection_ids_ordered: collIds } },
+          { current_stage: "collections", cursor: `by_coll:${collIds[0]}:`, records_synced: totalRef.n, metadata: { collection_map: fullMap, collection_ids_ordered: collIds } },
           log.metadata);
         return true;
       } else {
         await updateLog(supabase, log.id,
-          { current_stage: "collections", cursor: null, records_synced: totalRef.n, metadata: { collection_map: merged } },
+          { current_stage: "collections", cursor: null, records_synced: totalRef.n, metadata: { collection_map: fullMap } },
           log.metadata);
         return false;
       }
     } else {
-      // Smart collections fetch failed — advance using whatever custom collections we have
-      const collIds = Object.keys(existingMap);
+      // Smart collections fetch failed — advance using whatever custom collections we have,
+      // but also pull all existing DB collections so we don't miss unmodified ones.
+      const { data: allStoreCols2 } = await supabase
+        .from("collections").select("id, shopify_collection_id")
+        .eq("store_id", conn.store_id).not("shopify_collection_id", "is", null);
+      const fallbackMap = { ...existingMap };
+      for (const row of (allStoreCols2 ?? []) as { id: string; shopify_collection_id: string }[]) {
+        if (!fallbackMap[row.shopify_collection_id]) fallbackMap[row.shopify_collection_id] = row.id;
+      }
+      const collIds = Object.keys(fallbackMap);
       if (collIds.length > 0) {
         await updateLog(supabase, log.id,
-          { current_stage: "collections", cursor: `by_coll:${collIds[0]}:`, records_synced: totalRef.n, metadata: { collection_ids_ordered: collIds } },
+          { current_stage: "collections", cursor: `by_coll:${collIds[0]}:`, records_synced: totalRef.n, metadata: { collection_map: fallbackMap, collection_ids_ordered: collIds } },
           log.metadata);
         return true;
       } else {
@@ -461,6 +478,10 @@ async function syncCollections(supabase: any, conn: any, log: any, totalRef: { n
     // Custom collections are the authoritative primary collection; smart ones are secondary
     const customShopifyIds = new Set<string>((log.metadata?.custom_shopify_ids ?? []) as string[]);
     const isCustomCollection = customShopifyIds.has(shopifyCollId);
+    // Operational/storefront collections — never set as a product's primary collection
+    const EXCLUDED_PRIMARY_NAMES = new Set(["Trending Now", "Top Selling"]);
+    const { data: collMeta } = await supabase.from("collections").select("name").eq("id", collId).maybeSingle();
+    const isExcludedPrimary = collMeta?.name ? EXCLUDED_PRIMARY_NAMES.has(collMeta.name) : false;
 
     if (collId && shopifyCollId) {
       try {
@@ -482,11 +503,15 @@ async function syncCollections(supabase: any, conn: any, log: any, totalRef: { n
             await Promise.all(shopifyProds.map(async (p: any) => {
               const prodId = prodMap.get(String(p.id));
               if (!prodId) return;
-              // Custom collections always win as primary; smart collections only fill in if no primary is set
-              if (isCustomCollection) {
-                await supabase.from("products").update({ collection_id: collId }).eq("id", prodId);
-              } else {
-                await supabase.from("products").update({ collection_id: collId }).eq("id", prodId).is("collection_id", null);
+              // Skip setting collection_id for operational collections (Trending Now, Top Selling)
+              // so real category collections always win. Still upsert into product_collections for filtering.
+              if (!isExcludedPrimary) {
+                // Custom collections always win as primary; smart collections only fill in if no primary is set
+                if (isCustomCollection) {
+                  await supabase.from("products").update({ collection_id: collId }).eq("id", prodId);
+                } else {
+                  await supabase.from("products").update({ collection_id: collId }).eq("id", prodId).is("collection_id", null);
+                }
               }
               await supabase.from("product_collections")
                 .upsert({ product_id: prodId, collection_id: collId }, { onConflict: "product_id,collection_id" });

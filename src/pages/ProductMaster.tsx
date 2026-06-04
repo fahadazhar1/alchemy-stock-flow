@@ -69,6 +69,8 @@ export default function ProductMaster() {
   const [adjustError, setAdjustError] = useState("");
   const [adjustLoading, setAdjustLoading] = useState(false);
   const [resyncing, setResyncing] = useState(false);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [exportingFull, setExportingFull] = useState(false);
 
   // Price edit state
   const [priceEditData, setPriceEditData] = useState<PriceEditData | null>(null);
@@ -135,7 +137,9 @@ export default function ProductMaster() {
 
         let q = supabase.from("v_product_inventory_summary").select("*", { count: "exact" });
         if (storeId) q = q.eq("store_id", storeId);
-        q = q.not("collection_name", "eq", "Trending Now").not("collection_name", "eq", "Top Selling");
+        q = q
+          .or('collection_name.is.null,collection_name.neq.Trending Now')
+          .or('collection_name.is.null,collection_name.neq.Top Selling');
         if (search) q = q.or(`product_name.ilike.%${search}%,sku.ilike.%${search}%`);
         if (collectionProductIds !== null) {
           if (!collectionProductIds.length) return { data: [], count: 0 };
@@ -264,13 +268,59 @@ export default function ProductMaster() {
     } catch (e: any) { toast.error(e?.message || "Bulk remove discount failed"); }
   };
 
-  const handleExport = () => {
+  const toExportRow = (p: any) => ({
+    Name: p.product_name, SKU: p.sku, Vendor: p.vendor_name, Collection: p.collection_name,
+    ProductType: p.product_type, Inventory: p.total_inventory, Price: p.min_current_price,
+    OriginalPrice: p.max_compare_at_price, DaysOld: p.days_old, Status: p.discount_status,
+    Campaign: p.campaign_name, Expiry: p.near_expiry_status,
+  });
+
+  const handleExportPage = () => {
     if (!filteredData.data.length) return;
-    exportToCSV(filteredData.data.map(p => ({
-      Name: p.product_name, SKU: p.sku, Vendor: p.vendor_name, Collection: p.collection_name,
-      Inventory: p.total_inventory, Price: p.min_current_price, OriginalPrice: p.max_compare_at_price,
-      DaysOld: p.days_old, Status: p.discount_status, Campaign: p.campaign_name, Expiry: p.near_expiry_status,
-    })), "product-master");
+    exportToCSV(filteredData.data.map(toExportRow), "product-master-page");
+    setExportDialogOpen(false);
+  };
+
+  const handleExportFull = async () => {
+    setExportingFull(true);
+    try {
+      let collectionProductIds: string[] | null = null;
+      if (collectionFilter !== "all" && storeId) {
+        const { data: ids } = await (supabase as any).rpc("get_collection_product_ids", {
+          p_collection_name: collectionFilter,
+          p_store_id: storeId,
+        });
+        collectionProductIds = ((ids ?? []) as { product_id: string }[]).map(r => r.product_id);
+        if (!collectionProductIds.length) { toast.info("No products found for this collection"); return; }
+      }
+
+      let q = supabase.from("v_product_inventory_summary").select("*");
+      if (storeId) q = q.eq("store_id", storeId);
+      q = q
+        .or('collection_name.is.null,collection_name.neq.Trending Now')
+        .or('collection_name.is.null,collection_name.neq.Top Selling');
+      if (search) q = q.or(`product_name.ilike.%${search}%,sku.ilike.%${search}%`);
+      if (collectionProductIds !== null) q = q.in("product_id", collectionProductIds);
+      if (vendorFilter !== "all") q = q.eq("vendor_name", vendorFilter);
+      if (typeFilter !== "all") q = q.eq("product_type", typeFilter);
+      q = q.order("created_at", { ascending: false }).limit(10000);
+
+      const { data: allRows, error } = await q;
+      if (error) throw error;
+
+      const rows = hasDateFilter
+        ? (allRows ?? []).filter((p: any) => matchesDateFilter(p.created_at, filterDates, filterMonths, filterYears))
+        : (allRows ?? []);
+
+      if (!rows.length) { toast.info("No products to export"); return; }
+      exportToCSV(rows.map(toExportRow), "product-master-full");
+      toast.success(`Exported ${rows.length} products`);
+      setExportDialogOpen(false);
+    } catch (e: any) {
+      toast.error(e?.message || "Export failed");
+    } finally {
+      setExportingFull(false);
+    }
   };
 
   const makeShopifyLink = (name: string) => {
@@ -543,7 +593,7 @@ export default function ProductMaster() {
               Wipes sync history and re-pulls everything from Shopify from scratch. Use when data looks wrong or missing.
             </TooltipContent>
           </Tooltip>
-          <Button variant="outline" size="sm" onClick={handleExport}><Download className="h-4 w-4 mr-1" />Export CSV</Button>
+          <Button variant="outline" size="sm" onClick={() => setExportDialogOpen(true)}><Download className="h-4 w-4 mr-1" />Export CSV</Button>
         </div>
       </div>
 
@@ -744,6 +794,38 @@ export default function ProductMaster() {
           </div>
         </>
       )}
+
+      {/* ── Export choice dialog ───────────────────────────────────────── */}
+      <Dialog open={exportDialogOpen} onOpenChange={open => { if (!exportingFull) setExportDialogOpen(open); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Export CSV</DialogTitle>
+            <DialogDescription>Choose what to include in the export.</DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-3 py-2">
+            <Button variant="outline" className="justify-start h-auto py-3 px-4" onClick={handleExportPage} disabled={exportingFull}>
+              <div className="text-left">
+                <div className="font-medium">Current page</div>
+                <div className="text-xs text-muted-foreground mt-0.5">{filteredData.data.length} products visible on this page</div>
+              </div>
+            </Button>
+            <Button variant="outline" className="justify-start h-auto py-3 px-4" onClick={handleExportFull} disabled={exportingFull}>
+              <div className="text-left">
+                <div className="font-medium flex items-center gap-2">
+                  Full catalog
+                  {exportingFull && <span className="text-xs text-muted-foreground">(fetching…)</span>}
+                </div>
+                <div className="text-xs text-muted-foreground mt-0.5">
+                  {filteredData.count} products matching current filters
+                </div>
+              </div>
+            </Button>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={() => setExportDialogOpen(false)} disabled={exportingFull}>Cancel</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* ── Adjust Stock Dialog ─────────────────────────────────────────── */}
       <Dialog open={adjustOpen} onOpenChange={open => { if (!open && !adjustLoading) setAdjustOpen(false); }}>
