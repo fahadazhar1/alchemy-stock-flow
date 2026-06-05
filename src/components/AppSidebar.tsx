@@ -1,14 +1,16 @@
 import {
   LayoutDashboard, Package, RefreshCw, Brain, Bot, FileText,
   BarChart3, Truck, CheckSquare, FlaskConical, Clock, Settings, Beaker, Store,
-  ShoppingCart, BarChart2, ListOrdered, Activity,
+  ShoppingCart, BarChart2, ListOrdered, Activity, LogOut,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
 import {
   Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent,
-  SidebarGroupLabel, SidebarMenu, SidebarMenuButton, SidebarMenuItem, useSidebar,
+  SidebarGroupLabel, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarFooter, useSidebar,
 } from "@/components/ui/sidebar";
+import { useAuth } from "@/contexts/AuthContext";
+import { Button } from "@/components/ui/button";
 
 const navItems = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
@@ -34,6 +36,7 @@ export function AppSidebar() {
   const { state } = useSidebar();
   const collapsed = state === "collapsed";
   const location = useLocation();
+  const { user, role, signOut } = useAuth();
 
   return (
     <Sidebar collapsible="icon">
@@ -69,6 +72,23 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
+      <SidebarFooter className="p-2 border-t">
+        {!collapsed ? (
+          <div className="flex items-center justify-between gap-2 px-1 py-1">
+            <div className="min-w-0">
+              <p className="text-xs font-medium truncate">{user?.email}</p>
+              <p className="text-[11px] text-muted-foreground capitalize">{role ?? "viewer"}</p>
+            </div>
+            <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={signOut} title="Sign out">
+              <LogOut className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        ) : (
+          <Button variant="ghost" size="icon" className="h-7 w-7 w-full" onClick={signOut} title="Sign out">
+            <LogOut className="h-3.5 w-3.5" />
+          </Button>
+        )}
+      </SidebarFooter>
     </Sidebar>
   );
 }

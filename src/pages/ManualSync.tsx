@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { useRole } from "@/hooks/useRole";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -25,6 +26,7 @@ import { useStoreFilter } from "@/hooks/useStoreFilter";
 const PAGE_SIZE = 20;
 
 export default function ManualSync() {
+  const { canEdit } = useRole();
   const { formatCurrency, symbol } = useCurrency();
   const { storeId, isAllStores } = useStoreFilter();
   const queryClient = useQueryClient();
@@ -424,8 +426,8 @@ export default function ManualSync() {
               {requireApproval && !isAllStores && <p className="text-xs text-amber-600">⚠ Approval required before live execution</p>}
             </div>
             <div className="flex gap-2">
-              <Button variant="outline" className="flex-1" onClick={handlePreview} disabled={!canSync}><Eye className="h-4 w-4 mr-1" /> Preview</Button>
-              <Button className="flex-1" onClick={handleSync} disabled={!canSync || syncing}><Zap className="h-4 w-4 mr-1" /> {requireApproval ? "Create Draft" : "Sync"}</Button>
+              <Button variant="outline" className="flex-1" onClick={handlePreview} disabled={!canSync || !canEdit}><Eye className="h-4 w-4 mr-1" /> Preview</Button>
+              <Button className="flex-1" onClick={handleSync} disabled={!canSync || syncing || !canEdit}><Zap className="h-4 w-4 mr-1" /> {requireApproval ? "Create Draft" : "Sync"}</Button>
             </div>
           </CardContent>
         </Card>
@@ -507,7 +509,7 @@ export default function ManualSync() {
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setPreviewOpen(false)}>Cancel</Button>
-            <Button onClick={handleSync} disabled={syncing}>{syncing ? "Syncing..." : requireApproval ? "Create Draft" : "Confirm & Sync"}</Button>
+            <Button onClick={handleSync} disabled={syncing || !canEdit}>{syncing ? "Syncing..." : requireApproval ? "Create Draft" : "Confirm & Sync"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

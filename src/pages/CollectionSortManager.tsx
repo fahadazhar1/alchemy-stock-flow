@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { useRole } from "@/hooks/useRole";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useStore } from "@/contexts/StoreContext";
@@ -107,6 +108,7 @@ function buildSortSummary(rules: SortRule[]): string {
 // ── Main page component ───────────────────────────────────────────────────────
 
 export default function CollectionSortManager() {
+  const { canEdit } = useRole();
   const { stores, selectedStoreId, selectedStore, setSelectedStoreId } = useStore();
   const queryClient = useQueryClient();
 
@@ -1278,7 +1280,7 @@ export default function CollectionSortManager() {
           size="lg"
           className="px-10 text-base font-semibold"
           onClick={openConfirmModal}
-          disabled={running || sortableCollections.length === 0 || loadingCollections}
+          disabled={running || sortableCollections.length === 0 || loadingCollections || !canEdit}
         >
           {running ? (
             <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Sorting…</>
@@ -1541,7 +1543,7 @@ export default function CollectionSortManager() {
           </div>
 
           <div className="flex justify-end">
-            <Button size="lg" className="px-10 text-base font-semibold" onClick={openSpConfirmModal} disabled={spRunning || spSortableCollections.length === 0 || loadingCollections}>
+            <Button size="lg" className="px-10 text-base font-semibold" onClick={openSpConfirmModal} disabled={spRunning || spSortableCollections.length === 0 || loadingCollections || !canEdit}>
               {spRunning ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Sorting…</> : <><ArrowUpDown className="h-4 w-4 mr-2" /> Run Sales Sort</>}
             </Button>
           </div>

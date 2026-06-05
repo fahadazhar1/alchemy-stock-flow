@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useRole } from "@/hooks/useRole";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import { formatUAEDateTime } from "@/lib/timezone";
@@ -12,6 +13,7 @@ import { useStore } from "@/contexts/StoreContext";
 import { useCurrency } from "@/hooks/useCurrency";
 
 export default function ApprovalQueue() {
+  const { canEdit } = useRole();
   const { symbol } = useCurrency();
   const queryClient = useQueryClient();
   const { storeId } = useStoreFilter();
@@ -95,8 +97,8 @@ export default function ApprovalQueue() {
                     <TableCell>{c.discount_percent ? `${c.discount_percent}%` : c.fixed_price ? `${symbol}${c.fixed_price}` : '-'}</TableCell>
                     <TableCell className="text-xs">{formatUAEDateTime(c.created_at)}</TableCell>
                     <TableCell className="text-right space-x-2">
-                      <Button size="sm" onClick={() => handleApprove(c.id)}>Approve & Execute</Button>
-                      <Button size="sm" variant="destructive" onClick={() => handleReject(c.id)}>Reject</Button>
+                      <Button size="sm" onClick={() => handleApprove(c.id)} disabled={!canEdit}>Approve & Execute</Button>
+                      <Button size="sm" variant="destructive" onClick={() => handleReject(c.id)} disabled={!canEdit}>Reject</Button>
                     </TableCell>
                   </TableRow>
                 ))}

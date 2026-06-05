@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useRole } from "@/hooks/useRole";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -117,6 +118,7 @@ const MODE_LABELS: Record<string, string> = { manual: "Manual Approval", semi_au
 const SCHEDULE_LABELS: Record<string, string> = { daily: "Daily", weekly: "Weekly", custom: "Custom Interval" };
 
 export default function AutoPilot() {
+  const { canEdit } = useRole();
   const queryClient = useQueryClient();
   const [editRule, setEditRule] = useState<AutoPilotRule | null>(null);
   const [isNew, setIsNew] = useState(false);
@@ -217,7 +219,7 @@ export default function AutoPilot() {
           <h1 className="text-2xl font-bold flex items-center gap-2"><Bot className="h-6 w-6" /> Auto-Pilot <Badge variant="outline" className="text-[10px] ml-2">Automation Engine</Badge></h1>
           <p className="text-sm text-muted-foreground">Visual rule builder with configurable execution modes, scheduling & safety guardrails</p>
         </div>
-        <Button onClick={addNewRule}><Plus className="h-4 w-4 mr-1" /> Add Rule</Button>
+        <Button onClick={addNewRule} disabled={!canEdit}><Plus className="h-4 w-4 mr-1" /> Add Rule</Button>
       </div>
 
       {/* Status Overview */}
@@ -274,8 +276,8 @@ export default function AutoPilot() {
                     )}
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    <Button variant="ghost" size="sm" onClick={() => { setIsNew(false); setEditRule({ ...rule }); }}><Pencil className="h-3 w-3" /></Button>
-                    <Button variant="ghost" size="sm" className="text-destructive" onClick={() => handleDelete(rule.id)}><Trash2 className="h-3 w-3" /></Button>
+                    <Button variant="ghost" size="sm" onClick={() => { setIsNew(false); setEditRule({ ...rule }); }} disabled={!canEdit}><Pencil className="h-3 w-3" /></Button>
+                    <Button variant="ghost" size="sm" className="text-destructive" onClick={() => handleDelete(rule.id)} disabled={!canEdit}><Trash2 className="h-3 w-3" /></Button>
                     <Switch checked={rule.active} onCheckedChange={() => toggleActive(rule.id)} />
                   </div>
                 </div>
@@ -386,7 +388,7 @@ export default function AutoPilot() {
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => { setEditRule(null); setIsNew(false); }}>Cancel</Button>
-            <Button onClick={handleSave}><Save className="h-4 w-4 mr-1" /> {isNew ? "Create Rule" : "Save Rule"}</Button>
+            <Button onClick={handleSave} disabled={!canEdit}><Save className="h-4 w-4 mr-1" /> {isNew ? "Create Rule" : "Save Rule"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

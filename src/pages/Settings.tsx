@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useRole } from "@/hooks/useRole";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -15,6 +16,7 @@ import { useStore } from "@/contexts/StoreContext";
 import { format } from "date-fns";
 
 export default function Settings() {
+  const { canEdit } = useRole();
   const queryClient = useQueryClient();
   const { data: settings } = useQuery({
     queryKey: ["app-settings"],
@@ -217,7 +219,7 @@ export default function Settings() {
                 <Label>Admin API Access Token</Label>
                 <Input type="password" placeholder="shpat_..." value={accessToken} onChange={e => setAccessToken(e.target.value)} />
               </div>
-              <Button onClick={handleConnect} disabled={busy} className="w-full">
+              <Button onClick={handleConnect} disabled={busy || !canEdit} className="w-full">
                 {busy ? "Connecting..." : "Connect Store"}
               </Button>
             </>
@@ -229,7 +231,7 @@ export default function Settings() {
                 <div><span className="text-muted-foreground">Domain:</span> {String(connection.shop_domain)}</div>
                 <div><span className="text-muted-foreground">Connected:</span> {connection.connected_at ? format(new Date(connection.connected_at as string), "PPpp") : "—"}</div>
               </div>
-              <Button variant="destructive" onClick={handleDisconnect} disabled={busy}>Disconnect</Button>
+              <Button variant="destructive" onClick={handleDisconnect} disabled={busy || !canEdit}>Disconnect</Button>
 
               <Separator />
 
@@ -256,11 +258,11 @@ export default function Settings() {
               </div>
 
               <div className="flex gap-2">
-                <Button onClick={handleSyncNow} disabled={busy} className="flex-1">
+                <Button onClick={handleSyncNow} disabled={busy || !canEdit} className="flex-1">
                   <RefreshCw className={`h-4 w-4 mr-2 ${busy ? "animate-spin" : ""}`} />
                   Sync Now
                 </Button>
-                <Button onClick={handleForceResync} disabled={busy} variant="outline" className="flex-1">
+                <Button onClick={handleForceResync} disabled={busy || !canEdit} variant="outline" className="flex-1">
                   <RefreshCw className={`h-4 w-4 mr-2 ${busy ? "animate-spin" : ""}`} />
                   Force Full Re-sync
                 </Button>
@@ -306,7 +308,7 @@ export default function Settings() {
         </CardContent>
       </Card>
 
-      <Button onClick={handleSave} className="w-full">Save Settings</Button>
+      <Button onClick={handleSave} className="w-full" disabled={!canEdit}>Save Settings</Button>
     </div>
   );
 }
