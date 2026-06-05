@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS public.abandoned_checkouts (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  store_id text NOT NULL REFERENCES public.stores(id) ON DELETE CASCADE,
+  store_id uuid NOT NULL REFERENCES public.stores(id) ON DELETE CASCADE,
   shopify_checkout_token text NOT NULL,
   created_at timestamptz,
   completed_at timestamptz,
