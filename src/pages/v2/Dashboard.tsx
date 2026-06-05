@@ -30,7 +30,7 @@ import { useSalesTrend } from "@/hooks/useSalesTrend";
 import { useChannelPerformance } from "@/hooks/useChannelPerformance";
 import { useInventoryDashboard } from "@/hooks/useInventoryDashboard";
 import { OutOfStockWidget } from "./components/OutOfStockWidget";
-import { useSalesKPIs, useCollectionSales, useCustomerMetrics, useFulfillmentMetrics, useDiscountUsage, useTrafficSources, useChannelConversion } from "@/hooks/useSalesKPIs";
+import { useSalesKPIs, useCollectionSales, useCustomerMetrics, useFulfillmentMetrics, useDiscountUsage, useTrafficSources, useChannelConversion, useCheckoutAbandonment, useUTMCampaigns } from "@/hooks/useSalesKPIs";
 import { useBundleSales } from "@/hooks/useBundleSales";
 import { supabase } from "@/integrations/supabase/client";
 import { useStore } from "@/contexts/StoreContext";
@@ -111,7 +111,7 @@ function KpiCard({ label, value, unit, delta, deltaUp, deltaLabel, footer, prevV
 
 // ─── Donut chart ─────────────────────────────────────────────────────────────
 
-interface DonutItem { name: string; value: number; color: string; formatted?: string }
+interface DonutItem { name: string; value: number; color: string; formatted?: string; orders?: number }
 
 function DonutChart({ data, centerLabel, centerValue, size = 140, showLegend = true }:
   { data: DonutItem[]; centerLabel: string; centerValue: string; size?: number; showLegend?: boolean }) {
@@ -140,7 +140,14 @@ function DonutChart({ data, centerLabel, centerValue, size = 140, showLegend = t
             <div key={i} className="flex items-center gap-2 text-xs">
               <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: d.color }} />
               <span className="flex-1 truncate text-muted-foreground">{d.name}</span>
-              <span className="font-medium tabular-nums">{d.formatted ?? d.value.toLocaleString()}</span>
+              <span className="tabular-nums text-right">
+                <span className="font-medium">{d.formatted ?? d.value.toLocaleString()}</span>
+                {d.orders != null && (
+                  <span className="block text-[10px] text-muted-foreground leading-tight">
+                    {d.orders.toLocaleString()} {d.orders === 1 ? "order" : "orders"}
+                  </span>
+                )}
+              </span>
             </div>
           ))}
         </div>
@@ -212,7 +219,7 @@ function AlertStrip({ onDismiss, oos, winners, pendingOrders, pendingApprovals }
         <span className="text-border">·</span>
         <button onClick={() => navigate("/replenishment")} className="hover:underline">
           <span className="font-semibold text-emerald-600 dark:text-emerald-400">{f(winners)}</span>{" "}
-          <span className="text-muted-foreground">low-stock winners</span>
+          <span className="text-muted-foreground">active SKUs</span>
         </button>
         <span className="text-border">·</span>
         <button onClick={() => navigate("/orders")} className="hover:underline">
@@ -441,6 +448,8 @@ function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing,
   const { data: discountData,    isLoading: discountLoading }    = useDiscountUsage(bounds);
   const { data: trafficSources,  isLoading: trafficLoading }     = useTrafficSources(bounds);
   const { data: conversionData,  isLoading: conversionLoading }  = useChannelConversion(bounds);
+  const { data: abandonmentData, isLoading: abandonmentLoading } = useCheckoutAbandonment(bounds);
+  const { data: utmCampaigns,    isLoading: utmLoading }         = useUTMCampaigns(bounds);
   const sparkRev = trendData ? trendData.slice(-14).map(d => d.revenue) : [];
   const sparkOrd = trendData ? trendData.slice(-14).map(d => d.orders) : [];
   const totalChannelRevenue = channelData ? channelData.reduce((s, c) => s + c.revenue, 0) : 0;
@@ -723,7 +732,7 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
               </div>
             ) : (
               <DonutChart
-                data={(channelData ?? []).map(c => ({ name: c.name, value: c.revenue, color: c.color, formatted: fmtGBP(c.revenue) }))}
+                data={(channelData ?? []).map(c => ({ name: c.name, value: c.revenue, color: c.color, formatted: fmtGBP(c.revenue), orders: c.orders }))}
                 centerLabel="Total" centerValue={fmtGBP(totalChannelRevenue)}
                 size={130} />
             )}
@@ -1007,6 +1016,55 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
             })()}
           </CardContent>
         </Card>
+
+      </div>
+
+      {/* ── second marketing row ─────────────────────────────────────────────── */}
+      <div className="grid grid-cols-2 gap-3.5">
+
+        {/* Card 4 — Checkout Abandonment */}
+        <Card className="col-span-2">
+          <CardHeader className="pb-2 pt-4 px-4">
+            <div className="flex items-center gap-2">
+              <ShoppingCart size={14} className="text-amber-500" />
+              <h3 className="text-sm font-semibold">Checkout abandonment</h3>
+              <span className="text-xs text-muted-foreground">{bounds.label}</span>
+            </div>
+          </CardHeader>
+          <CardContent className="px-4 pb-4">
+            {abandonmentLoading ? (
+              <div className="space-y-2">
+                <div className="h-8 bg-muted animate-pulse rounded w-20" />
+                <div className="h-3 bg-muted animate-pulse rounded w-52" />
+                <div className="h-1.5 bg-muted animate-pulse rounded-full mt-3" />
+                <div className="h-3 bg-muted animate-pulse rounded w-44 mt-4" />
+              </div>
+            ) : !abandonmentData?.hasSynced ? (
+              <div className="py-3 space-y-1.5">
+                <p className="text-xs text-muted-foreground">No data yet — run a store sync to populate abandoned checkout records.</p>
+                <p className="text-[11px] text-muted-foreground/60">Shopify tracks checkouts started but not completed.</p>
+              </div>
+            ) : (
+              <>
+                <div className="text-[28px] font-semibold tabular-nums tracking-tight">
+                  {abandonmentData.abandonmentRate}%
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {fmtNum(abandonmentData.abandoned)} abandoned · {fmtNum(abandonmentData.completedOrders)} completed
+                </p>
+                <div className="mt-2 h-2 bg-muted rounded-full overflow-hidden">
+                  <div className="h-full rounded-full bg-amber-500 transition-all"
+                    style={{ width: `${Math.min(100, abandonmentData.abandonmentRate)}%` }} />
+                </div>
+                <p className="text-xs text-muted-foreground mt-3">
+                  <span className="font-medium text-foreground">{fmtGBP(abandonmentData.revenueAtRisk)}</span> revenue at risk from abandoned carts
+                </p>
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+
 
       </div>
       {/* ── end marketing cards ──────────────────────────────────────────────── */}

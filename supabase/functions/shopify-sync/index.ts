@@ -10,7 +10,7 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdidmJ2b3BlaWVxZ2h2ZXR0bWtqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc3MDMzNDksImV4cCI6MjA5MzI3OTM0OX0.bezMzljmBaqGo0kuThNO5tIuLDeWXaVnbAn8O2ZD5dM";
 const INVOKE_URL = `${SUPABASE_URL}/functions/v1/shopify-sync`;
-const STAGES = ["products", "collections", "orders", "inventory"] as const;
+const STAGES = ["products", "collections", "orders", "inventory", "abandoned_checkouts"] as const;
 type Stage = typeof STAGES[number];
 
 function normalizeDomain(d: string) {
@@ -833,6 +833,62 @@ async function refreshVelocityMetrics(supabase: any, storeId: string | null) {
   }
 }
 
+// ------------ Abandoned checkouts ------------
+async function syncAbandonedCheckouts(supabase: any, conn: any, log: any, totalRef: { n: number }, syncSince: string | null): Promise<boolean> {
+  const domain = normalizeDomain(conn.shop_domain);
+  const pageInfo: string | null = log.current_stage === "abandoned_checkouts" ? log.cursor : null;
+  const page: number = log.current_stage === "abandoned_checkouts" ? (log.current_page ?? 0) : 0;
+
+  const oneYearAgo = new Date();
+  oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+  const historicalStart = oneYearAgo.toISOString();
+
+  const path = pageInfo
+    ? `/checkouts.json?limit=50&page_info=${encodeURIComponent(pageInfo)}`
+    : syncSince
+      ? `/checkouts.json?limit=50&updated_at_min=${encodeURIComponent(syncSince)}`
+      : `/checkouts.json?limit=50&created_at_min=${encodeURIComponent(historicalStart)}`;
+
+  const res = await shopifyFetch(domain, conn.access_token, path);
+  // 404 means the store plan doesn't expose this endpoint — skip gracefully
+  if (res.status === 404) {
+    await updateLog(supabase, log.id, { current_stage: "abandoned_checkouts", current_page: 0, cursor: null, records_synced: totalRef.n });
+    return false;
+  }
+  if (!res.ok) throw new Error(`abandoned_checkouts [${res.status}]: ${(await res.text()).slice(0, 200)}`);
+
+  const json = await res.json();
+  const checkouts = (json.checkouts ?? []) as any[];
+
+  for (const c of checkouts) {
+    await supabase.from("abandoned_checkouts").upsert({
+      store_id: conn.store_id,
+      shopify_checkout_token: String(c.token),
+      created_at: c.created_at || null,
+      completed_at: c.completed_at || null,
+      email: c.email || null,
+      total_price: c.total_price ? Number(c.total_price) : null,
+      source_name: c.source_name || null,
+      referring_site: c.referring_site || null,
+      landing_site: c.landing_site || null,
+      currency: c.currency || null,
+    }, { onConflict: "store_id,shopify_checkout_token" });
+    totalRef.n++;
+  }
+
+  const link = res.headers.get("Link") ?? res.headers.get("link");
+  const nextPageInfo = parseNextPageInfo(link);
+
+  await updateLog(supabase, log.id, {
+    current_stage: "abandoned_checkouts",
+    current_page: page + 1,
+    cursor: nextPageInfo,
+    records_synced: totalRef.n,
+  });
+
+  return nextPageInfo !== null;
+}
+
 // ------------ Orchestrator ------------
 async function syncShopifyData(supabase: any, connectionId: string) {
   const { data: conn } = await supabase
@@ -868,6 +924,8 @@ async function syncShopifyData(supabase: any, connectionId: string) {
       } else {
         hasMore = await syncInventory(supabase, conn, log, totalRef);
       }
+    } else if (currentStage === "abandoned_checkouts") {
+      hasMore = await syncAbandonedCheckouts(supabase, conn, log, totalRef, syncSince);
     }
 
     if (hasMore) {

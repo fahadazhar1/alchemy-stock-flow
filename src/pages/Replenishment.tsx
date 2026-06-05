@@ -207,7 +207,7 @@ export default function Replenishment() {
                   {/* Stock runway bar */}
                   <div>
                     <div className="flex justify-between text-[11px] text-muted-foreground mb-1.5">
-                      <span>Stock Runway</span>
+                      <span>Stock Runway (Current Inventory)</span>
                       <span>{r.available_units} units</span>
                     </div>
                     <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
@@ -226,7 +226,7 @@ export default function Replenishment() {
                   <div className="flex items-center justify-between pt-1 border-t">
                     <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                       <TrendingUp className="h-3.5 w-3.5" />
-                      <span>{r.velocity} units/wk</span>
+                      <span>Sales  {r.velocity} units / week</span>
                     </div>
                     {suggested > 0 && (
                       <div className={cn(

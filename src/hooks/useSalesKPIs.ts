@@ -418,6 +418,117 @@ export function useChannelConversion(bounds?: DateBounds) {
   });
 }
 
+// ─── UTM Campaign breakdown ───────────────────────────────────────────────────
+
+export interface UTMCampaign {
+  campaign: string;
+  orders: number;
+  revenue: number;
+}
+
+export function useUTMCampaigns(bounds?: DateBounds) {
+  const { storeId } = useStoreFilter();
+  const b = bounds ?? getDateBounds("MTD");
+
+  return useQuery({
+    queryKey: ["utm-campaigns", storeId, b.cacheKey],
+    queryFn: async (): Promise<UTMCampaign[]> => {
+      let q = (supabase as any)
+        .from("orders")
+        .select("landing_site, total_price, cancelled_at")
+        .gte("shopify_created_at", b.startISO)
+        .lte("shopify_created_at", b.endISO);
+      if (storeId) q = q.eq("store_id", storeId);
+
+      const { data, error } = await q;
+      if (error) throw error;
+
+      const rows = ((data ?? []) as any[]).filter((r: any) => !r.cancelled_at);
+      const map = new Map<string, { orders: number; revenue: number }>();
+
+      for (const r of rows) {
+        let campaign = "";
+        if (r.landing_site) {
+          try {
+            const url = new URL(
+              r.landing_site.startsWith("http") ? r.landing_site : `https://x.com${r.landing_site}`
+            );
+            campaign = url.searchParams.get("utm_campaign") ?? "";
+          } catch { /* malformed URL */ }
+        }
+        if (!campaign) continue;
+        const e = map.get(campaign) ?? { orders: 0, revenue: 0 };
+        e.orders += 1;
+        e.revenue += Number(r.total_price ?? 0);
+        map.set(campaign, e);
+      }
+
+      return Array.from(map.entries())
+        .sort((a, b) => b[1].revenue - a[1].revenue)
+        .slice(0, 5)
+        .map(([campaign, { orders, revenue }]) => ({ campaign, orders, revenue }));
+    },
+  });
+}
+
+// ─── Checkout abandonment ─────────────────────────────────────────────────────
+
+export interface CheckoutAbandonmentData {
+  abandoned: number;
+  revenueAtRisk: number;
+  completedOrders: number;
+  abandonmentRate: number;
+  hasSynced: boolean;
+}
+
+export function useCheckoutAbandonment(bounds?: DateBounds) {
+  const { storeId } = useStoreFilter();
+  const b = bounds ?? getDateBounds("MTD");
+
+  return useQuery({
+    queryKey: ["checkout-abandonment", storeId, b.cacheKey],
+    queryFn: async (): Promise<CheckoutAbandonmentData> => {
+      // Check if ANY rows exist (to detect "never synced" state)
+      let totalRowsQ = (supabase as any)
+        .from("abandoned_checkouts")
+        .select("id", { count: "exact", head: true });
+      if (storeId) totalRowsQ = totalRowsQ.eq("store_id", storeId);
+
+      // Abandoned checkouts in the period (completed_at IS NULL = still abandoned)
+      let abandonedQ = (supabase as any)
+        .from("abandoned_checkouts")
+        .select("total_price")
+        .is("completed_at", null)
+        .gte("created_at", b.startISO)
+        .lte("created_at", b.endISO);
+      if (storeId) abandonedQ = abandonedQ.eq("store_id", storeId);
+
+      // Completed orders in the same period (as denominator for abandonment rate)
+      let ordersQ = (supabase as any)
+        .from("orders")
+        .select("id", { count: "exact", head: true })
+        .is("cancelled_at", null)
+        .gte("shopify_created_at", b.startISO)
+        .lte("shopify_created_at", b.endISO);
+      if (storeId) ordersQ = ordersQ.eq("store_id", storeId);
+
+      const [totalRes, abandonedRes, ordersRes] = await Promise.all([
+        totalRowsQ, abandonedQ, ordersQ,
+      ]);
+
+      const hasSynced = (totalRes.count ?? 0) > 0;
+      const abandonedRows = (abandonedRes.data ?? []) as any[];
+      const abandoned = abandonedRows.length;
+      const revenueAtRisk = abandonedRows.reduce((s: number, r: any) => s + Number(r.total_price ?? 0), 0);
+      const completedOrders = ordersRes.count ?? 0;
+      const total = abandoned + completedOrders;
+      const abandonmentRate = total > 0 ? Math.round((abandoned / total) * 1000) / 10 : 0;
+
+      return { abandoned, revenueAtRisk, completedOrders, abandonmentRate, hasSynced };
+    },
+  });
+}
+
 export function useCollectionSales(bounds?: DateBounds) {
   const { storeId } = useStoreFilter();
   const b = bounds ?? getDateBounds("MTD");
