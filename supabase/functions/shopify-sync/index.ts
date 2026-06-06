@@ -259,6 +259,7 @@ async function syncProducts(supabase: any, conn: any, log: any, totalRef: { n: n
       status: p.status || "active",
       shopify_product_id: String(p.id),
       store_id: conn.store_id,
+      image_alt_text: p.images?.[0]?.alt || null,
       // Preserve Shopify's original created_at so stock-aging calculations are accurate
       created_at: p.created_at ? new Date(p.created_at).toISOString() : undefined,
       ...(vendorId ? { vendor_id: vendorId } : {}),

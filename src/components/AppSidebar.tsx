@@ -2,6 +2,7 @@ import {
   LayoutDashboard, Package, RefreshCw, Brain, Bot, FileText,
   BarChart3, Truck, CheckSquare, FlaskConical, Clock, Settings, Beaker, Store,
   ShoppingCart, BarChart2, ListOrdered, Activity, LogOut,
+  PackageCheck, ClipboardList, Tag, Archive, PackageOpen, Search,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
@@ -28,6 +29,12 @@ const navItems = [
   { title: "Expiry Monitor", url: "/expiry", icon: Clock },
   { title: "Audit Logs", url: "/audit-logs", icon: FileText },
   { title: "Collection Sort", url: "/collection-sort", icon: ListOrdered },
+  { title: "Fulfillment", url: "/fulfillment", icon: PackageCheck },
+  { title: "Draft PO", url: "/draft-po", icon: ClipboardList },
+  { title: "Discount Performance", url: "/discount-performance", icon: Tag },
+  { title: "Dead Stock", url: "/dead-stock", icon: Archive },
+  { title: "Bundle Finder", url: "/bundle-finder", icon: PackageOpen },
+  { title: "SEO Audit", url: "/seo-audit", icon: Search },
   { title: "Stores", url: "/stores", icon: Store },
   { title: "Settings", url: "/settings", icon: Settings },
 ];

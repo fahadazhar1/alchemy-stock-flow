@@ -24,6 +24,12 @@ import ExpiryMonitoring from "@/pages/ExpiryMonitoring";
 import Settings from "@/pages/Settings";
 import StoreManagement from "@/pages/StoreManagement";
 import CollectionSortManager from "@/pages/CollectionSortManager";
+import OrderFulfillment from "@/pages/OrderFulfillment";
+import DraftPO from "@/pages/DraftPO";
+import DiscountPerformance from "@/pages/DiscountPerformance";
+import DeadStock from "@/pages/DeadStock";
+import BundleOpportunity from "@/pages/BundleOpportunity";
+import SEOAudit from "@/pages/SEOAudit";
 import Login from "@/pages/Login";
 import NotFound from "@/pages/NotFound";
 import { Loader2 } from "lucide-react";
@@ -78,6 +84,12 @@ function AppRoutes() {
           <Route path="/settings" element={<Settings />} />
           <Route path="/stores" element={<StoreManagement />} />
           <Route path="/collection-sort" element={<CollectionSortManager />} />
+          <Route path="/fulfillment" element={<OrderFulfillment />} />
+          <Route path="/draft-po" element={<DraftPO />} />
+          <Route path="/discount-performance" element={<DiscountPerformance />} />
+          <Route path="/dead-stock" element={<DeadStock />} />
+          <Route path="/bundle-finder" element={<BundleOpportunity />} />
+          <Route path="/seo-audit" element={<SEOAudit />} />
         </Route>
       </Route>
       <Route path="*" element={<NotFound />} />
