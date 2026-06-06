@@ -565,7 +565,7 @@ export default function ProductMaster() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
           <h1 className="text-2xl font-bold">Product Master</h1>
           <p className="text-sm text-muted-foreground">Complete inventory ledger with pricing actions</p>
@@ -665,7 +665,7 @@ export default function ProductMaster() {
         <div className="space-y-2">{Array.from({ length: 10 }).map((_, i) => <Skeleton key={i} className="h-12" />)}</div>
       ) : (
         <>
-          <div className="rounded-md border">
+          <div className="rounded-md border overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>

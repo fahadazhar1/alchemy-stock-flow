@@ -199,7 +199,7 @@ function CourierStatusMultiSelect({
 function DrawerSkeleton() {
   return (
     <div className="p-5 space-y-4 animate-pulse">
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {[0, 1].map(i => (
           <div key={i} className="rounded-lg border p-3 space-y-2">
             <div className="h-2.5 bg-muted rounded w-16" />
@@ -760,7 +760,7 @@ export default function Orders() {
       </div>
 
       {/* COD payment KPI cards */}
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Card className="cursor-pointer hover:border-amber-300 dark:hover:border-amber-700 transition-colors group"
           onClick={() => setCodModal("held")}>
           <CardContent className="p-4 flex items-start gap-3">

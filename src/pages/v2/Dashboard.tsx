@@ -526,7 +526,7 @@ function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing,
   return (
     <div className="space-y-3.5">
       {/* Section header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2.5 flex-wrap">
           <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-primary/10 text-primary">Sales</span>
           <h2 className="text-base font-semibold">Sales overview</h2>
@@ -573,11 +573,11 @@ function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing,
 
       {/* KPI grid — 6 cols */}
       {kpisLoading ? (
-        <div className="grid grid-cols-6 gap-3.5">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">
           {Array.from({ length: 6 }).map((_, i) => <KpiSkeleton key={i} />)}
         </div>
       ) : (
-        <div className="grid grid-cols-6 gap-3.5">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">
           <KpiCard icon={Banknote} iconColor="#4f46e5" iconBg="#eef2ff"
             label={`Revenue (${range})`} value={fmtGBP(salesKPIs?.revenueMTD ?? 0)}
             delta={salesKPIs?.revenueDelta ?? undefined}
@@ -611,11 +611,11 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
 
       {/* CEO insights row — 5 cols */}
       {(customerLoading || fulfillmentLoading || kpisLoading || bundleLoading) ? (
-        <div className="grid grid-cols-5 gap-3.5">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">
           {Array.from({ length: 5 }).map((_, i) => <KpiSkeleton key={i} />)}
         </div>
       ) : (
-        <div className="grid grid-cols-5 gap-3.5">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">
           <KpiCard icon={Users} iconColor="#0891b2" iconBg="#cffafe"
             label="New Customers"
             value={customerMetrics?.totalCustomers ? `${customerMetrics.newPct.toFixed(1)}%` : "—"}
@@ -652,8 +652,8 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
       )}
 
       {/* Trend chart + Channel donut */}
-      <div className="grid grid-cols-3 gap-3.5">
-        <Card className="col-span-2">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3.5">
+        <Card className="lg:col-span-2">
           <CardHeader className="pb-2 pt-4 px-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -741,8 +741,8 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
       </div>
 
       {/* Top products + Collections + Orders summary */}
-      <div className="grid grid-cols-5 gap-3.5">
-        <Card className="col-span-3">
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-3.5">
+        <Card className="lg:col-span-3">
           <CardHeader className="pb-2 pt-4 px-4">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-semibold">Top selling products
@@ -803,7 +803,7 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
           </CardContent>
         </Card>
 
-        <div className="col-span-2 flex flex-col gap-3.5">
+        <div className="lg:col-span-2 flex flex-col gap-3.5">
           <Card className="flex-1">
             <CardHeader className="pb-2 pt-4 px-4">
               <h3 className="text-sm font-semibold">Sales by collection
@@ -896,7 +896,7 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
       </div>
 
       {/* ── Marketing cards: Discount · Traffic · Channel conversion ─────────── */}
-      <div className="grid grid-cols-3 gap-3.5">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3.5">
 
         {/* Card 1 — Discount Usage Rate */}
         <Card>
@@ -1020,7 +1020,7 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
       </div>
 
       {/* ── second marketing row ─────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 gap-3.5">
+      <div className="grid grid-cols-1 gap-3.5">
 
         {/* Card 4 — Checkout Abandonment */}
         <Card className="col-span-2">
@@ -1078,6 +1078,7 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
           </div>
         </CardHeader>
         <CardContent className="p-0">
+          <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
               <tr className="border-b">
@@ -1145,6 +1146,7 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
               )}
             </tbody>
           </table>
+          </div>
         </CardContent>
       </Card>
     </div>
@@ -1191,7 +1193,7 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
 
   return (
     <div className="space-y-3.5">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2.5 flex-wrap">
           <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">Inventory</span>
           <h2 className="text-base font-semibold">Inventory health</h2>
@@ -1220,11 +1222,11 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
       </div>
 
       {isLoading ? (
-        <div className="grid grid-cols-5 gap-3.5">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">
           {Array.from({ length: 5 }).map((_, i) => <KpiSkeleton key={i} />)}
         </div>
       ) : (
-        <div className="grid grid-cols-5 gap-3.5">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">
           <KpiCard icon={Boxes} iconColor="#4f46e5" iconBg="#eef2ff"
             label="Available units" value={fmtNum(available)}
             sparkData={sparkInv} sparkColor="#6366f1" />
@@ -1243,8 +1245,8 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
         </div>
       )}
 
-      <div className="grid grid-cols-3 gap-3.5">
-        <Card className="col-span-2">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3.5">
+        <Card className="lg:col-span-2">
           <CardHeader className="pb-2 pt-4 px-4">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-semibold">Stock aging
@@ -1324,11 +1326,11 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
         </CardHeader>
         <CardContent className="p-3">
           {isLoading ? (
-            <div className="grid grid-cols-6 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
               {Array.from({ length: 6 }).map((_, i) => <KpiSkeleton key={i} />)}
             </div>
           ) : (
-            <div className="grid grid-cols-6 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
               <KpiCard label="Central SKUs"    value={fmtNum(data?.wmsPool.totalSKUs ?? 0)}
                 icon={Layers}        iconColor="#4f46e5" iconBg="#eef2ff" footer="Master variants" />
               <KpiCard label="Total available" value={fmtNum(data?.wmsPool.totalAvailable ?? 0)}
@@ -1348,8 +1350,8 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
 
       <OutOfStockWidget />
 
-      <div className="grid grid-cols-3 gap-3.5">
-        <Card className="col-span-2">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3.5">
+        <Card className="lg:col-span-2">
           <CardHeader className="pb-2 pt-4 px-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -1364,6 +1366,7 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
             </div>
           </CardHeader>
           <CardContent className="p-0">
+            <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
                 <tr className="border-b">
@@ -1422,6 +1425,7 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
                 )}
               </tbody>
             </table>
+            </div>
           </CardContent>
         </Card>
 

@@ -125,7 +125,7 @@ export function OutOfStockWidget() {
           </div>
         </CardHeader>
 
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           {isLoading ? (
             <table className="w-full text-xs">
               <tbody>{Array.from({ length: 5 }).map((_, i) => <OosRowSkeleton key={i} />)}</tbody>
@@ -152,7 +152,7 @@ export function OutOfStockWidget() {
               </Badge>
             </DialogTitle>
           </DialogHeader>
-          <div className="mt-2 rounded-md border overflow-hidden">
+          <div className="mt-2 rounded-md border overflow-x-auto">
             <OosTable rows={data ?? []} days={days} />
           </div>
         </DialogContent>

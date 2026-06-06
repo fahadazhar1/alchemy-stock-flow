@@ -251,7 +251,7 @@ export default function ProductVelocity() {
 
   if (isLoading) return (
     <div className="space-y-6">
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {[1, 2, 3].map(i => <Skeleton key={i} className="h-20 rounded-xl" />)}
       </div>
       <Skeleton className="h-10 w-full" />
@@ -263,7 +263,7 @@ export default function ProductVelocity() {
     <div className="space-y-6">
 
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <Activity className="h-6 w-6" /> Product Velocity
@@ -294,7 +294,7 @@ export default function ProductVelocity() {
       </div>
 
       {/* Summary Stats */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <Card>
           <CardContent className="p-4 flex items-center gap-3">
             <div className="p-2 rounded-lg bg-violet-50 dark:bg-violet-950/30 shrink-0">
@@ -380,7 +380,7 @@ export default function ProductVelocity() {
       </div>
 
       {/* Table */}
-      <div className="rounded-xl border overflow-hidden">
+      <div className="rounded-xl border overflow-x-auto">
         {/* Table Header */}
         <div className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr_1fr_auto] gap-4 px-4 py-3 bg-muted/50 border-b text-xs">
           <SortHeader col="product_name"    label="Product"      sortCol={sortCol} sortDir={sortDir} onSort={handleSort} />
