@@ -8,7 +8,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { exportToCSV } from "@/lib/export";
-import { PackageOpen, Download, Link2, TrendingUp, ShoppingBag } from "lucide-react";
+import { PackageOpen, Download, Link2, TrendingUp, ShoppingBag, HelpCircle } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useStoreFilter } from "@/hooks/useStoreFilter";
 import { useCurrency } from "@/hooks/useCurrency";
 import { toast } from "sonner";
@@ -59,6 +60,24 @@ export default function BundleOpportunity() {
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <PackageOpen className="h-6 w-6" /> Bundle Opportunity Finder
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button variant="ghost" size="sm" className="h-7 px-2 text-muted-foreground hover:text-foreground">
+                  <HelpCircle className="h-4 w-4 mr-1" /> How it works?
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-80 text-sm" align="start">
+                <p className="font-semibold mb-2">How Bundle Finder works</p>
+                <ul className="space-y-1.5 text-muted-foreground list-disc list-inside">
+                  <li>Looks at all orders from the <span className="text-foreground font-medium">last 90 days</span></li>
+                  <li>Finds products bought <span className="text-foreground font-medium">together in the same order</span></li>
+                  <li><span className="text-foreground font-medium">Min. co-purchases</span> hides weak pairs — raise it for stronger signals only</li>
+                  <li><span className="text-foreground font-medium">Bundle strength</span> ranks each pair against the top pair (top pair = 100%)</li>
+                  <li><span className="text-foreground font-medium">Avg revenue</span> is the combined spend when both products are bought together</li>
+                  <li>Use these insights to create <span className="text-foreground font-medium">bundles or promotions</span> on your store</li>
+                </ul>
+              </PopoverContent>
+            </Popover>
           </h1>
           <p className="text-sm text-muted-foreground">
             Products frequently bought together in the last 90 days
