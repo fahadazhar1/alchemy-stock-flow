@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -8,8 +8,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { exportToCSV } from "@/lib/export";
-import { PackageOpen, Download, Link2, TrendingUp, ShoppingBag, HelpCircle } from "lucide-react";
+import { PackageOpen, Download, Link2, TrendingUp, ShoppingBag, HelpCircle, Bookmark, CheckCircle2, BookmarkCheck } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Switch } from "@/components/ui/switch";
 import { useStoreFilter } from "@/hooks/useStoreFilter";
 import { useCurrency } from "@/hooks/useCurrency";
 import { toast } from "sonner";
@@ -25,10 +27,87 @@ type BundlePair = {
   estimated_bundle_revenue: number;
 };
 
+type BundleSuggestion = BundlePair & {
+  id: string;
+  store_id: string;
+  saved_at: string;
+  executed_at: string | null;
+};
+
 export default function BundleOpportunity() {
   const { storeId } = useStoreFilter();
   const { formatCurrency } = useCurrency();
   const [minCount, setMinCount] = useState(3);
+  const [savedOpen, setSavedOpen] = useState(false);
+  const [showExecuted, setShowExecuted] = useState(false);
+  const queryClient = useQueryClient();
+
+  const { data: savedBundles } = useQuery({
+    queryKey: ["bundle-suggestions", storeId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("bundle_suggestions" as any)
+        .select("*")
+        .order("saved_at", { ascending: false });
+      if (error) throw error;
+      return (data ?? []) as BundleSuggestion[];
+    },
+  });
+
+  const saveMutation = useMutation({
+    mutationFn: async (pair: BundlePair) => {
+      const { error } = await supabase.from("bundle_suggestions" as any).insert({
+        store_id: storeId,
+        product_a_id: pair.product_a_id,
+        product_a_name: pair.product_a_name,
+        product_a_sku: pair.product_a_sku,
+        product_b_id: pair.product_b_id,
+        product_b_name: pair.product_b_name,
+        product_b_sku: pair.product_b_sku,
+        co_occurrence_count: pair.co_occurrence_count,
+        estimated_bundle_revenue: pair.estimated_bundle_revenue,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["bundle-suggestions", storeId] });
+      toast.success("Bundle suggestion saved!");
+    },
+    onError: () => toast.error("Failed to save bundle suggestion"),
+  });
+
+  const executeMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase
+        .from("bundle_suggestions" as any)
+        .update({ executed_at: new Date().toISOString() })
+        .eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["bundle-suggestions", storeId] });
+      toast.success("Bundle marked as executed!");
+    },
+    onError: () => toast.error("Failed to update bundle"),
+  });
+
+  const removeMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase
+        .from("bundle_suggestions" as any)
+        .delete()
+        .eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["bundle-suggestions", storeId] });
+      toast.success("Bundle removed.");
+    },
+    onError: () => toast.error("Failed to remove bundle"),
+  });
+
+  const activeSaved = savedBundles?.filter(s => !s.executed_at) ?? [];
+  const filteredSaved = showExecuted ? savedBundles ?? [] : activeSaved;
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ["bundle-opportunities", storeId, minCount],
@@ -83,19 +162,28 @@ export default function BundleOpportunity() {
             Products frequently bought together in the last 90 days
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => data?.length && exportToCSV(
-          data.map(p => ({
-            "Product A": p.product_a_name,
-            "SKU A": p.product_a_sku,
-            "Product B": p.product_b_name,
-            "SKU B": p.product_b_sku,
-            "Times Bought Together": p.co_occurrence_count,
-            "Avg Bundle Revenue": p.estimated_bundle_revenue,
-          })),
-          "bundle-opportunities"
-        )}>
-          <Download className="h-4 w-4 mr-1" /> Export
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => setSavedOpen(true)}>
+            <BookmarkCheck className="h-4 w-4 mr-1" />
+            View Saved Bundles
+            {activeSaved.length > 0 && (
+              <Badge variant="default" className="ml-1.5 h-4 px-1.5 text-[10px]">{activeSaved.length}</Badge>
+            )}
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => data?.length && exportToCSV(
+            data.map(p => ({
+              "Product A": p.product_a_name,
+              "SKU A": p.product_a_sku,
+              "Product B": p.product_b_name,
+              "SKU B": p.product_b_sku,
+              "Times Bought Together": p.co_occurrence_count,
+              "Avg Bundle Revenue": p.estimated_bundle_revenue,
+            })),
+            "bundle-opportunities"
+          )}>
+            <Download className="h-4 w-4 mr-1" /> Export
+          </Button>
+        </div>
       </div>
 
       <div className="flex items-center gap-4">
@@ -186,14 +274,26 @@ export default function BundleOpportunity() {
                     </div>
                   </div>
 
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="w-full text-xs h-7"
-                    onClick={() => toast.success(`Bundle suggestion saved: ${pair.product_a_name} + ${pair.product_b_name}`)}
-                  >
-                    Save Bundle Suggestion
-                  </Button>
+                  {(() => {
+                    const already = savedBundles?.find(
+                      s => s.product_a_id === pair.product_a_id && s.product_b_id === pair.product_b_id && !s.executed_at
+                    );
+                    return already ? (
+                      <Button size="sm" variant="secondary" className="w-full text-xs h-7" disabled>
+                        <Bookmark className="h-3 w-3 mr-1 fill-current" /> Saved
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-full text-xs h-7"
+                        disabled={saveMutation.isPending}
+                        onClick={() => saveMutation.mutate(pair)}
+                      >
+                        <Bookmark className="h-3 w-3 mr-1" /> Save Bundle Suggestion
+                      </Button>
+                    );
+                  })()}
 
                 </CardContent>
               </Card>
@@ -201,6 +301,101 @@ export default function BundleOpportunity() {
           })}
         </div>
       )}
+
+      <Dialog open={savedOpen} onOpenChange={setSavedOpen}>
+        <DialogContent className="max-w-xl max-h-[80vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <BookmarkCheck className="h-5 w-5" /> Saved Bundle Suggestions
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="flex items-center justify-between py-2 border-b">
+            <span className="text-sm text-muted-foreground">
+              {activeSaved.length} active · {(savedBundles?.filter(s => s.executed_at)?.length ?? 0)} executed
+            </span>
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-muted-foreground">Show executed</span>
+              <Switch checked={showExecuted} onCheckedChange={setShowExecuted} />
+            </div>
+          </div>
+
+          <div className="overflow-y-auto flex-1 space-y-3 py-2 pr-1">
+            {filteredSaved.length === 0 ? (
+              <div className="text-center py-10 text-muted-foreground">
+                <Bookmark className="h-8 w-8 mx-auto mb-2 opacity-30" />
+                <p className="text-sm">No saved bundles yet</p>
+              </div>
+            ) : filteredSaved.map(s => (
+              <div key={s.id} className={`rounded-lg border p-3 space-y-2 ${s.executed_at ? "opacity-50" : ""}`}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="space-y-0.5 flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">{s.product_a_name}</p>
+                    <p className="text-xs text-muted-foreground font-mono">{s.product_a_sku}</p>
+                    <p className="text-[11px] text-muted-foreground">+</p>
+                    <p className="text-sm font-medium truncate">{s.product_b_name}</p>
+                    <p className="text-xs text-muted-foreground font-mono">{s.product_b_sku}</p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="text-xs text-muted-foreground">{s.co_occurrence_count}× together</p>
+                    <p className="text-sm font-bold">{formatCurrency(Number(s.estimated_bundle_revenue))}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 pt-1 border-t">
+                  {s.executed_at ? (
+                    <Badge variant="secondary" className="text-[11px]">
+                      <CheckCircle2 className="h-3 w-3 mr-1" /> Executed
+                    </Badge>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs"
+                      disabled={executeMutation.isPending}
+                      onClick={() => executeMutation.mutate(s.id)}
+                    >
+                      <CheckCircle2 className="h-3 w-3 mr-1" /> Mark as Executed
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 text-xs text-destructive hover:text-destructive ml-auto"
+                    disabled={removeMutation.isPending}
+                    onClick={() => removeMutation.mutate(s.id)}
+                  >
+                    Remove
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {filteredSaved.length > 0 && (
+            <div className="pt-2 border-t">
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full"
+                onClick={() => exportToCSV(
+                  filteredSaved.map(s => ({
+                    "Product A": s.product_a_name,
+                    "SKU A": s.product_a_sku,
+                    "Product B": s.product_b_name,
+                    "SKU B": s.product_b_sku,
+                    "Times Bought Together": s.co_occurrence_count,
+                    "Avg Bundle Revenue": s.estimated_bundle_revenue,
+                    "Status": s.executed_at ? "Executed" : "Active",
+                  })),
+                  "saved-bundle-suggestions"
+                )}
+              >
+                <Download className="h-4 w-4 mr-1" /> Export Saved
+              </Button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
