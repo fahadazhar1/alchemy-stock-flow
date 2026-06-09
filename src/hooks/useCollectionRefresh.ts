@@ -73,11 +73,14 @@ export function useCollectionRefresh(storeId: string | null, queryKeys: string[]
       if (error || !fn?.ok) {
         toast.error(fn?.error ?? error?.message ?? "Failed to refresh collections");
       } else {
-        // Invalidate all provided query keys so dropdowns re-fetch
         for (const key of queryKeys) {
           await queryClient.invalidateQueries({ queryKey: key });
         }
-        toast.success(`Collections refreshed — ${fn.custom} manual, ${fn.smart} smart`);
+        if (fn.warnings?.length) {
+          toast.warning(`Partial refresh — ${fn.custom} manual, ${fn.smart} smart. Errors: ${fn.warnings.join("; ")}`);
+        } else {
+          toast.success(`Collections refreshed — ${fn.custom} manual, ${fn.smart} smart`);
+        }
       }
     } catch {
       toast.error("Failed to refresh collections");

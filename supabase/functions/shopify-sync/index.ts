@@ -264,16 +264,22 @@ async function syncProducts(supabase: any, conn: any, log: any, totalRef: { n: n
       created_at: p.created_at ? new Date(p.created_at).toISOString() : undefined,
       ...(vendorId ? { vendor_id: vendorId } : {}),
     };
-    const { data: existing } = await supabase
-      .from("products").select("id").eq("shopify_product_id", String(p.id)).maybeSingle();
+    const { data: existing, error: findProductErr } = await supabase
+      .from("products")
+      .select("id")
+      .eq("store_id", conn.store_id)
+      .eq("shopify_product_id", String(p.id))
+      .maybeSingle();
+    if (findProductErr) throw findProductErr;
 
     let productId: string;
     if (existing?.id) {
-      await supabase.from("products").update(productRow).eq("id", existing.id);
+      const { error: updateProductErr } = await supabase.from("products").update(productRow).eq("id", existing.id);
+      if (updateProductErr) throw updateProductErr;
       productId = existing.id;
     } else {
       const { data: ins, error } = await supabase.from("products").insert(productRow).select("id").single();
-      if (error) continue;
+      if (error) throw error;
       productId = ins.id;
     }
 
@@ -291,17 +297,24 @@ async function syncProducts(supabase: any, conn: any, log: any, totalRef: { n: n
         shopify_inventory_item_id: v.inventory_item_id ? String(v.inventory_item_id) : null,
         store_id: conn.store_id,
       };
-      const { data: existV } = await supabase
-        .from("variants").select("id, campaign_name").eq("shopify_variant_id", String(v.id)).maybeSingle();
+      const { data: existV, error: findVariantErr } = await supabase
+        .from("variants")
+        .select("id, campaign_name")
+        .eq("store_id", conn.store_id)
+        .eq("shopify_variant_id", String(v.id))
+        .maybeSingle();
+      if (findVariantErr) throw findVariantErr;
       if (existV?.id) {
         // If variant is under an active campaign, protect its price/compare_at_price
         // so a sync pull from Shopify doesn't overwrite campaign-managed prices
         const updateRow = existV.campaign_name
           ? { ...variantRow, price: undefined, compare_at_price: undefined }
           : variantRow;
-        await supabase.from("variants").update(updateRow).eq("id", existV.id);
+        const { error: updateVariantErr } = await supabase.from("variants").update(updateRow).eq("id", existV.id);
+        if (updateVariantErr) throw updateVariantErr;
       } else {
-        await supabase.from("variants").insert(variantRow);
+        const { error: insertVariantErr } = await supabase.from("variants").insert(variantRow);
+        if (insertVariantErr) throw insertVariantErr;
       }
       totalRef.n++;
     }));
@@ -602,6 +615,7 @@ async function fetchAndInsertVariant(supabase: any, conn: any, shopifyVariantId:
   const { data: product } = await supabase
     .from("products")
     .select("id")
+    .eq("store_id", conn.store_id)
     .eq("shopify_product_id", String(v.product_id))
     .maybeSingle();
   if (!product?.id) return null;
@@ -618,9 +632,26 @@ async function fetchAndInsertVariant(supabase: any, conn: any, shopifyVariantId:
     store_id: conn.store_id,
   };
 
+  const { data: existing } = await supabase
+    .from("variants")
+    .select("id, product_id")
+    .eq("store_id", conn.store_id)
+    .eq("shopify_variant_id", String(v.id))
+    .maybeSingle();
+
+  if (existing?.id) {
+    const { data: updated } = await supabase
+      .from("variants")
+      .update(variantRow)
+      .eq("id", existing.id)
+      .select("id, product_id")
+      .single();
+    return updated ?? null;
+  }
+
   const { data: inserted } = await supabase
     .from("variants")
-    .upsert(variantRow, { onConflict: "shopify_variant_id" })
+    .insert(variantRow)
     .select("id, product_id")
     .single();
 
@@ -655,24 +686,34 @@ async function processSingleOrder(supabase: any, conn: any, o: any): Promise<voi
       ?? null,
   };
 
-  const { data: existing } = await supabase
-    .from("orders").select("id").eq("shopify_order_id", String(o.id)).maybeSingle();
+  const { data: existing, error: findOrderErr } = await supabase
+    .from("orders")
+    .select("id")
+    .eq("store_id", conn.store_id)
+    .eq("shopify_order_id", String(o.id))
+    .maybeSingle();
+  if (findOrderErr) throw findOrderErr;
 
   let orderId: string;
   if (existing?.id) {
-    await supabase.from("orders").update(orderRow).eq("id", existing.id);
+    const { error: updateOrderErr } = await supabase.from("orders").update(orderRow).eq("id", existing.id);
+    if (updateOrderErr) throw updateOrderErr;
     orderId = existing.id;
-    await supabase.from("order_items").delete().eq("order_id", orderId);
+    const { error: deleteItemsErr } = await supabase.from("order_items").delete().eq("order_id", orderId);
+    if (deleteItemsErr) throw deleteItemsErr;
   } else {
     const { data: ins, error } = await supabase.from("orders").insert(orderRow).select("id").single();
-    if (error) return;
+    if (error) throw error;
     orderId = ins.id;
   }
 
   for (const li of o.line_items ?? []) {
     if (!li.variant_id) continue;
-    let variant = (await supabase.from("variants").select("id, product_id")
-      .eq("shopify_variant_id", String(li.variant_id)).maybeSingle()).data;
+    const { data: foundVariant, error: findLineVariantErr } = await supabase.from("variants").select("id, product_id")
+      .eq("store_id", conn.store_id)
+      .eq("shopify_variant_id", String(li.variant_id)).maybeSingle();
+    if (findLineVariantErr) throw findLineVariantErr;
+    let variant = foundVariant;
 
     // Variant not in DB yet — fetch from Shopify and insert on the fly
     if (!variant?.id) {
@@ -680,7 +721,7 @@ async function processSingleOrder(supabase: any, conn: any, o: any): Promise<voi
     }
     if (!variant?.id) continue;
 
-    await supabase.from("order_items").insert({
+    const { error: insertItemErr } = await supabase.from("order_items").insert({
       order_id: orderId,
       variant_id: variant.id,
       product_id: variant.product_id,
@@ -688,6 +729,7 @@ async function processSingleOrder(supabase: any, conn: any, o: any): Promise<voi
       unit_price: Number(li.price ?? 0),
       store_id: conn.store_id,
     });
+    if (insertItemErr) throw insertItemErr;
   }
 }
 
@@ -1358,6 +1400,7 @@ Deno.serve(async (req) => {
       };
 
       let custom = 0, smart = 0;
+      let customError: string | null = null, smartError: string | null = null;
 
       await broadcast("fetching_manual", 0, 0);
 
@@ -1368,8 +1411,9 @@ Deno.serve(async (req) => {
           ? `/custom_collections.json?limit=250&page_info=${encodeURIComponent(pageInfo)}`
           : `/custom_collections.json?limit=250`;
         const res = await shopifyFetch(domain, conn.access_token, path);
-        if (!res.ok) break;
+        if (!res.ok) { customError = `custom_collections ${res.status}`; break; }
         const data = await res.json();
+        if (data.errors) { customError = String(data.errors); break; }
         for (const c of data.custom_collections ?? []) {
           await upsertCollection(supabase, c, conn.store_id);
           custom++;
@@ -1387,8 +1431,9 @@ Deno.serve(async (req) => {
           ? `/smart_collections.json?limit=250&page_info=${encodeURIComponent(pageInfo)}`
           : `/smart_collections.json?limit=250`;
         const res = await shopifyFetch(domain, conn.access_token, path);
-        if (!res.ok) break;
+        if (!res.ok) { smartError = `smart_collections ${res.status}`; break; }
         const data = await res.json();
+        if (data.errors) { smartError = String(data.errors); break; }
         for (const c of data.smart_collections ?? []) {
           await upsertCollection(supabase, c, conn.store_id);
           smart++;
@@ -1398,6 +1443,9 @@ Deno.serve(async (req) => {
       } while (pageInfo);
 
       await broadcast("done", custom, smart);
+      if (customError || smartError) {
+        return json(200, { ok: true, custom, smart, warnings: [customError, smartError].filter(Boolean) });
+      }
       return json(200, { ok: true, custom, smart });
     }
 
