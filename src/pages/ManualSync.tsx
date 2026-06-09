@@ -356,9 +356,12 @@ export default function ManualSync() {
                     variant="ghost"
                     size="sm"
                     className="h-7 w-full text-xs gap-1.5 justify-start px-2 text-muted-foreground"
-                    onClick={refreshCollections}
+                    onClick={() => {
+                      if (isAllStores) { toast.error("Select a specific store first"); return; }
+                      refreshCollections();
+                    }}
                     disabled={isRefreshingCollections}
-                    title="Pull latest collection names from Shopify"
+                    title={isAllStores ? "Select a specific store first" : "Pull latest collection names from Shopify"}
                   >
                     <RefreshCw className={`h-3 w-3 shrink-0 ${isRefreshingCollections ? "animate-spin" : ""}`} />
                     {isRefreshingCollections ? "Refreshing Collections…" : "Refresh Collections"}
