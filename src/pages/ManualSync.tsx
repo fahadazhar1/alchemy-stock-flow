@@ -264,17 +264,18 @@ export default function ManualSync() {
     } catch { toast.error("Failed to select all products"); } finally { setSelectingAll(false); }
   };
 
-  const handlePreview = async () => {
+  const handlePreview = async (forceOverwrite?: boolean) => {
     if (isAllStores) { toast.error("Select a specific store before previewing a campaign"); return; }
     if (!selected.size) { toast.error("Select products first"); return; }
     if (!campaignName.trim()) { toast.error("Campaign name is required"); return; }
     if (!discountPercent && !fixedPrice) { toast.error("Enter discount % or fixed price"); return; }
     try {
+      const useOverwrite = forceOverwrite ?? overwrite;
       const { data, error } = await supabase.rpc("preview_bulk_discount", {
         p_product_ids: Array.from(selected),
         p_discount_percent: discountPercent ? Number(discountPercent) : null,
         p_fixed_price: fixedPrice ? Number(fixedPrice) : null,
-        p_overwrite_existing: overwrite,
+        p_overwrite_existing: useOverwrite,
         p_rounding_mode: roundingMode,
       });
       if (error) throw error;
@@ -466,8 +467,7 @@ export default function ManualSync() {
               {requireApproval && !isAllStores && <p className="text-xs text-amber-600">⚠ Approval required before live execution</p>}
             </div>
             <div className="flex gap-2">
-              <Button variant="outline" className="flex-1" onClick={handlePreview} disabled={!canSync || !canEdit}><Eye className="h-4 w-4 mr-1" /> Preview</Button>
-              <Button className="flex-1" onClick={handleSync} disabled={!canSync || syncing || !canEdit}><Zap className="h-4 w-4 mr-1" /> {requireApproval ? "Create Draft" : "Sync"}</Button>
+              <Button className="flex-1" onClick={() => handlePreview()} disabled={!canSync || syncing || !canEdit}><Zap className="h-4 w-4 mr-1" /> {requireApproval ? "Review & Draft" : "Review & Sync"}</Button>
             </div>
           </CardContent>
         </Card>
@@ -521,35 +521,58 @@ export default function ManualSync() {
 
       <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
         <DialogContent className="sm:max-w-lg">
-          <DialogHeader><DialogTitle>Sync Preview</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>Campaign Preview</DialogTitle></DialogHeader>
           {preview && (
             <div className="space-y-3">
               <div className="grid grid-cols-2 gap-2 text-sm">
-                <div className="bg-muted p-2 rounded">Eligible: <strong>{String(preview.eligible_variants)}</strong></div>
-                <div className="bg-muted p-2 rounded">Skipped: <strong>{String(preview.skipped_variants)}</strong></div>
-                <div className="bg-muted p-2 rounded">Already Discounted: <strong>{String(preview.already_discounted)}</strong></div>
+                <div className="bg-muted p-2 rounded">Eligible: <strong className="text-emerald-600">{String(preview.eligible_variants)}</strong></div>
                 <div className="bg-muted p-2 rounded">Total Variants: <strong>{String(preview.total_variants)}</strong></div>
+                <div className={`p-2 rounded col-span-2 ${Number(preview.skipped_variants) > 0 ? 'bg-amber-50 border border-amber-200' : 'bg-muted'}`}>
+                  <span className={Number(preview.skipped_variants) > 0 ? 'text-amber-700' : ''}>
+                    {Number(preview.skipped_variants) > 0 ? '⚠ ' : ''}Skipped (already discounted): <strong>{String(preview.skipped_variants)}</strong>
+                  </span>
+                  {Number(preview.skipped_variants) > 0 && !overwrite && (
+                    <div className="mt-2 flex items-center gap-2">
+                      <Switch checked={overwrite} onCheckedChange={v => { setOverwrite(v); handlePreview(v); }} id="overwrite-preview" />
+                      <label htmlFor="overwrite-preview" className="text-xs text-amber-700 cursor-pointer">Enable Overwrite to include these {String(preview.skipped_variants)} skipped products</label>
+                    </div>
+                  )}
+                  {Number(preview.skipped_variants) > 0 && overwrite && (
+                    <p className="mt-1 text-xs text-emerald-700">✓ Overwrite enabled — all products will be included</p>
+                  )}
+                </div>
               </div>
+              {Number(preview.eligible_variants) === 0 && (
+                <div className="bg-red-50 border border-red-200 rounded p-3 text-sm text-red-700">
+                  ✗ No eligible products — all {String(preview.already_discounted)} selected variants are already discounted and Overwrite is off.
+                  Enable Overwrite above to proceed.
+                </div>
+              )}
               {Array.isArray(preview.sample_preview) && (preview.sample_preview as Record<string, unknown>[]).length > 0 && (
-                <Table>
-                  <TableHeader><TableRow><TableHead>Product</TableHead><TableHead>SKU</TableHead><TableHead className="text-right">Current</TableHead><TableHead className="text-right">New</TableHead></TableRow></TableHeader>
-                  <TableBody>
-                    {(preview.sample_preview as Record<string, unknown>[]).map((s, i) => (
-                      <TableRow key={i}>
-                        <TableCell>{String(s.product_name)}</TableCell>
-                        <TableCell className="font-mono text-xs">{String(s.variant_sku)}</TableCell>
-                        <TableCell className="text-right">{formatCurrency(Number(s.current_price))}</TableCell>
-                        <TableCell className="text-right font-medium text-emerald-600">{formatCurrency(Number(s.new_price))}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Sample of eligible products:</p>
+                  <Table>
+                    <TableHeader><TableRow><TableHead>Product</TableHead><TableHead>SKU</TableHead><TableHead className="text-right">Current</TableHead><TableHead className="text-right">New</TableHead></TableRow></TableHeader>
+                    <TableBody>
+                      {(preview.sample_preview as Record<string, unknown>[]).map((s, i) => (
+                        <TableRow key={i}>
+                          <TableCell>{String(s.product_name)}</TableCell>
+                          <TableCell className="font-mono text-xs">{String(s.variant_sku)}</TableCell>
+                          <TableCell className="text-right">{formatCurrency(Number(s.current_price))}</TableCell>
+                          <TableCell className="text-right font-medium text-emerald-600">{formatCurrency(Number(s.new_price))}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
               )}
             </div>
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setPreviewOpen(false)}>Cancel</Button>
-            <Button onClick={handleSync} disabled={syncing || !canEdit}>{syncing ? "Syncing..." : requireApproval ? "Create Draft" : "Confirm & Sync"}</Button>
+            <Button onClick={handleSync} disabled={syncing || !canEdit || Number(preview?.eligible_variants ?? 0) === 0}>
+              {syncing ? "Syncing..." : requireApproval ? "Confirm & Create Draft" : "Confirm & Sync"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
