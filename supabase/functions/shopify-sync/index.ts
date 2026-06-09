@@ -1457,7 +1457,7 @@ Deno.serve(async (req) => {
       const { data: conn } = await supabase.from("shopify_connections")
         .select("shop_domain, access_token, store_id")
         .eq("store_id", storeId).eq("is_active", true).single();
-      if (!conn?.access_token) return json(404, { ok: false, error: "No active Shopify connection for store" });
+      if (!conn?.access_token) return json(200, { ok: false, error: "No active Shopify connection for store" });
       const domain = normalizeDomain(conn.shop_domain);
 
       // Get the collection's shopify_collection_id from DB
@@ -1467,7 +1467,7 @@ Deno.serve(async (req) => {
         .eq("name", collectionName)
         .eq("store_id", storeId)
         .maybeSingle();
-      if (!colRow?.shopify_collection_id) return json(404, { ok: false, error: "Collection not found or missing Shopify ID — run Refresh Collections first" });
+      if (!colRow?.shopify_collection_id) return json(200, { ok: false, error: "Collection not found or missing Shopify ID — run Refresh Collections first" });
 
       const collectionDbId = colRow.id;
       const shopifyCollectionId = colRow.shopify_collection_id;
