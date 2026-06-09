@@ -331,7 +331,14 @@ export default function ManualSync() {
     }
     queryClient.invalidateQueries();
     setPreviewOpen(false); setSelected(new Set()); setCampaignName(""); setDiscountPercent(""); setFixedPrice("");
-  } catch (e: any) { toast.error(e?.message || "Sync failed"); } finally { setSyncing(false); }
+  } catch (e: any) {
+    const msg: string = e?.message || "Sync failed";
+    if (msg.includes("pricing_campaigns_name_key") || msg.includes("unique constraint")) {
+      toast.error(`Campaign name "${campaignName}" already exists — use a different name`);
+    } else {
+      toast.error(msg);
+    }
+  } finally { setSyncing(false); }
 };
 
   const canSync = !isAllStores && campaignName.trim() && (discountPercent || fixedPrice) && selected.size > 0;
