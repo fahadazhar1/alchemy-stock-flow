@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import {
   ResponsiveContainer, LineChart, Line, AreaChart, Area,
-  XAxis, YAxis, CartesianGrid, Tooltip,
+  XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
 } from "recharts";
 import {
   TrendingUp, TrendingDown, AlertTriangle, ShoppingCart,
@@ -13,6 +13,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Calendar } from "@/components/ui/calendar";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
@@ -134,6 +135,28 @@ function HealthBar({ value, className }: { value: number; className?: string }) 
 
 function Skeleton({ className }: { className?: string }) {
   return <div className={cn("bg-muted animate-pulse rounded", className)} />;
+}
+
+function InfoTooltip({ lines }: { lines: { label: string; desc: string }[] }) {
+  return (
+    <TooltipProvider delayDuration={100}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-muted text-muted-foreground hover:bg-primary/15 hover:text-primary text-[9px] font-bold leading-none transition-colors shrink-0" aria-label="How is this calculated?">
+            ?
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="max-w-[220px] p-2.5 space-y-1.5 text-left">
+          {lines.map(l => (
+            <div key={l.label}>
+              <p className="text-[10px] font-semibold text-foreground">{l.label}</p>
+              <p className="text-[10px] text-muted-foreground leading-snug">{l.desc}</p>
+            </div>
+          ))}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
 }
 
 // ─── Section: Page header + date range ────────────────────────────────────────
@@ -424,7 +447,13 @@ function StoreCard({ m, idx }: { m: StoreMetrics; idx: number }) {
               <span className="text-[11px] text-muted-foreground">vs prev period</span>
             </div>
           </div>
-          <ScoreRing score={m.performanceScore} color={color} />
+          <div className="flex flex-col items-center gap-1">
+            <ScoreRing score={m.performanceScore} color={color} />
+            <InfoTooltip lines={[
+              { label: "Performance Score (0–100)", desc: "Weighted composite: Revenue trend 30%, Order volume 20%, OOS rate 20%, Inventory health 20%, Refund rate 10%." },
+              { label: "Score bands", desc: "80–100 Excellent · 60–79 Good · 40–59 Fair · 0–39 Needs attention" },
+            ]} />
+          </div>
         </div>
 
         {/* Sparkline */}
@@ -450,13 +479,19 @@ function StoreCard({ m, idx }: { m: StoreMetrics; idx: number }) {
         {/* Secondary metrics */}
         <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs border-t pt-2">
           {[
-            { label: "AOV",          value: fmtC(m.aov, m.currencySymbol),         warn: false },
-            { label: "Sell-through", value: `${m.sellThrough.toFixed(1)}%`,         warn: m.sellThrough < 20 },
-            { label: "OOS",          value: `${m.oosRate.toFixed(1)}%`,             warn: m.oosRate >= 15 },
-            { label: "Refund rate",  value: `${m.refundRate.toFixed(1)}%`,           warn: m.refundRate >= 5 },
+            { label: "AOV",          value: fmtC(m.aov, m.currencySymbol),       warn: false,              tooltip: null },
+            { label: "Sell-through", value: `${m.sellThrough.toFixed(1)}%`,       warn: m.sellThrough < 20, tooltip: [
+                { label: "Sell-through rate", desc: "Units sold ÷ (Units sold + Units currently in stock) × 100." },
+                { label: "Benchmark", desc: "Below 20% = slow-moving stock. Above 60% = strong velocity." },
+              ] },
+            { label: "OOS",          value: `${m.oosRate.toFixed(1)}%`,           warn: m.oosRate >= 15,    tooltip: null },
+            { label: "Refund rate",  value: `${m.refundRate.toFixed(1)}%`,         warn: m.refundRate >= 5,  tooltip: null },
           ].map(k => (
             <div key={k.label} className="flex items-center justify-between">
-              <span className="text-muted-foreground">{k.label}</span>
+              <span className="flex items-center gap-1 text-muted-foreground">
+                {k.label}
+                {k.tooltip && <InfoTooltip lines={k.tooltip} />}
+              </span>
               <span className={cn("font-medium tabular-nums", k.warn && "text-red-600 dark:text-red-400")}>{k.value}</span>
             </div>
           ))}
@@ -465,7 +500,13 @@ function StoreCard({ m, idx }: { m: StoreMetrics; idx: number }) {
         {/* Inventory health bar */}
         <div className="border-t pt-2">
           <div className="flex items-center justify-between mb-1">
-            <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Inventory health</span>
+            <span className="flex items-center gap-1 text-[10px] text-muted-foreground uppercase tracking-wide">
+              Inventory health
+              <InfoTooltip lines={[
+                { label: "Inventory Health Score (0–100)", desc: "100 minus penalties: each OOS SKU −0.5 pts, each critical (≤3 units) SKU −1 pt, dead-stock SKUs −0.2 pts." },
+                { label: "Colour guide", desc: "Green ≥75 · Amber ≥50 · Red <50" },
+              ]} />
+            </span>
             <span className="text-[10px] text-muted-foreground">{m.oosCount} OOS · {m.criticalCount} critical</span>
           </div>
           <HealthBar value={m.inventoryHealthScore} />
@@ -841,7 +882,7 @@ function CrossStoreTrendsSection({ data, metrics, loading }: {
               <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
                 axisLine={false} tickLine={false} width={36}
                 tickFormatter={v => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)} />
-              <Tooltip
+              <RechartsTooltip
                 contentStyle={{ fontSize: 11, borderRadius: 8 }}
                 formatter={(v: number, name: string) => [fmtNum(v), name]}
               />
