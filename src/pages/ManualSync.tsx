@@ -13,7 +13,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
 import { useCurrency } from "@/hooks/useCurrency";
 import { RefreshCw, Eye, Zap, Filter, ChevronDown, X, Globe } from "lucide-react";
@@ -46,6 +45,7 @@ export default function ManualSync() {
   const [typeFilter, setTypeFilter] = useState("all");
   const [collectionTargets, setCollectionTargets] = useState<Set<string>>(new Set());
   const [collectionPopoverOpen, setCollectionPopoverOpen] = useState(false);
+  const [collectionSearch, setCollectionSearch] = useState("");
   const [filterDates, setFilterDates] = useState<Date[]>([]);
   const [filterMonths, setFilterMonths] = useState<number[]>([]);
   const [filterYears, setFilterYears] = useState<number[]>([]);
@@ -382,9 +382,14 @@ export default function ManualSync() {
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent className="w-64 p-2" align="start">
-                    <ScrollArea className="max-h-56">
-                      <div className="space-y-1">
-                        {/* All Collections option */}
+                    <Input
+                      placeholder="Search collections…"
+                      value={collectionSearch}
+                      onChange={e => setCollectionSearch(e.target.value)}
+                      className="h-7 text-xs mb-2"
+                    />
+                    <div className="max-h-64 overflow-y-auto space-y-1">
+                      {!collectionSearch && (
                         <label className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer text-xs font-semibold border-b pb-2 mb-1">
                           <Checkbox
                             checked={collectionTargets.size === (collections?.length ?? 0) && (collections?.length ?? 0) > 0}
@@ -392,7 +397,10 @@ export default function ManualSync() {
                           />
                           All Collections
                         </label>
-                        {collections?.map(c => (
+                      )}
+                      {(collections ?? [])
+                        .filter(c => c.name.toLowerCase().includes(collectionSearch.toLowerCase()))
+                        .map(c => (
                           <label key={c.name} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer text-xs">
                             <Checkbox
                               checked={collectionTargets.has(c.name)}
@@ -401,8 +409,10 @@ export default function ManualSync() {
                             {c.name}
                           </label>
                         ))}
-                      </div>
-                    </ScrollArea>
+                      {collectionSearch && (collections ?? []).filter(c => c.name.toLowerCase().includes(collectionSearch.toLowerCase())).length === 0 && (
+                        <p className="text-xs text-muted-foreground px-2 py-2">No collections found</p>
+                      )}
+                    </div>
                   </PopoverContent>
                 </Popover>
                 {/* Selected collection badges */}
