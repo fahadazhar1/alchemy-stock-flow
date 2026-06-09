@@ -17,9 +17,9 @@ interface CampaignItem {
   id: string;
   product_name: string | null;
   sku: string | null;
-  original_price: number | null;
+  old_price: number | null;
   new_price: number | null;
-  status: string | null;
+  action_status: string | null;
 }
 
 function CampaignProducts({ campaignId }: { campaignId: string }) {
@@ -31,21 +31,21 @@ function CampaignProducts({ campaignId }: { campaignId: string }) {
         .from("pricing_campaign_items")
         .select(`
           id,
-          original_price,
+          old_price,
           new_price,
-          status,
-          variants ( sku, products ( product_name ) )
+          action_status,
+          variants ( variant_sku, products ( name ) )
         `)
         .eq("campaign_id", campaignId)
         .order("id");
       if (error) throw error;
       return (data ?? []).map((r: any) => ({
         id: r.id,
-        product_name: r.variants?.products?.product_name ?? null,
-        sku: r.variants?.sku ?? null,
-        original_price: r.original_price,
+        product_name: r.variants?.products?.name ?? null,
+        sku: r.variants?.variant_sku ?? null,
+        old_price: r.old_price,
         new_price: r.new_price,
-        status: r.status,
+        action_status: r.action_status,
       })) as CampaignItem[];
     },
   });
@@ -77,14 +77,14 @@ function CampaignProducts({ campaignId }: { campaignId: string }) {
           </TableHeader>
           <TableBody>
             {data.map(item => {
-              const change = item.original_price && item.new_price
-                ? (((item.new_price - item.original_price) / item.original_price) * 100).toFixed(1)
+              const change = item.old_price && item.new_price
+                ? (((item.new_price - item.old_price) / item.old_price) * 100).toFixed(1)
                 : null;
               return (
                 <TableRow key={item.id} className="text-xs">
                   <TableCell className="py-1.5 font-medium max-w-[200px] truncate">{item.product_name ?? '—'}</TableCell>
                   <TableCell className="py-1.5 font-mono">{item.sku ?? '—'}</TableCell>
-                  <TableCell className="py-1.5 text-right">{item.original_price != null ? formatCurrency(item.original_price) : '—'}</TableCell>
+                  <TableCell className="py-1.5 text-right">{item.old_price != null ? formatCurrency(item.old_price) : '—'}</TableCell>
                   <TableCell className="py-1.5 text-right font-medium text-emerald-600">{item.new_price != null ? formatCurrency(item.new_price) : '—'}</TableCell>
                   <TableCell className="py-1.5 text-right">
                     {change != null && (
@@ -94,7 +94,7 @@ function CampaignProducts({ campaignId }: { campaignId: string }) {
                     )}
                   </TableCell>
                   <TableCell className="py-1.5">
-                    <Badge variant="outline" className="text-[10px] py-0">{item.status ?? 'pending'}</Badge>
+                    <Badge variant="outline" className="text-[10px] py-0">{item.action_status ?? 'pending'}</Badge>
                   </TableCell>
                 </TableRow>
               );
