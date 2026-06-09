@@ -2,7 +2,7 @@ import {
   LayoutDashboard, Package, RefreshCw, Brain, Bot, FileText,
   BarChart3, Truck, CheckSquare, FlaskConical, Clock, Settings, Beaker, Store,
   ShoppingCart, BarChart2, ListOrdered, Activity, LogOut,
-  PackageCheck, ClipboardList, Tag, Archive, PackageOpen, Search,
+  PackageCheck, ClipboardList, Tag, Archive, PackageOpen, Search, Globe2,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 
 const navItems = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
+  { title: "Store Performance", url: "/store-performance", icon: Globe2 },
   { title: "Orders",    url: "/orders",    icon: ShoppingCart },
   { title: "Reports",   url: "/reports",   icon: BarChart2 },
   { title: "Product Master", url: "/products", icon: Package },

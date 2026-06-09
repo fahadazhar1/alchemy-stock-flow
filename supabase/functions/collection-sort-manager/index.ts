@@ -611,7 +611,7 @@ async function runStreamingSort<T extends AnyProduct>(
   token: string,
   fetchFn: (domain: string, token: string, id: string) => Promise<{ products: T[]; title: string }>,
   sortFn: (products: T[]) => T[],
-  actionLabel: string,
+  sortMeta: Record<string, unknown>,
 ): Promise<Response> {
   const encoder = new TextEncoder();
   const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
@@ -649,7 +649,7 @@ async function runStreamingSort<T extends AnyProduct>(
         collections_sorted: collectionsSorted,
         products_reordered: totalProductsReordered,
         errors,
-        sort_rules: [{ type: actionLabel }],
+        sort_rules: [sortMeta],
         collection_scope: collections,
       });
     } catch (e) {
@@ -933,7 +933,7 @@ Deno.serve(async (req: Request) => {
         ));
         return sorted;
       },
-      rule,
+      { type: rule, salesWindowDays: windowDays, inStockFirst: stockFirst },
     );
   }
 
@@ -950,7 +950,7 @@ Deno.serve(async (req: Request) => {
       supabase, storeId, collections, domain, conn.access_token,
       fetchCollectionProductsWithPricing,
       (products) => sortProductsByDiscount(products, rule, inStockFirst !== false),
-      rule,
+      { type: rule, inStockFirst: inStockFirst !== false },
     );
   }
 
@@ -969,7 +969,7 @@ Deno.serve(async (req: Request) => {
       supabase, storeId, collections, domain, conn.access_token,
       fetchCollectionProductsWithInventory,
       (products) => sortProductsByInventory(products, rule, lowThreshold, highThreshold, inStockFirst !== false),
-      rule,
+      { type: rule, lowStockThreshold: lowThreshold, overstockThreshold: highThreshold, inStockFirst: inStockFirst !== false },
     );
   }
 

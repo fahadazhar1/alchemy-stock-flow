@@ -172,13 +172,21 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      const { error: upsertErr } = await supabase
+      const { data: existing, error: findErr } = await supabase
         .from("orders")
-        .upsert(row, { onConflict: "order_number" });
+        .select("id")
+        .eq("store_id", conn.store_id)
+        .eq("shopify_order_id", row.shopify_order_id)
+        .maybeSingle();
 
-      if (upsertErr) {
-        console.error(`Upsert failed for ${row.order_number}:`, upsertErr.message);
-        results.push({ order_number: row.order_number, tracking_number: row.tracking_number, ok: false, error: upsertErr.message });
+      const write = existing?.id
+        ? await supabase.from("orders").update(row).eq("id", existing.id)
+        : await supabase.from("orders").insert(row);
+
+      const writeErr = findErr ?? write.error;
+      if (writeErr) {
+        console.error(`Upsert failed for ${row.order_number}:`, writeErr.message);
+        results.push({ order_number: row.order_number, tracking_number: row.tracking_number, ok: false, error: writeErr.message });
       } else {
         totalUpserted++;
         results.push({ order_number: row.order_number, tracking_number: row.tracking_number, ok: true });

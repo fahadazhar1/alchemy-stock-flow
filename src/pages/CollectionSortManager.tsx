@@ -17,7 +17,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
 import {
   ArrowUpDown, GripVertical, Plus, X, CheckSquare, Square,
-  AlertTriangle, ChevronRight, ChevronLeft, Loader2, ListOrdered, RefreshCw,
+  AlertTriangle, ChevronRight, ChevronLeft, Loader2, ListOrdered, RefreshCw, History,
 } from "lucide-react";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
@@ -103,6 +103,114 @@ function buildSortSummary(rules: SortRule[]): string {
   return parts
     .map((p, i) => (i === 0 ? p.charAt(0).toUpperCase() + p.slice(1) : p))
     .join(", then ") + ".";
+}
+
+// ── Sort run log helpers ──────────────────────────────────────────────────────
+
+interface SortRunLog {
+  id: string;
+  run_at: string;
+  collections_sorted: number;
+  products_reordered: number;
+  sort_rules: Array<Record<string, unknown>>;
+  errors: Array<{ collectionId: string; title: string; error: string }>;
+}
+
+function formatRelativeTime(isoStr: string): string {
+  const diff = Date.now() - new Date(isoStr).getTime();
+  const mins = Math.floor(diff / 60_000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days === 1) return "yesterday";
+  if (days < 7) return `${days}d ago`;
+  return new Date(isoStr).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+const SP_RULE_LABELS: Record<string, string> = {
+  best_selling_first: "Best Selling",
+  units_sold_first: "Most Units",
+  revenue_first: "Revenue",
+};
+const DC_RULE_LABELS: Record<string, string> = {
+  discounted_first: "Discounted First",
+  highest_discount_first: "Highest Discount",
+};
+const IV_RULE_LABELS: Record<string, string> = {
+  low_stock_first: "Low Stock First",
+  overstock_first: "Overstock First",
+};
+const SP_TYPES = new Set(Object.keys(SP_RULE_LABELS));
+const DC_TYPES = new Set(Object.keys(DC_RULE_LABELS));
+const IV_TYPES = new Set(Object.keys(IV_RULE_LABELS));
+
+function formatSalesConfig(rules: Array<Record<string, unknown>>): string {
+  const m = rules[0] ?? {};
+  return [
+    SP_RULE_LABELS[m.type as string] ?? (m.type as string ?? "—"),
+    `${m.salesWindowDays ?? 30}d`,
+    m.inStockFirst !== false ? "In-Stock First" : "OOS First",
+  ].join(" · ");
+}
+function formatDiscountConfig(rules: Array<Record<string, unknown>>): string {
+  const m = rules[0] ?? {};
+  return [
+    DC_RULE_LABELS[m.type as string] ?? (m.type as string ?? "—"),
+    m.inStockFirst !== false ? "In-Stock First" : "OOS First",
+  ].join(" · ");
+}
+function formatInventoryConfig(rules: Array<Record<string, unknown>>): string {
+  const m = rules[0] ?? {};
+  const parts = [IV_RULE_LABELS[m.type as string] ?? (m.type as string ?? "—")];
+  if (m.lowStockThreshold != null) parts.push(`Low≤${m.lowStockThreshold}`);
+  if (m.overstockThreshold != null) parts.push(`High≥${m.overstockThreshold}`);
+  parts.push(m.inStockFirst !== false ? "In-Stock First" : "OOS First");
+  return parts.join(" · ");
+}
+function formatPriorityConfig(rules: Array<Record<string, unknown>>): string {
+  return rules
+    .map((r) => {
+      if (r.type === "language") return `Lang: ${r.value}`;
+      if (r.type === "stock") return String(r.value).replace(/_/g, " ");
+      if (r.type === "date") return String(r.value).replace(/_/g, " ");
+      return String(r.type ?? "");
+    })
+    .join(" → ") || "—";
+}
+
+function SortHistorySection({
+  runs,
+  formatConfig,
+}: {
+  runs: SortRunLog[];
+  formatConfig: (rules: Array<Record<string, unknown>>) => string;
+}) {
+  if (runs.length === 0) return null;
+  return (
+    <div className="border-t pt-3 mt-1">
+      <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1.5">
+        <History className="h-3 w-3" /> Sort History
+      </p>
+      <div>
+        {runs.slice(0, 5).map((run) => (
+          <div key={run.id} className="flex items-center justify-between text-xs py-1.5 border-b border-dashed last:border-0">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-muted-foreground shrink-0 w-[72px]">{formatRelativeTime(run.run_at)}</span>
+              <span className="truncate">{formatConfig(run.sort_rules ?? [])}</span>
+            </div>
+            <div className="text-muted-foreground flex items-center gap-1 shrink-0 ml-3">
+              <span>{run.collections_sorted}c · {run.products_reordered.toLocaleString()}p</span>
+              {(run.errors?.length ?? 0) > 0 && (
+                <Badge variant="destructive" className="text-[10px] h-4 px-1 py-0 ml-1">{run.errors.length} err</Badge>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 // ── Main page component ───────────────────────────────────────────────────────
@@ -205,29 +313,31 @@ export default function CollectionSortManager() {
     }
   }
 
-  // ── Last run query ──────────────────────────────────────────────────────────
-  const { data: lastRun } = useQuery({
-    queryKey: ["collection-sort-last-run", selectedStoreId],
+  // ── Sort run log query ───────────────────────────────────────────────────────
+  const { data: allSortRuns } = useQuery({
+    queryKey: ["collection-sort-all-runs", selectedStoreId],
     queryFn: async () => {
-      if (!selectedStoreId) return null;
+      if (!selectedStoreId) return [] as SortRunLog[];
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data } = await (supabase as any)
         .from("collection_sort_runs")
-        .select("*")
+        .select("id, run_at, collections_sorted, products_reordered, sort_rules, errors")
         .eq("store_id", selectedStoreId)
         .order("run_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      return data as {
-        id: string;
-        run_at: string;
-        collections_sorted: number;
-        products_reordered: number;
-        errors: Array<{ collectionId: string; title: string; error: string }>;
-      } | null;
+        .limit(20);
+      return (data ?? []) as SortRunLog[];
     },
     enabled: !!selectedStoreId,
   });
+
+  const lastRun = allSortRuns?.[0] ?? null;
+  const spRunLog = allSortRuns?.filter((r) => SP_TYPES.has(r.sort_rules?.[0]?.type as string)) ?? [];
+  const dcRunLog = allSortRuns?.filter((r) => DC_TYPES.has(r.sort_rules?.[0]?.type as string)) ?? [];
+  const ivRunLog = allSortRuns?.filter((r) => IV_TYPES.has(r.sort_rules?.[0]?.type as string)) ?? [];
+  const prRunLog = allSortRuns?.filter((r) => {
+    const t = r.sort_rules?.[0]?.type as string;
+    return !SP_TYPES.has(t) && !DC_TYPES.has(t) && !IV_TYPES.has(t);
+  }) ?? [];
 
   // ── Fetch collections when store changes ────────────────────────────────────
   const fetchCollections = useCallback(async (storeId: string) => {
@@ -671,7 +781,7 @@ export default function CollectionSortManager() {
                 runAt: data.runAt,
               };
               setRunSummary(summary);
-              queryClient.invalidateQueries({ queryKey: ["collection-sort-last-run"] });
+              queryClient.invalidateQueries({ queryKey: ["collection-sort-all-runs"] });
               continue;
             }
 
@@ -768,7 +878,7 @@ export default function CollectionSortManager() {
             const data = JSON.parse(line);
             if (data.type === "summary") {
               setSpRunSummary({ collectionsTotal: data.collectionsTotal, collectionsSorted: data.collectionsSorted, totalProductsReordered: data.totalProductsReordered, errors: data.errors ?? [], runAt: data.runAt });
-              queryClient.invalidateQueries({ queryKey: ["collection-sort-last-run"] });
+              queryClient.invalidateQueries({ queryKey: ["collection-sort-all-runs"] });
               continue;
             }
             processedCount++;
@@ -842,7 +952,7 @@ export default function CollectionSortManager() {
             const data = JSON.parse(line);
             if (data.type === "summary") {
               setDcRunSummary({ collectionsTotal: data.collectionsTotal, collectionsSorted: data.collectionsSorted, totalProductsReordered: data.totalProductsReordered, errors: data.errors ?? [], runAt: data.runAt });
-              queryClient.invalidateQueries({ queryKey: ["collection-sort-last-run"] });
+              queryClient.invalidateQueries({ queryKey: ["collection-sort-all-runs"] });
               continue;
             }
             processedCount++;
@@ -918,7 +1028,7 @@ export default function CollectionSortManager() {
             const data = JSON.parse(line);
             if (data.type === "summary") {
               setInvRunSummary({ collectionsTotal: data.collectionsTotal, collectionsSorted: data.collectionsSorted, totalProductsReordered: data.totalProductsReordered, errors: data.errors ?? [], runAt: data.runAt });
-              queryClient.invalidateQueries({ queryKey: ["collection-sort-last-run"] });
+              queryClient.invalidateQueries({ queryKey: ["collection-sort-all-runs"] });
               continue;
             }
             processedCount++;
@@ -1290,6 +1400,14 @@ export default function CollectionSortManager() {
         </Button>
       </div>
 
+      {prRunLog.length > 0 && (
+        <Card>
+          <CardContent className="pt-4">
+            <SortHistorySection runs={prRunLog} formatConfig={formatPriorityConfig} />
+          </CardContent>
+        </Card>
+      )}
+
       {/* ── Progress section (shown during and after run) ── */}
       {collectionProgress.length > 0 && (
         <Card>
@@ -1547,6 +1665,8 @@ export default function CollectionSortManager() {
               {spRunning ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Sorting…</> : <><ArrowUpDown className="h-4 w-4 mr-2" /> Run Sales Sort</>}
             </Button>
           </div>
+
+          <SortHistorySection runs={spRunLog} formatConfig={formatSalesConfig} />
         </CardContent>
       </Card>
 
@@ -1748,6 +1868,8 @@ export default function CollectionSortManager() {
               {dcRunning ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Sorting…</> : <><ArrowUpDown className="h-4 w-4 mr-2" /> Run Discount Sort</>}
             </Button>
           </div>
+
+          <SortHistorySection runs={dcRunLog} formatConfig={formatDiscountConfig} />
         </CardContent>
       </Card>
 
@@ -1975,6 +2097,8 @@ export default function CollectionSortManager() {
               {invRunning ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Sorting…</> : <><ArrowUpDown className="h-4 w-4 mr-2" /> Run Inventory Sort</>}
             </Button>
           </div>
+
+          <SortHistorySection runs={ivRunLog} formatConfig={formatInventoryConfig} />
         </CardContent>
       </Card>
 

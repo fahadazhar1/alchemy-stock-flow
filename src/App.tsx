@@ -30,6 +30,7 @@ import DiscountPerformance from "@/pages/DiscountPerformance";
 import DeadStock from "@/pages/DeadStock";
 import BundleOpportunity from "@/pages/BundleOpportunity";
 import SEOAudit from "@/pages/SEOAudit";
+import StorePerformanceDashboard from "@/pages/StorePerformanceDashboard";
 import Login from "@/pages/Login";
 import NotFound from "@/pages/NotFound";
 import { Loader2 } from "lucide-react";
@@ -90,6 +91,7 @@ function AppRoutes() {
           <Route path="/dead-stock" element={<DeadStock />} />
           <Route path="/bundle-finder" element={<BundleOpportunity />} />
           <Route path="/seo-audit" element={<SEOAudit />} />
+          <Route path="/store-performance" element={<StorePerformanceDashboard />} />
         </Route>
       </Route>
       <Route path="*" element={<NotFound />} />
