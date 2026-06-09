@@ -162,6 +162,24 @@ export default function ManualSync() {
             p_store_id: storeId,
           });
           ids = ((rows ?? []) as { product_id: string }[]).map(r => r.product_id);
+
+          // No products linked yet — sync from Shopify then retry
+          if (ids.length === 0) {
+            toast.info(`Syncing products for "${filterValue}" from Shopify…`);
+            const { data: syncResult } = await supabase.functions.invoke("shopify-sync", {
+              body: { action: "sync_collection_products", store_id: storeId, collection_name: filterValue },
+            });
+            if (syncResult?.ok) {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const { data: rows2 } = await (supabase as any).rpc("get_collection_product_ids", {
+                p_collection_name: filterValue,
+                p_store_id: storeId,
+              });
+              ids = ((rows2 ?? []) as { product_id: string }[]).map(r => r.product_id);
+            } else {
+              toast.error(syncResult?.error ?? "Could not sync collection products");
+            }
+          }
         }
       } else {
         let q = supabase.from("v_product_inventory_summary").select("product_id");

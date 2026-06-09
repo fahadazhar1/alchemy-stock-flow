@@ -1449,6 +1449,64 @@ Deno.serve(async (req) => {
       return json(200, { ok: true, custom, smart });
     }
 
+    if (action === "sync_collection_products") {
+      const storeId = String(body.store_id || "");
+      const collectionName = String(body.collection_name || "");
+      if (!storeId || !collectionName) return json(400, { ok: false, error: "store_id and collection_name required" });
+
+      const { data: conn } = await supabase.from("shopify_connections")
+        .select("shop_domain, access_token, store_id")
+        .eq("store_id", storeId).eq("is_active", true).single();
+      if (!conn?.access_token) return json(404, { ok: false, error: "No active Shopify connection for store" });
+      const domain = normalizeDomain(conn.shop_domain);
+
+      // Get the collection's shopify_collection_id from DB
+      const { data: colRow } = await supabase
+        .from("collections")
+        .select("id, shopify_collection_id")
+        .eq("name", collectionName)
+        .eq("store_id", storeId)
+        .maybeSingle();
+      if (!colRow?.shopify_collection_id) return json(404, { ok: false, error: "Collection not found or missing Shopify ID — run Refresh Collections first" });
+
+      const collectionDbId = colRow.id;
+      const shopifyCollectionId = colRow.shopify_collection_id;
+
+      // Fetch all products in this collection from Shopify
+      let linked = 0;
+      let pageInfo: string | null = null;
+      do {
+        const path = pageInfo
+          ? `/collections/${shopifyCollectionId}/products.json?limit=250&page_info=${encodeURIComponent(pageInfo)}`
+          : `/collections/${shopifyCollectionId}/products.json?limit=250&fields=id`;
+        const res = await shopifyFetch(domain, conn.access_token, path);
+        if (!res.ok) break;
+        const data = await res.json();
+        const shopifyProductIds: string[] = (data.products ?? []).map((p: any) => String(p.id));
+
+        if (shopifyProductIds.length) {
+          // Find matching DB product rows for this store
+          const { data: dbProducts } = await supabase
+            .from("products")
+            .select("id, shopify_product_id")
+            .eq("store_id", storeId)
+            .in("shopify_product_id", shopifyProductIds);
+
+          for (const p of dbProducts ?? []) {
+            // Upsert into product_collections
+            await supabase.from("product_collections").upsert(
+              { product_id: p.id, collection_id: collectionDbId },
+              { onConflict: "product_id,collection_id", ignoreDuplicates: true }
+            );
+            linked++;
+          }
+        }
+        pageInfo = parseNextPageInfo(res.headers.get("Link") ?? res.headers.get("link") ?? "");
+      } while (pageInfo);
+
+      return json(200, { ok: true, linked });
+    }
+
     return json(400, { ok: false, error: "Unknown action" });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
