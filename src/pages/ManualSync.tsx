@@ -377,7 +377,7 @@ export default function ManualSync() {
                   <PopoverTrigger asChild>
                     <Button variant="outline" className="h-8 w-full text-xs justify-between font-normal">
                       {collectionTargets.size === 0
-                        ? "+ Add Collection"
+                        ? `+ Add Collection ${collections?.length ? `(${collections.length})` : ""}`
                         : collectionTargets.size === (collections?.length ?? 0)
                           ? "All Collections"
                           : `${collectionTargets.size} collection${collectionTargets.size > 1 ? "s" : ""} selected`}
