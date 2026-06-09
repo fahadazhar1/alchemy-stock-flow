@@ -27,26 +27,41 @@ function CampaignProducts({ campaignId }: { campaignId: string }) {
   const { data, isLoading } = useQuery({
     queryKey: ["campaign-items", campaignId],
     queryFn: async () => {
-      const { data, error } = await supabase
+      const { data: items, error } = await supabase
         .from("pricing_campaign_items")
-        .select(`
-          id,
-          old_price,
-          new_price,
-          action_status,
-          variants ( variant_sku, products ( name ) )
-        `)
+        .select("id, variant_id, old_price, new_price, action_status")
         .eq("campaign_id", campaignId)
         .order("id");
       if (error) throw error;
-      return (data ?? []).map((r: any) => ({
-        id: r.id,
-        product_name: r.variants?.products?.name ?? null,
-        sku: r.variants?.variant_sku ?? null,
-        old_price: r.old_price,
-        new_price: r.new_price,
-        action_status: r.action_status,
-      })) as CampaignItem[];
+      if (!items?.length) return [] as CampaignItem[];
+
+      const variantIds = items.map(r => r.variant_id).filter(Boolean);
+      const { data: variants } = await supabase
+        .from("variants")
+        .select("id, variant_sku, product_id")
+        .in("id", variantIds);
+
+      const productIds = [...new Set((variants ?? []).map(v => v.product_id).filter(Boolean))];
+      const { data: products } = await supabase
+        .from("products")
+        .select("id, name")
+        .in("id", productIds);
+
+      const variantMap = Object.fromEntries((variants ?? []).map(v => [v.id, v]));
+      const productMap = Object.fromEntries((products ?? []).map(p => [p.id, p]));
+
+      return items.map(r => {
+        const v = variantMap[r.variant_id];
+        const p = v ? productMap[v.product_id] : null;
+        return {
+          id: r.id,
+          product_name: p?.name ?? null,
+          sku: v?.variant_sku ?? null,
+          old_price: r.old_price,
+          new_price: r.new_price,
+          action_status: r.action_status,
+        };
+      }) as CampaignItem[];
     },
   });
 
