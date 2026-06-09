@@ -291,7 +291,7 @@ export default function ManualSync() {
   try {
     const ids = Array.from(selected);
     if (requireApproval) {
-      const { error } = await supabase.rpc("create_campaign_draft", {
+      const { data: draftResult, error } = await supabase.rpc("create_campaign_draft", {
         p_product_ids: ids,
         p_discount_percent: discountPercent ? Number(discountPercent) : null,
         p_fixed_price: fixedPrice ? Number(fixedPrice) : null,
@@ -300,9 +300,11 @@ export default function ManualSync() {
         p_store_id: storeId,
       });
       if (error) throw error;
-      toast.success("Campaign draft created — pending approval");
-      if (isAllStores) {
-        toast.info("Draft created without a specific store selected.");
+      const itemsCount = (draftResult as any)?.items_count ?? 0;
+      if (itemsCount === 0) {
+        toast.warning("Draft created but 0 products eligible — all selected products may already be discounted. Enable \"Overwrite Existing\" to re-apply.");
+      } else {
+        toast.success(`Campaign draft created — ${itemsCount} products pending approval`);
       }
     } else {
       // Step 1: Apply in DB
