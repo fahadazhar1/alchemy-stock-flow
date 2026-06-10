@@ -390,7 +390,7 @@ function StoreRankingSection({ metrics, loading }: {
                   <tr key={i} className="border-b last:border-0">
                     {Array.from({ length: 9 }).map((_, j) => (
                       <td key={j} className="px-4 py-3">
-                        <Skeleton className="h-3" style={{ width: j === 1 ? "80px" : "48px" }} />
+                        <Skeleton className={cn("h-3", j === 1 ? "w-20" : "w-12")} />
                       </td>
                     ))}
                   </tr>
@@ -612,8 +612,39 @@ function InventoryHealthSection({ metrics, loading }: {
           <table className="w-full text-xs">
             <thead>
               <tr className="border-b">
-                {["Store", "Health Score", "Total SKUs", "OOS", "Low Stock", "Critical", "Dead Stock", "Overstocked"].map((h, i) => (
-                  <th key={i} className={cn("px-4 py-2.5 font-medium text-muted-foreground text-left", i > 0 && "text-right")}>{h}</th>
+                {([
+                  { label: "Store", tip: null },
+                  { label: "Health Score", tip: [
+                    { label: "Inventory Health Score (0–100)", desc: "Starts at 100. Penalties: OOS rate × 1.5 (max −40) · dead-stock share of SKUs × 120 (max −30) · 2 pts per critically-low SKU (max −15)." },
+                    { label: "Colours", desc: "Green ≥75 · Amber ≥50 · Red <50" },
+                  ]},
+                  { label: "Total SKUs", tip: [
+                    { label: "Total SKUs", desc: "Count of active products synced to the database for this store." },
+                  ]},
+                  { label: "OOS", tip: [
+                    { label: "Out of Stock", desc: "Active SKUs where total inventory = 0. These products cannot be purchased right now." },
+                  ]},
+                  { label: "Low Stock", tip: [
+                    { label: "Low Stock", desc: "Products with available units below 15 — candidates for replenishment soon." },
+                  ]},
+                  { label: "Critical", tip: [
+                    { label: "Critical Stock", desc: "Products with ≤3 units available — high-urgency replenishment. At current sales velocity these will go OOS very soon." },
+                  ]},
+                  { label: "Dead Stock", tip: [
+                    { label: "Dead Stock", desc: "Active products with inventory in stock but zero sales in the last 30 days." },
+                    { label: "Sub-categories", desc: "Dead 30d · Dead 60d · Dead 90d · Never Sold (no sale ever recorded)." },
+                  ]},
+                  { label: "Overstocked", tip: [
+                    { label: "Overstocked", desc: "Subset of Dead Stock: products that have NEVER sold a single unit AND have 50+ units sitting in stock." },
+                    { label: "Why it matters", desc: "These are the highest-priority clearance candidates — large quantities of completely untouched inventory tying up cash." },
+                  ]},
+                ] as const).map((col, i) => (
+                  <th key={i} className={cn("px-4 py-2.5 font-medium text-muted-foreground text-left", i > 0 && "text-right")}>
+                    <span className={cn("inline-flex items-center gap-1", i > 0 && "justify-end")}>
+                      {col.label}
+                      {col.tip && <InfoTooltip lines={col.tip as { label: string; desc: string }[]} />}
+                    </span>
+                  </th>
                 ))}
               </tr>
             </thead>
