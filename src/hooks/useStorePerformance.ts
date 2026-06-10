@@ -530,7 +530,7 @@ export function useStorePerformance(bounds: DateBounds) {
           .lte("order_date", endDate)
           .limit(100_000),
 
-        // [5] Inventory summary — paginated (server hard-caps at 1000 rows)
+        // [5] Inventory summary — active products only, paginated
         (async () => {
           const PAGE = 1000;
           const all: any[] = [];
@@ -539,6 +539,7 @@ export function useStorePerformance(bounds: DateBounds) {
             const { data, error } = await (supabase as any)
               .from("v_product_inventory_summary")
               .select("store_id, total_inventory, product_status")
+              .eq("product_status", "active")
               .range(offset, offset + PAGE - 1);
             if (error || !data?.length) break;
             all.push(...data);
@@ -685,9 +686,9 @@ export function useStorePerformance(bounds: DateBounds) {
         }
       }
 
-      // Inventory: active SKU count, OOS, total inventory
+      // Inventory: active SKU count, OOS, total inventory (view already filtered to active)
       for (const r of invRows) {
-        if (!r.store_id || r.product_status !== "active") continue;
+        if (!r.store_id) continue;
         const a = ensureAgg(r.store_id);
         a.activeSKUs    += 1;
         a.totalInventory += Number(r.total_inventory ?? 0);
@@ -708,7 +709,7 @@ export function useStorePerformance(bounds: DateBounds) {
         if (!r.store_id) continue;
         const a = ensureAgg(r.store_id);
         a.lowStockCount += 1;
-        if (r.replenishment_status === "High") a.criticalCount += 1;
+        if (r.replenishment_status === "Critical") a.criticalCount += 1;
       }
 
       // Current collection revenue
