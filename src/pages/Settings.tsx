@@ -10,10 +10,36 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { Settings as SettingsIcon, Store as StoreIcon, RefreshCw } from "lucide-react";
+import { Settings as SettingsIcon, Store as StoreIcon, RefreshCw, Eye } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useStore } from "@/contexts/StoreContext";
 import { format } from "date-fns";
+import { usePageVisibility } from "@/hooks/usePageVisibility";
+
+const VIEWER_PAGES = [
+  { title: "Store Performance", url: "/store-performance" },
+  { title: "Orders", url: "/orders" },
+  { title: "Reports", url: "/reports" },
+  { title: "Product Master", url: "/products" },
+  { title: "Manual Sync", url: "/manual-sync" },
+  { title: "AI Co-Pilot", url: "/ai-copilot" },
+  { title: "Auto-Pilot", url: "/auto-pilot" },
+  { title: "Approval Queue", url: "/approvals" },
+  { title: "Campaigns", url: "/campaigns" },
+  { title: "Simulation", url: "/simulation" },
+  { title: "Replenishment", url: "/replenishment" },
+  { title: "Product Velocity", url: "/product-velocity" },
+  { title: "Expiry Monitor", url: "/expiry" },
+  { title: "Audit Logs", url: "/audit-logs" },
+  { title: "Collection Sort", url: "/collection-sort" },
+  { title: "Fulfillment", url: "/fulfillment" },
+  { title: "Draft PO", url: "/draft-po" },
+  { title: "Discount Performance", url: "/discount-performance" },
+  { title: "Dead Stock", url: "/dead-stock" },
+  { title: "Bundle Finder", url: "/bundle-finder" },
+  { title: "SEO Audit", url: "/seo-audit" },
+  { title: "Stores", url: "/stores" },
+];
 
 export default function Settings() {
   const { canEdit } = useRole();
@@ -37,6 +63,21 @@ export default function Settings() {
   };
 
   const update = (key: string, value: unknown) => setForm(prev => ({ ...prev, [key]: value }));
+
+  // ---- Viewer page visibility ----
+  const { visibilityMap, saveVisibility } = usePageVisibility();
+  const [pageViz, setPageViz] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    const init: Record<string, boolean> = {};
+    VIEWER_PAGES.forEach(p => { init[p.url] = visibilityMap[p.url] !== false; });
+    setPageViz(init);
+  }, [visibilityMap]);
+
+  const handleSaveVisibility = async () => {
+    const ok = await saveVisibility(pageViz);
+    if (ok) toast.success("Page access saved");
+    else toast.error("Save failed");
+  };
 
   // ---- Shopify connection state ----
   const { selectedStoreId, selectedStore } = useStore();
@@ -305,6 +346,30 @@ export default function Settings() {
               </div>
             </>
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Eye className="h-4 w-4" /> Viewer Page Access
+          </CardTitle>
+          <p className="text-xs text-muted-foreground">Toggle which pages viewers can see. Dashboard is always visible.</p>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {VIEWER_PAGES.map(page => (
+            <div key={page.url} className="flex items-center justify-between">
+              <Label className="font-normal">{page.title}</Label>
+              <Switch
+                checked={pageViz[page.url] !== false}
+                onCheckedChange={v => setPageViz(prev => ({ ...prev, [page.url]: v }))}
+                disabled={!canEdit}
+              />
+            </div>
+          ))}
+          <Button onClick={handleSaveVisibility} className="w-full mt-2" disabled={!canEdit}>
+            Save Page Access
+          </Button>
         </CardContent>
       </Card>
 

@@ -11,6 +11,7 @@ import {
   SidebarGroupLabel, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarFooter, useSidebar,
 } from "@/components/ui/sidebar";
 import { useAuth } from "@/contexts/AuthContext";
+import { usePageVisibility } from "@/hooks/usePageVisibility";
 import { Button } from "@/components/ui/button";
 
 const navItems = [
@@ -44,7 +45,12 @@ export function AppSidebar() {
   const { state } = useSidebar();
   const collapsed = state === "collapsed";
   const location = useLocation();
-  const { user, role, signOut } = useAuth();
+  const { user, role, isAdmin, signOut } = useAuth();
+  const { isPageVisible, isLoaded } = usePageVisibility();
+
+  const visibleNavItems = isAdmin || !isLoaded
+    ? navItems
+    : navItems.filter(item => isPageVisible(item.url));
 
   return (
     <Sidebar collapsible="icon">
@@ -61,7 +67,7 @@ export function AppSidebar() {
           </SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {navItems.map((item) => (
+              {visibleNavItems.map((item) => (
                 <SidebarMenuItem key={item.url}>
                   <SidebarMenuButton asChild>
                     <NavLink
