@@ -903,10 +903,12 @@ async function syncAbandonedCheckouts(supabase: any, conn: any, log: any, totalR
   oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
   const historicalStart = oneYearAgo.toISOString();
 
+  // Use created_at_min (not updated_at_min) — abandoned checkouts never update after creation,
+  // so updated_at_min would silently drop any checkout created in a missed-sync gap.
   const path = pageInfo
     ? `/checkouts.json?limit=50&page_info=${encodeURIComponent(pageInfo)}`
     : syncSince
-      ? `/checkouts.json?limit=50&updated_at_min=${encodeURIComponent(syncSince)}`
+      ? `/checkouts.json?limit=50&created_at_min=${encodeURIComponent(syncSince)}`
       : `/checkouts.json?limit=50&created_at_min=${encodeURIComponent(historicalStart)}`;
 
   const res = await shopifyFetch(domain, conn.access_token, path);
