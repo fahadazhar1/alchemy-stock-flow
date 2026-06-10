@@ -530,17 +530,41 @@ export function useStorePerformance(bounds: DateBounds) {
           .lte("order_date", endDate)
           .limit(100_000),
 
-        // [5] Inventory summary per store (OOS, SKU counts, inventory volume)
-        (supabase as any)
-          .from("v_product_inventory_summary")
-          .select("store_id, total_inventory, product_status")
-          .limit(50_000),
+        // [5] Inventory summary — paginated (server hard-caps at 1000 rows)
+        (async () => {
+          const PAGE = 1000;
+          const all: any[] = [];
+          let offset = 0;
+          while (true) {
+            const { data, error } = await (supabase as any)
+              .from("v_product_inventory_summary")
+              .select("store_id, total_inventory, product_status")
+              .range(offset, offset + PAGE - 1);
+            if (error || !data?.length) break;
+            all.push(...data);
+            if (data.length < PAGE) break;
+            offset += PAGE;
+          }
+          return { data: all, error: null };
+        })(),
 
-        // [6] Dead stock per store
-        (supabase as any)
-          .from("v_dead_stock")
-          .select("store_id, dead_stock_status, total_units")
-          .limit(20_000),
+        // [6] Dead stock — paginated (1913 rows, over server cap)
+        (async () => {
+          const PAGE = 1000;
+          const all: any[] = [];
+          let offset = 0;
+          while (true) {
+            const { data, error } = await (supabase as any)
+              .from("v_dead_stock")
+              .select("store_id, dead_stock_status, total_units")
+              .range(offset, offset + PAGE - 1);
+            if (error || !data?.length) break;
+            all.push(...data);
+            if (data.length < PAGE) break;
+            offset += PAGE;
+          }
+          return { data: all, error: null };
+        })(),
 
         // [7] Replenishment candidates per store
         (supabase as any)
