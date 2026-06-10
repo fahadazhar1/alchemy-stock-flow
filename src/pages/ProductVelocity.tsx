@@ -91,16 +91,17 @@ function OrderHistory({ productId }: { productId: string }) {
         .select("quantity, orders!inner(order_number, shopify_created_at, cancelled_at)")
         .eq("product_id", productId)
         .is("orders.cancelled_at", null)
-        .limit(20);
+        .order("id", { ascending: false })
+        .limit(200);
       if (error) throw error;
       const rows: OrderDetail[] = ((data ?? []) as any[]).map((r: any) => ({
         quantity: Number(r.quantity),
         order_number: r.orders?.order_number ?? "—",
         shopify_created_at: r.orders?.shopify_created_at ?? "",
       }));
-      return rows.sort((a, b) =>
-        new Date(b.shopify_created_at).getTime() - new Date(a.shopify_created_at).getTime()
-      );
+      return rows
+        .sort((a, b) => new Date(b.shopify_created_at).getTime() - new Date(a.shopify_created_at).getTime())
+        .slice(0, 20);
     },
     staleTime: 60_000,
   });
