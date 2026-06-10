@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 
 const navItems = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
-  { title: "Store Performance", url: "/store-performance", icon: Globe2 },
+  { title: "Store Performance - WIP", url: "/store-performance", icon: Globe2 },
   { title: "Orders",    url: "/orders",    icon: ShoppingCart },
   { title: "Reports",   url: "/reports",   icon: BarChart2 },
   { title: "Product Master", url: "/products", icon: Package },
