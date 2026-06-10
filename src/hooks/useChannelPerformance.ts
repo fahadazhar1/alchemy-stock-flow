@@ -73,7 +73,8 @@ export function useChannelPerformance(days = 30, bounds?: DateBounds) {
         .select("source_name, total_price, shopify_created_at")
         .gte("shopify_created_at", b.startISO)
         .lte("shopify_created_at", b.endISO)
-        .is("cancelled_at", null);
+        .is("cancelled_at", null)
+        .limit(10000);
 
       if (storeId) q = q.eq("store_id", storeId);
 

@@ -45,14 +45,16 @@ export function useSalesKPIs(bounds?: DateBounds) {
         .from("orders")
         .select("total_price, cancelled_at, financial_status")
         .gte("shopify_created_at", b.startISO)
-        .lte("shopify_created_at", b.endISO);
+        .lte("shopify_created_at", b.endISO)
+        .limit(10000);
       if (storeId) mtdQ = mtdQ.eq("store_id", storeId);
 
       let prevQ = (supabase as any)
         .from("orders")
         .select("total_price, cancelled_at")
         .gte("shopify_created_at", b.prevStartISO)
-        .lte("shopify_created_at", b.prevEndISO);
+        .lte("shopify_created_at", b.prevEndISO)
+        .limit(10000);
       if (storeId) prevQ = prevQ.eq("store_id", storeId);
 
       let pendingQ = (supabase as any)
@@ -182,7 +184,8 @@ export function useFulfillmentMetrics(bounds?: DateBounds) {
         .gte("shopify_created_at", b.startISO)
         .lte("shopify_created_at", b.endISO)
         .is("cancelled_at", null)
-        .not("closed_at", "is", null);
+        .not("closed_at", "is", null)
+        .limit(10000);
       if (storeId) q = q.eq("store_id", storeId);
 
       const { data, error } = await q;
@@ -345,7 +348,8 @@ export function useTrafficSources(bounds?: DateBounds) {
         .from("orders")
         .select("referring_site, landing_site, source_name, cancelled_at")
         .gte("shopify_created_at", b.startISO)
-        .lte("shopify_created_at", b.endISO);
+        .lte("shopify_created_at", b.endISO)
+        .limit(10000);
       if (storeId) q = q.eq("store_id", storeId);
 
       const { data, error } = await q;
@@ -389,7 +393,8 @@ export function useChannelConversion(bounds?: DateBounds) {
         .from("orders")
         .select("source_name, total_price, cancelled_at")
         .gte("shopify_created_at", b.startISO)
-        .lte("shopify_created_at", b.endISO);
+        .lte("shopify_created_at", b.endISO)
+        .limit(10000);
       if (storeId) q = q.eq("store_id", storeId);
 
       const { data, error } = await q;
@@ -437,7 +442,8 @@ export function useUTMCampaigns(bounds?: DateBounds) {
         .from("orders")
         .select("landing_site, total_price, cancelled_at")
         .gte("shopify_created_at", b.startISO)
-        .lte("shopify_created_at", b.endISO);
+        .lte("shopify_created_at", b.endISO)
+        .limit(10000);
       if (storeId) q = q.eq("store_id", storeId);
 
       const { data, error } = await q;

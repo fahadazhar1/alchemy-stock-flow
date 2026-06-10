@@ -122,14 +122,27 @@ export function useInventoryDashboard(statusFilter: ProductStatusFilter = "all")
     queryKey: ["inventory-dashboard-raw", storeId],
     staleTime: 5 * 60 * 1000,
     queryFn: async () => {
-      let summaryQ = (supabase as any)
-        .from("v_product_inventory_summary")
-        .select(
-          "product_id, product_name, sku, vendor_name, collection_name, product_type, " +
-          "days_old, total_inventory, min_current_price, max_compare_at_price, " +
-          "nearest_expiry_date, product_status"
-        );
-      if (storeId) summaryQ = summaryQ.eq("store_id", storeId);
+      // Paginate v_product_inventory_summary — Supabase caps REST responses at 1000 rows.
+      // Stores with >1000 products silently truncated without pagination.
+      const PAGE_SIZE = 1000;
+      const SUMMARY_COLS =
+        "product_id, product_name, sku, vendor_name, collection_name, product_type, " +
+        "days_old, total_inventory, min_current_price, max_compare_at_price, " +
+        "nearest_expiry_date, product_status";
+      const allRows: any[] = [];
+      let from = 0;
+      while (true) {
+        let q = (supabase as any)
+          .from("v_product_inventory_summary")
+          .select(SUMMARY_COLS)
+          .range(from, from + PAGE_SIZE - 1);
+        if (storeId) q = q.eq("store_id", storeId);
+        const { data, error } = await q;
+        if (error) throw error;
+        allRows.push(...(data ?? []));
+        if (!data || data.length < PAGE_SIZE) break;
+        from += PAGE_SIZE;
+      }
 
       let replenQ = (supabase as any)
         .from("v_replenishment_candidates")
@@ -138,9 +151,7 @@ export function useInventoryDashboard(statusFilter: ProductStatusFilter = "all")
         .limit(5);
       if (storeId) replenQ = replenQ.eq("store_id", storeId);
 
-      const [summaryRes, replenRes] = await Promise.all([summaryQ, replenQ]);
-
-      const allRows = ((summaryRes.data ?? []) as any[]);
+      const replenRes = await replenQ;
       const allInStockIds = allRows
         .filter((r: any) => Number(r.total_inventory ?? 0) > 0)
         .map((r: any) => r.product_id as string);
@@ -150,11 +161,18 @@ export function useInventoryDashboard(statusFilter: ProductStatusFilter = "all")
       let collIdToName: Record<string, string> = {};
 
       if (allInStockIds.length > 0) {
-        const { data: pcData } = await (supabase as any)
-          .from("product_collections")
-          .select("product_id, collection_id")
-          .in("product_id", allInStockIds);
-        pcRows = (pcData ?? []) as typeof pcRows;
+        const PC_PAGE = 1000;
+        let pcFrom = 0;
+        while (true) {
+          const { data: pcPage } = await (supabase as any)
+            .from("product_collections")
+            .select("product_id, collection_id")
+            .in("product_id", allInStockIds)
+            .range(pcFrom, pcFrom + PC_PAGE - 1);
+          pcRows.push(...((pcPage ?? []) as typeof pcRows));
+          if (!pcPage || pcPage.length < PC_PAGE) break;
+          pcFrom += PC_PAGE;
+        }
 
         if (pcRows.length > 0) {
           const collIds = [...new Set(pcRows.map(r => r.collection_id))];
@@ -166,7 +184,7 @@ export function useInventoryDashboard(statusFilter: ProductStatusFilter = "all")
         }
       }
 
-      return { allRows, replenRows: (replenRes.data ?? []) as any[], pcRows, collIdToName };
+      return { allRows, replenRows: ((replenRes as any).data ?? []) as any[], pcRows, collIdToName };
     },
   });
 

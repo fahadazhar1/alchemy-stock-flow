@@ -15,7 +15,8 @@ function dateFrom(range: DateRange): string | null {
 export async function fetchSalesByChannel(range: DateRange = "30d", storeId?: string | null) {
   let q = supabase
     .from("orders")
-    .select("source_name, total_price, financial_status");
+    .select("source_name, total_price, financial_status")
+    .limit(10000);
   const from = dateFrom(range);
   if (from) q = q.gte("created_at", from);
   if (storeId) q = q.eq("store_id", storeId);
@@ -42,7 +43,8 @@ export async function fetchSalesTrend(range: DateRange = "30d", storeId?: string
   let q = supabase
     .from("orders")
     .select("created_at, total_price")
-    .order("created_at", { ascending: true });
+    .order("created_at", { ascending: true })
+    .limit(10000);
   const from = dateFrom(range);
   if (from) q = q.gte("created_at", from);
   if (storeId) q = q.eq("store_id", storeId);
@@ -70,7 +72,8 @@ export async function fetchSalesTrend(range: DateRange = "30d", storeId?: string
 export async function fetchTopProducts(range: DateRange = "30d", limit = 20, storeId?: string | null) {
   let q = supabase
     .from("order_items")
-    .select("product_id, quantity, unit_price, created_at, products(name, product_type, vendor_id)");
+    .select("product_id, quantity, unit_price, created_at, products(name, product_type, vendor_id)")
+    .limit(10000);
   const from = dateFrom(range);
   if (from) q = q.gte("created_at", from);
   if (storeId) q = q.eq("store_id", storeId);
@@ -103,15 +106,23 @@ export async function fetchTopProducts(range: DateRange = "30d", limit = 20, sto
 // ─── Inventory health ─────────────────────────────────────────────────────────
 
 export async function fetchInventoryHealth(storeId?: string | null) {
-  let q = supabase
-    .from("variants")
-    .select("product_id, variant_sku, price, inventory_quantity, committed_quantity, expiry_date, products!inner(name, status, store_id)");
-  if (storeId) q = (q as any).eq("products.store_id", storeId);
+  const PAGE = 1000;
+  const allData: any[] = [];
+  let from = 0;
+  while (true) {
+    let q = (supabase as any)
+      .from("variants")
+      .select("product_id, variant_sku, price, inventory_quantity, committed_quantity, expiry_date, products!inner(name, status, store_id)")
+      .range(from, from + PAGE - 1);
+    if (storeId) q = q.eq("products.store_id", storeId);
+    const { data, error } = await q;
+    if (error) throw error;
+    allData.push(...(data ?? []));
+    if (!data || data.length < PAGE) break;
+    from += PAGE;
+  }
 
-  const { data, error } = await q;
-  if (error) throw error;
-
-  return (data ?? []).map((row: any) => ({
+  return allData.map((row: any) => ({
     sku: row.variant_sku ?? "—",
     product: row.products?.name ?? "Unknown",
     status: row.products?.status ?? "—",
@@ -147,7 +158,8 @@ export async function fetchInventoryKPIs(storeId?: string | null) {
 export async function fetchFulfillmentSummary(range: DateRange = "30d", storeId?: string | null) {
   let q = supabase
     .from("orders")
-    .select("fulfillment_status, financial_status, total_price, created_at");
+    .select("fulfillment_status, financial_status, total_price, created_at")
+    .limit(10000);
   const from = dateFrom(range);
   if (from) q = q.gte("created_at", from);
   if (storeId) q = q.eq("store_id", storeId);
@@ -174,7 +186,8 @@ export async function fetchFulfillmentTrend(range: DateRange = "30d", storeId?: 
   let q = supabase
     .from("orders")
     .select("created_at, fulfillment_status")
-    .order("created_at", { ascending: true });
+    .order("created_at", { ascending: true })
+    .limit(10000);
   const from = dateFrom(range);
   if (from) q = q.gte("created_at", from);
   if (storeId) q = q.eq("store_id", storeId);
@@ -204,7 +217,8 @@ export async function fetchFulfillmentTrend(range: DateRange = "30d", storeId?: 
 export async function fetchCollectionPerformance(range: DateRange = "30d", storeId?: string | null) {
   let q = supabase
     .from("order_items")
-    .select("quantity, unit_price, created_at, products(collection_id, collections(name))");
+    .select("quantity, unit_price, created_at, products(collection_id, collections(name))")
+    .limit(10000);
   const from = dateFrom(range);
   if (from) q = q.gte("created_at", from);
   if (storeId) q = q.eq("store_id", storeId);
@@ -229,7 +243,8 @@ export async function fetchCollectionPerformance(range: DateRange = "30d", store
 export async function fetchRevenueKPIs(range: DateRange = "30d", storeId?: string | null) {
   let q = supabase
     .from("orders")
-    .select("total_price, created_at, financial_status");
+    .select("total_price, created_at, financial_status")
+    .limit(10000);
   const from = dateFrom(range);
   if (from) q = q.gte("created_at", from);
   if (storeId) q = q.eq("store_id", storeId);
@@ -244,7 +259,8 @@ export async function fetchRevenueKPIs(range: DateRange = "30d", storeId?: strin
     .from("orders")
     .select("total_price")
     .gte("created_at", priorFrom.toISOString())
-    .lt("created_at", priorTo.toISOString());
+    .lt("created_at", priorTo.toISOString())
+    .limit(10000);
   if (storeId) priorQ = priorQ.eq("store_id", storeId);
 
   const [curr, prior] = await Promise.all([q, priorQ]);

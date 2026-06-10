@@ -31,7 +31,8 @@ function CampaignProducts({ campaignId }: { campaignId: string }) {
         .from("pricing_campaign_items")
         .select("id, variant_id, old_price, new_price, action_status")
         .eq("campaign_id", campaignId)
-        .order("id");
+        .order("id")
+        .limit(5000);
       if (error) throw error;
       if (!items?.length) return [] as CampaignItem[];
 

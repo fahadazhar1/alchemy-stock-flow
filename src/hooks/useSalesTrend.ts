@@ -37,14 +37,16 @@ export function useSalesTrend(days = 30, bounds?: DateBounds) {
         .select("shopify_created_at, total_price, id")
         .gte("shopify_created_at", b.startISO)
         .lte("shopify_created_at", b.endISO)
-        .is("cancelled_at", null);
+        .is("cancelled_at", null)
+        .limit(10000);
 
       let prevQ = (supabase as any)
         .from("orders")
         .select("shopify_created_at, total_price, id")
         .gte("shopify_created_at", b.prevStartISO)
         .lte("shopify_created_at", b.prevEndISO)
-        .is("cancelled_at", null);
+        .is("cancelled_at", null)
+        .limit(10000);
 
       if (storeId) { curQ = curQ.eq("store_id", storeId); prevQ = prevQ.eq("store_id", storeId); }
 

@@ -25,7 +25,8 @@ async function fetchSplit(
       .select("order_id, product_type, line_revenue, quantity, unit_price")
       .gte("order_date", startISO)
       .lte("order_date", endISO)
-      .is("cancelled_at", null);
+      .is("cancelled_at", null)
+      .limit(10000);
     if (storeId) q = q.eq("store_id", storeId);
     return q;
   })();
@@ -51,7 +52,8 @@ async function fetchSplit(
   const { data: items } = await (supabase as any)
     .from("order_items")
     .select("order_id, quantity, unit_price, products(product_type)")
-    .in("order_id", orderIds);
+    .in("order_id", orderIds)
+    .limit(10000);
 
   return aggregate(
     (items ?? []).map((r: any) => {
