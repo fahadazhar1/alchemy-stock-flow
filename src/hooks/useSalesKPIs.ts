@@ -500,20 +500,22 @@ export function useCheckoutAbandonment(bounds?: DateBounds) {
         .select("id", { count: "exact", head: true });
       if (storeId) totalRowsQ = totalRowsQ.eq("store_id", storeId);
 
-      // Abandoned checkouts in the period (completed_at IS NULL = still abandoned)
+      // Abandoned checkouts in the period (completed_at IS NULL = not yet recovered)
       let abandonedQ = (supabase as any)
         .from("abandoned_checkouts")
         .select("total_price")
         .is("completed_at", null)
         .gte("created_at", b.startISO)
-        .lte("created_at", b.endISO);
+        .lte("created_at", b.endISO)
+        .limit(10000);
       if (storeId) abandonedQ = abandonedQ.eq("store_id", storeId);
 
-      // Completed orders in the same period (as denominator for abandonment rate)
+      // Online store orders only (exclude POS + draft orders — different funnel from abandoned checkouts)
       let ordersQ = (supabase as any)
         .from("orders")
         .select("id", { count: "exact", head: true })
         .is("cancelled_at", null)
+        .or("source_name.eq.web,source_name.is.null")
         .gte("shopify_created_at", b.startISO)
         .lte("shopify_created_at", b.endISO);
       if (storeId) ordersQ = ordersQ.eq("store_id", storeId);

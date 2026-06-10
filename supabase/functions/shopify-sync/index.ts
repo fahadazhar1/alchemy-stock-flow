@@ -816,6 +816,23 @@ async function syncInventory(supabase: any, conn: any, log: any, totalRef: { n: 
   return variants.length === 50;
 }
 
+// ------------ Real-time inventory webhook ------------
+// Called when Shopify fires inventory_levels/update for a single location.
+// Fetches totals across ALL locations so multi-location stores stay correct.
+async function handleInventoryWebhook(supabase: any, conn: any, payload: any) {
+  if (!payload?.inventory_item_id) return;
+  const iid = String(payload.inventory_item_id);
+  const domain = normalizeDomain(conn.shop_domain);
+  const res = await shopifyFetch(domain, conn.access_token, `/inventory_levels.json?inventory_item_ids=${iid}&limit=250`);
+  if (!res.ok) return;
+  const data = await res.json();
+  const total = (data.inventory_levels ?? []).reduce((sum: number, lvl: any) => sum + Number(lvl.available ?? 0), 0);
+  await supabase.from("variants")
+    .update({ inventory_quantity: total })
+    .eq("shopify_inventory_item_id", iid)
+    .eq("store_id", conn.store_id);
+}
+
 // ------------ Velocity metrics refresh ------------
 async function refreshVelocityMetrics(supabase: any, storeId: string | null) {
   try {
@@ -987,6 +1004,7 @@ async function syncShopifyData(supabase: any, connectionId: string) {
       await triggerContinue(connectionId);
     } else {
       await refreshVelocityMetrics(supabase, conn.store_id);
+      await supabase.rpc("mark_recovered_checkouts", { p_store_id: conn.store_id });
       await updateLog(supabase, log.id, {
         status: "success",
         completed_at: new Date().toISOString(),
@@ -1001,7 +1019,7 @@ async function syncShopifyData(supabase: any, connectionId: string) {
       }).eq("id", connectionId);
     }
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
+    const msg = e instanceof Error ? e.message : ((e as any)?.message ?? JSON.stringify(e));
     console.error("sync failed:", msg);
     await updateLog(supabase, log.id, {
       status: "failed",
@@ -1041,8 +1059,12 @@ Deno.serve(async (req) => {
         // Process just this order directly — no full sync needed
         // @ts-ignore
         EdgeRuntime.waitUntil(processSingleOrder(supabase, conn, payload));
+      } else if (topic === "inventory_levels/update" && payload) {
+        // Update this inventory item's quantity in real-time across all locations
+        // @ts-ignore
+        EdgeRuntime.waitUntil(handleInventoryWebhook(supabase, conn, payload));
       } else {
-        // Products, collections, inventory — trigger incremental sync
+        // Products, collections — trigger incremental sync
         // @ts-ignore
         EdgeRuntime.waitUntil(syncShopifyData(supabase, conn.id));
       }
@@ -1509,7 +1531,7 @@ Deno.serve(async (req) => {
 
     return json(400, { ok: false, error: "Unknown action" });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
+    const msg = e instanceof Error ? e.message : ((e as any)?.message ?? JSON.stringify(e));
     return json(500, { ok: false, error: msg });
   }
 });
