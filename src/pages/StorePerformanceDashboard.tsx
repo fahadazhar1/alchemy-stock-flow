@@ -159,6 +159,42 @@ function InfoTooltip({ lines }: { lines: { label: string; desc: string }[] }) {
   );
 }
 
+function ScoreBreakdownPopover({ m, color }: { m: StoreMetrics; color: string }) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button className="rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 transition-transform hover:scale-105" aria-label="Show score breakdown">
+          <ScoreRing score={m.performanceScore} color={color} />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent side="left" align="start" className="w-64 p-3">
+        <p className="text-xs font-semibold">Score breakdown — {m.storeName}</p>
+        <p className="text-[10px] text-muted-foreground mb-2">Points earned per factor for the selected period.</p>
+        <div className="space-y-1.5">
+          {m.scoreBreakdown.map(f => (
+            <div key={f.label}>
+              <div className="flex items-center justify-between gap-2 text-[11px]">
+                <span className="text-muted-foreground truncate">
+                  {f.label} <span className="text-foreground/80 tabular-nums">{f.value}</span>
+                </span>
+                <span className="font-semibold tabular-nums shrink-0">{f.points}/{f.max}</span>
+              </div>
+              <div className="h-1 bg-muted rounded-full overflow-hidden mt-0.5">
+                <div className="h-full rounded-full" style={{ width: `${(f.points / f.max) * 100}%`, background: color }} />
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="flex items-center justify-between border-t mt-2.5 pt-2 text-xs font-semibold">
+          <span>Total</span>
+          <span className="tabular-nums">{m.performanceScore}/100</span>
+        </div>
+        <p className="text-[10px] text-muted-foreground mt-1.5">75+ Strong · 55–74 Average · below 55 At Risk</p>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 // ─── Section: Page header + date range ────────────────────────────────────────
 
 const RANGE_OPTS: { key: DateRangeKey; label: string }[] = [
@@ -448,10 +484,10 @@ function StoreCard({ m, idx }: { m: StoreMetrics; idx: number }) {
             </div>
           </div>
           <div className="flex flex-col items-center gap-1">
-            <ScoreRing score={m.performanceScore} color={color} />
+            <ScoreBreakdownPopover m={m} color={color} />
             <InfoTooltip lines={[
-              { label: "Performance Score (0–100)", desc: "Weighted composite: Revenue trend 30%, Order volume 20%, OOS rate 20%, Inventory health 20%, Refund rate 10%." },
-              { label: "Score bands", desc: "80–100 Excellent · 60–79 Good · 40–59 Fair · 0–39 Needs attention" },
+              { label: "Performance Score (0–100)", desc: "Sum of points from 6 factors: Revenue growth 25 · Sell-through 20 · Refund rate 20 · OOS rate 15 · Order growth 10 · Dead stock 10. Click the ring for this store's full breakdown." },
+              { label: "Score bands", desc: "75+ Strong · 55–74 Average · below 55 At Risk" },
             ]} />
           </div>
         </div>
@@ -503,7 +539,7 @@ function StoreCard({ m, idx }: { m: StoreMetrics; idx: number }) {
             <span className="flex items-center gap-1 text-[10px] text-muted-foreground uppercase tracking-wide">
               Inventory health
               <InfoTooltip lines={[
-                { label: "Inventory Health Score (0–100)", desc: "100 minus penalties: each OOS SKU −0.5 pts, each critical (≤3 units) SKU −1 pt, dead-stock SKUs −0.2 pts." },
+                { label: "Inventory Health Score (0–100)", desc: "Starts at 100, minus penalties: OOS rate × 1.5 (max −40) · dead-stock share of active SKUs (max −30) · 2 pts per critically-low SKU (max −15)." },
                 { label: "Colour guide", desc: "Green ≥75 · Amber ≥50 · Red <50" },
               ]} />
             </span>

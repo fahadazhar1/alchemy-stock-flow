@@ -64,6 +64,7 @@ export interface StoreMetrics {
   performanceScore: number;
   prevPerformanceScore: number | null;
   scoreDelta: number | null; // current - prev
+  scoreBreakdown: ScoreFactor[]; // per-factor points behind performanceScore
 
   // Daily revenue last 14 days (for sparklines)
   dailyRevenue: number[];
@@ -146,6 +147,13 @@ function fmtC(value: number, sym: string): string {
 //   Order growth     10 pts
 //   Inventory health 10 pts (low dead-stock ratio = better)
 
+export interface ScoreFactor {
+  label: string;
+  value: string;  // the store's metric, formatted (e.g. "+64%", "2.6%")
+  points: number;
+  max: number;
+}
+
 function computeScore(m: {
   revenueDelta: number | null;
   ordersDelta: number | null;
@@ -153,62 +161,71 @@ function computeScore(m: {
   oosRate: number;
   sellThrough: number;
   deadStockRatio: number;
-}): number {
-  let s = 0;
+}): { score: number; factors: ScoreFactor[] } {
+  const factors: ScoreFactor[] = [];
+  const signed = (n: number) => `${n >= 0 ? "+" : ""}${n}%`;
+  let p: number;
 
   // 1. Revenue growth (25 pts)
   if (m.revenueDelta !== null) {
-    if      (m.revenueDelta >= 25)  s += 25;
-    else if (m.revenueDelta >= 15)  s += 20;
-    else if (m.revenueDelta >= 5)   s += 15;
-    else if (m.revenueDelta >= 0)   s += 10;
-    else if (m.revenueDelta >= -10) s += 5;
-    // else 0
+    if      (m.revenueDelta >= 25)  p = 25;
+    else if (m.revenueDelta >= 15)  p = 20;
+    else if (m.revenueDelta >= 5)   p = 15;
+    else if (m.revenueDelta >= 0)   p = 10;
+    else if (m.revenueDelta >= -10) p = 5;
+    else                            p = 0;
   } else {
-    s += 12; // neutral when no prior period data
+    p = 12; // neutral when no prior period data
   }
+  factors.push({ label: "Revenue growth", value: m.revenueDelta !== null ? signed(m.revenueDelta) : "no prior data", points: p, max: 25 });
 
   // 2. Sell-through (20 pts)
-  if      (m.sellThrough >= 80) s += 20;
-  else if (m.sellThrough >= 60) s += 16;
-  else if (m.sellThrough >= 40) s += 12;
-  else if (m.sellThrough >= 20) s += 6;
-  else                           s += 2;
+  if      (m.sellThrough >= 80) p = 20;
+  else if (m.sellThrough >= 60) p = 16;
+  else if (m.sellThrough >= 40) p = 12;
+  else if (m.sellThrough >= 20) p = 6;
+  else                          p = 2;
+  factors.push({ label: "Sell-through", value: `${m.sellThrough.toFixed(1)}%`, points: p, max: 20 });
 
   // 3. Refund rate (20 pts, lower is better)
-  if      (m.refundRate <= 1)  s += 20;
-  else if (m.refundRate <= 2)  s += 17;
-  else if (m.refundRate <= 4)  s += 13;
-  else if (m.refundRate <= 6)  s += 8;
-  else if (m.refundRate <= 10) s += 3;
-  // else 0
+  if      (m.refundRate <= 1)  p = 20;
+  else if (m.refundRate <= 2)  p = 17;
+  else if (m.refundRate <= 4)  p = 13;
+  else if (m.refundRate <= 6)  p = 8;
+  else if (m.refundRate <= 10) p = 3;
+  else                         p = 0;
+  factors.push({ label: "Refund rate", value: `${m.refundRate.toFixed(1)}%`, points: p, max: 20 });
 
   // 4. OOS rate (15 pts, lower is better)
-  if      (m.oosRate <= 5)  s += 15;
-  else if (m.oosRate <= 10) s += 12;
-  else if (m.oosRate <= 15) s += 8;
-  else if (m.oosRate <= 25) s += 4;
-  // else 0
+  if      (m.oosRate <= 5)  p = 15;
+  else if (m.oosRate <= 10) p = 12;
+  else if (m.oosRate <= 15) p = 8;
+  else if (m.oosRate <= 25) p = 4;
+  else                      p = 0;
+  factors.push({ label: "Out-of-stock rate", value: `${m.oosRate.toFixed(1)}%`, points: p, max: 15 });
 
   // 5. Order growth (10 pts)
   if (m.ordersDelta !== null) {
-    if      (m.ordersDelta >= 20)  s += 10;
-    else if (m.ordersDelta >= 10)  s += 8;
-    else if (m.ordersDelta >= 0)   s += 6;
-    else if (m.ordersDelta >= -10) s += 3;
-    // else 0
+    if      (m.ordersDelta >= 20)  p = 10;
+    else if (m.ordersDelta >= 10)  p = 8;
+    else if (m.ordersDelta >= 0)   p = 6;
+    else if (m.ordersDelta >= -10) p = 3;
+    else                           p = 0;
   } else {
-    s += 5; // neutral
+    p = 5; // neutral
   }
+  factors.push({ label: "Order growth", value: m.ordersDelta !== null ? signed(m.ordersDelta) : "no prior data", points: p, max: 10 });
 
   // 6. Inventory health / dead-stock ratio (10 pts)
-  if      (m.deadStockRatio <= 0.05) s += 10;
-  else if (m.deadStockRatio <= 0.10) s += 8;
-  else if (m.deadStockRatio <= 0.20) s += 5;
-  else if (m.deadStockRatio <= 0.30) s += 2;
-  // else 0
+  if      (m.deadStockRatio <= 0.05) p = 10;
+  else if (m.deadStockRatio <= 0.10) p = 8;
+  else if (m.deadStockRatio <= 0.20) p = 5;
+  else if (m.deadStockRatio <= 0.30) p = 2;
+  else                               p = 0;
+  factors.push({ label: "Dead stock", value: `${(m.deadStockRatio * 100).toFixed(0)}% of SKUs`, points: p, max: 10 });
 
-  return Math.min(100, Math.round(s));
+  const score = Math.min(100, Math.round(factors.reduce((s, f) => s + f.points, 0)));
+  return { score, factors };
 }
 
 // ─── Inventory health score (0–100) ──────────────────────────────────────────
@@ -718,7 +735,7 @@ export function useStorePerformance(bounds: DateBounds) {
             aov: 0, sellThrough: 0, totalSKUs: 0, activeSKUs: 0,
             oosCount: 0, oosRate: 0, lowStockCount: 0, criticalCount: 0,
             deadStockCount: 0, overstockedCount: 0, inventoryHealthScore: 100,
-            performanceScore: 0, prevPerformanceScore: null, scoreDelta: null,
+            performanceScore: 0, prevPerformanceScore: null, scoreDelta: null, scoreBreakdown: [],
             dailyRevenue: [], topCategories: [], diagnosis: "No data available for this store.",
           };
           storeMetrics.push(empty);
@@ -734,7 +751,7 @@ export function useStorePerformance(bounds: DateBounds) {
           ? pct(a.unitsSold, a.unitsSold + a.totalInventory)
           : 0;
 
-        const performanceScore = computeScore({
+        const { score: performanceScore, factors: scoreBreakdown } = computeScore({
           revenueDelta, ordersDelta, refundRate, oosRate, sellThrough, deadStockRatio,
         });
 
@@ -745,7 +762,7 @@ export function useStorePerformance(bounds: DateBounds) {
               revenueDelta: revenueDelta !== null ? -revenueDelta : null,
               ordersDelta: ordersDelta !== null ? -ordersDelta : null,
               refundRate, oosRate, sellThrough, deadStockRatio,
-            })
+            }).score
           : null;
 
         const scoreDelta = prevPerformanceScore !== null
@@ -801,6 +818,7 @@ export function useStorePerformance(bounds: DateBounds) {
           performanceScore,
           prevPerformanceScore,
           scoreDelta,
+          scoreBreakdown,
           dailyRevenue,
           topCategories,
           diagnosis: "", // filled below after metrics are assembled
