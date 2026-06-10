@@ -53,6 +53,8 @@ export default function ProductMaster() {
   const [collectionFilter, setCollectionFilter] = useState("all");
   const [vendorFilter, setVendorFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [inventoryFilter, setInventoryFilter] = useState("all");
   const [filterDates, setFilterDates] = useState<Date[]>([]);
   const [filterMonths, setFilterMonths] = useState<number[]>([]);
   const [filterYears, setFilterYears] = useState<number[]>([]);
@@ -122,7 +124,7 @@ export default function ProductMaster() {
   });
 
   const { data, isLoading } = useQuery({
-    queryKey: ["products", page, search, collectionFilter, vendorFilter, typeFilter, storeId],
+    queryKey: ["products", page, search, collectionFilter, vendorFilter, typeFilter, statusFilter, inventoryFilter, storeId],
     queryFn: async () => {
       try {
         let collectionProductIds: string[] | null = null;
@@ -147,6 +149,10 @@ export default function ProductMaster() {
         }
         if (vendorFilter !== "all") q = q.eq("vendor_name", vendorFilter);
         if (typeFilter !== "all") q = q.eq("product_type", typeFilter);
+        if (statusFilter !== "all") q = q.eq("product_status", statusFilter);
+        if (inventoryFilter === "in_stock") q = q.gt("total_inventory", 0);
+        else if (inventoryFilter === "out_of_stock") q = q.lte("total_inventory", 0);
+        else if (inventoryFilter === "low_stock") q = q.gt("total_inventory", 0).lte("total_inventory", 10);
         q = q.order("created_at", { ascending: false }).range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
         const { data, error, count } = await q;
         if (error) throw error;
@@ -646,6 +652,23 @@ export default function ProductMaster() {
           <SelectContent>
             <SelectItem value="all">All Types</SelectItem>
             {productTypes?.map(t => <SelectItem key={t} value={t!}>{t}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Select value={statusFilter} onValueChange={v => { setStatusFilter(v); setPage(0); }}>
+          <SelectTrigger className="w-[140px]"><SelectValue placeholder="Status" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Statuses</SelectItem>
+            <SelectItem value="active">Active</SelectItem>
+            <SelectItem value="draft">Draft</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={inventoryFilter} onValueChange={v => { setInventoryFilter(v); setPage(0); }}>
+          <SelectTrigger className="w-[150px]"><SelectValue placeholder="Inventory" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Inventory</SelectItem>
+            <SelectItem value="in_stock">In Stock</SelectItem>
+            <SelectItem value="low_stock">Low Stock (≤10)</SelectItem>
+            <SelectItem value="out_of_stock">Out of Stock</SelectItem>
           </SelectContent>
         </Select>
         <DateRangeFilter
