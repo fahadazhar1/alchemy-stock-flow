@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import {
   ResponsiveContainer, LineChart, Line, AreaChart, Area,
   XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
@@ -7,9 +7,10 @@ import {
   TrendingUp, TrendingDown, AlertTriangle, ShoppingCart,
   Boxes, Activity, Package, BarChart3, Lightbulb,
   ArrowUp, ArrowDown, Minus, Globe2, Layers, Zap,
-  ChevronRight, RefreshCw, Loader2, CalendarDays,
+  ChevronRight, ChevronLeft, RefreshCw, Loader2, CalendarDays, Download,
 } from "lucide-react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -26,6 +27,12 @@ import {
   useStorePerformance,
   type StoreMetrics,
 } from "@/hooks/useStorePerformance";
+import {
+  useInventoryDrillDown,
+  fetchAllDrillDown,
+  type DrillDownMetric,
+  type DrillDownProduct,
+} from "@/hooks/useInventoryDrillDown";
 
 // ─── Store accent colors (auto-assigned by index) ─────────────────────────────
 
@@ -592,116 +599,365 @@ function StoreCardsSection({ metrics, loading }: {
   );
 }
 
+// ─── Inventory drill-down modal ───────────────────────────────────────────────
+
+const METRIC_LABELS: Record<DrillDownMetric, string> = {
+  oos:         "Out of Stock Products",
+  low_stock:   "Low Stock Products",
+  critical:    "Critical Stock Products",
+  dead_stock:  "Dead Stock Products",
+  overstocked: "Overstocked Products",
+};
+
+function statusPill(status: string | null | undefined) {
+  if (!status) return null;
+  const cls: Record<string, string> = {
+    "Critical":       "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400",
+    "Replenish Now":  "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-400",
+    "Low Stock":      "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400",
+    "Watch Closely":  "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-400",
+    "Out of Stock":   "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400",
+    "Never Sold":     "bg-slate-100 text-slate-600 dark:bg-slate-700/50 dark:text-slate-400",
+    "Dead 30d":       "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-400",
+    "Dead 60d":       "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400",
+    "Dead 90d":       "bg-red-200 text-red-800 dark:bg-red-900/60 dark:text-red-300",
+  };
+  return (
+    <span className={cn("inline-block px-1.5 py-0.5 rounded text-[10px] font-medium whitespace-nowrap", cls[status] ?? "bg-muted text-muted-foreground")}>
+      {status}
+    </span>
+  );
+}
+
+function toCsv(metric: DrillDownMetric, products: DrillDownProduct[]): string {
+  const headers: Record<DrillDownMetric, string[]> = {
+    oos:         ["Product Name", "SKU", "Collection", "Type"],
+    low_stock:   ["Product Name", "SKU", "Available Units", "Velocity (units/wk)", "Days of Stock", "Status"],
+    critical:    ["Product Name", "SKU", "Available Units", "Velocity (units/wk)", "Days of Stock", "Status"],
+    dead_stock:  ["Product Name", "SKU", "Type", "Stock Units", "Last Sale", "Status", "Inventory Value"],
+    overstocked: ["Product Name", "SKU", "Type", "Stock Units", "Unit Price", "Inventory Value"],
+  };
+  const rows = products.map(p => {
+    const q = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    if (metric === "oos")
+      return [q(p.product_name), q(p.sku), q(p.collection_name), q(p.product_type)].join(",");
+    if (metric === "low_stock" || metric === "critical")
+      return [q(p.product_name), q(p.sku), q(p.available_units ?? 0), q(p.velocity ?? 0), q(p.days_of_stock ?? "N/A"), q(p.replenishment_status)].join(",");
+    if (metric === "dead_stock")
+      return [q(p.product_name), q(p.sku), q(p.product_type), q(p.total_units ?? 0), q(p.last_sale_at ? p.last_sale_at.slice(0, 10) : "Never"), q(p.dead_stock_status), q(Number(p.inventory_value ?? 0).toFixed(2))].join(",");
+    // overstocked
+    return [q(p.product_name), q(p.sku), q(p.product_type), q(p.total_units ?? 0), q(Number(p.unit_price ?? 0).toFixed(2)), q(Number(p.inventory_value ?? 0).toFixed(2))].join(",");
+  });
+  return [headers[metric].join(","), ...rows].join("\n");
+}
+
+function InventoryDrillDownModal({
+  storeId, storeName, metric, onClose,
+}: {
+  storeId: string;
+  storeName: string;
+  metric: DrillDownMetric;
+  onClose: () => void;
+}) {
+  const PAGE_SIZE = 50;
+  const [page, setPage] = useState(0);
+  const [exporting, setExporting] = useState(false);
+
+  const { data, isLoading } = useInventoryDrillDown(storeId, metric, page, PAGE_SIZE);
+  const products = data?.products ?? [];
+  const total    = data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  const handleExport = useCallback(async () => {
+    setExporting(true);
+    try {
+      const all = await fetchAllDrillDown(storeId, metric);
+      const csv = toCsv(metric, all);
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      a.href     = url;
+      a.download = `${storeName.replace(/\s+/g, "_")}_${metric}_${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setExporting(false);
+    }
+  }, [storeId, storeName, metric]);
+
+  // Column definitions per metric
+  const isReplen = metric === "low_stock" || metric === "critical";
+  const isDead   = metric === "dead_stock" || metric === "overstocked";
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="max-w-4xl w-full flex flex-col" style={{ maxHeight: "85vh" }}>
+        <DialogHeader className="shrink-0">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div>
+              <DialogTitle className="text-sm font-semibold">{storeName} — {METRIC_LABELS[metric]}</DialogTitle>
+              {total > 0 && <p className="text-xs text-muted-foreground mt-0.5">{total.toLocaleString()} products total</p>}
+            </div>
+            <Button size="sm" variant="outline" onClick={handleExport} disabled={exporting} className="shrink-0">
+              {exporting
+                ? <Loader2 size={13} className="animate-spin mr-1.5" />
+                : <Download size={13} className="mr-1.5" />}
+              Export CSV
+            </Button>
+          </div>
+        </DialogHeader>
+
+        {/* Table */}
+        <div className="flex-1 overflow-auto min-h-0 rounded border">
+          <table className="w-full text-xs">
+            <thead className="sticky top-0 bg-background z-10">
+              <tr className="border-b">
+                {metric === "oos" && <>
+                  <th className="px-3 py-2.5 text-left font-medium text-muted-foreground">Product Name</th>
+                  <th className="px-3 py-2.5 text-left font-medium text-muted-foreground">SKU</th>
+                  <th className="px-3 py-2.5 text-left font-medium text-muted-foreground">Collection</th>
+                  <th className="px-3 py-2.5 text-left font-medium text-muted-foreground">Type</th>
+                </>}
+                {isReplen && <>
+                  <th className="px-3 py-2.5 text-left font-medium text-muted-foreground">Product Name</th>
+                  <th className="px-3 py-2.5 text-left font-medium text-muted-foreground">SKU</th>
+                  <th className="px-3 py-2.5 text-right font-medium text-muted-foreground">Available</th>
+                  <th className="px-3 py-2.5 text-right font-medium text-muted-foreground">Vel (units/wk)</th>
+                  <th className="px-3 py-2.5 text-right font-medium text-muted-foreground">Days of Stock</th>
+                  <th className="px-3 py-2.5 text-center font-medium text-muted-foreground">Status</th>
+                </>}
+                {isDead && <>
+                  <th className="px-3 py-2.5 text-left font-medium text-muted-foreground">Product Name</th>
+                  <th className="px-3 py-2.5 text-left font-medium text-muted-foreground">SKU</th>
+                  <th className="px-3 py-2.5 text-left font-medium text-muted-foreground">Type</th>
+                  <th className="px-3 py-2.5 text-right font-medium text-muted-foreground">Stock</th>
+                  {metric === "dead_stock" && <th className="px-3 py-2.5 text-right font-medium text-muted-foreground">Last Sale</th>}
+                  {metric === "overstocked" && <th className="px-3 py-2.5 text-right font-medium text-muted-foreground">Unit Price</th>}
+                  <th className="px-3 py-2.5 text-right font-medium text-muted-foreground">Value</th>
+                  {metric === "dead_stock" && <th className="px-3 py-2.5 text-center font-medium text-muted-foreground">Status</th>}
+                </>}
+              </tr>
+            </thead>
+            <tbody>
+              {isLoading
+                ? Array.from({ length: 10 }).map((_, i) => (
+                    <tr key={i} className="border-b last:border-0">
+                      {Array.from({ length: metric === "oos" ? 4 : isReplen ? 6 : 6 }).map((_, j) => (
+                        <td key={j} className="px-3 py-2.5">
+                          <div className={cn("h-3 rounded bg-muted animate-pulse", j === 0 ? "w-48" : "w-16")} />
+                        </td>
+                      ))}
+                    </tr>
+                  ))
+                : products.length === 0
+                  ? <tr><td colSpan={8} className="px-3 py-8 text-center text-muted-foreground">No products found.</td></tr>
+                  : products.map((p, i) => (
+                      <tr key={p.product_id ?? i} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
+                        {metric === "oos" && <>
+                          <td className="px-3 py-2.5 font-medium max-w-xs truncate">{p.product_name}</td>
+                          <td className="px-3 py-2.5 text-muted-foreground font-mono">{p.sku ?? "—"}</td>
+                          <td className="px-3 py-2.5 text-muted-foreground">{p.collection_name ?? "—"}</td>
+                          <td className="px-3 py-2.5 text-muted-foreground">{p.product_type ?? "—"}</td>
+                        </>}
+                        {isReplen && <>
+                          <td className="px-3 py-2.5 font-medium max-w-xs truncate">{p.product_name}</td>
+                          <td className="px-3 py-2.5 text-muted-foreground font-mono">{p.sku ?? "—"}</td>
+                          <td className="px-3 py-2.5 text-right tabular-nums">{p.available_units ?? 0}</td>
+                          <td className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">{p.velocity ?? 0}</td>
+                          <td className="px-3 py-2.5 text-right tabular-nums">
+                            {p.days_of_stock != null ? <span className={p.days_of_stock < 7 ? "text-red-600 dark:text-red-400 font-medium" : ""}>{p.days_of_stock}d</span> : <span className="text-muted-foreground">—</span>}
+                          </td>
+                          <td className="px-3 py-2.5 text-center">{statusPill(p.replenishment_status)}</td>
+                        </>}
+                        {isDead && <>
+                          <td className="px-3 py-2.5 font-medium max-w-xs truncate">{p.product_name}</td>
+                          <td className="px-3 py-2.5 text-muted-foreground font-mono">{p.sku ?? "—"}</td>
+                          <td className="px-3 py-2.5 text-muted-foreground">{p.product_type ?? "—"}</td>
+                          <td className="px-3 py-2.5 text-right tabular-nums">{(p.total_units ?? 0).toLocaleString()}</td>
+                          {metric === "dead_stock" && (
+                            <td className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">
+                              {p.last_sale_at ? p.last_sale_at.slice(0, 10) : <span className="text-slate-400">Never</span>}
+                            </td>
+                          )}
+                          {metric === "overstocked" && (
+                            <td className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">
+                              {Number(p.unit_price ?? 0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </td>
+                          )}
+                          <td className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">
+                            {Number(p.inventory_value ?? 0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </td>
+                          {metric === "dead_stock" && <td className="px-3 py-2.5 text-center">{statusPill(p.dead_stock_status)}</td>}
+                        </>}
+                      </tr>
+                    ))
+              }
+            </tbody>
+          </table>
+        </div>
+
+        {/* Pagination */}
+        {totalPages > 1 && (
+          <div className="shrink-0 flex items-center justify-between pt-2 text-xs text-muted-foreground">
+            <span>
+              Page {page + 1} of {totalPages} · {((page * PAGE_SIZE) + 1).toLocaleString()}–{Math.min((page + 1) * PAGE_SIZE, total).toLocaleString()} of {total.toLocaleString()}
+            </span>
+            <div className="flex items-center gap-1">
+              <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => setPage(0)} disabled={page === 0}>
+                <ChevronLeft size={13} /><ChevronLeft size={13} className="-ml-2" />
+              </Button>
+              <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => setPage(p => p - 1)} disabled={page === 0}>
+                <ChevronLeft size={13} />
+              </Button>
+              <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => setPage(p => p + 1)} disabled={page >= totalPages - 1}>
+                <ChevronRight size={13} />
+              </Button>
+              <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => setPage(totalPages - 1)} disabled={page >= totalPages - 1}>
+                <ChevronRight size={13} /><ChevronRight size={13} className="-ml-2" />
+              </Button>
+            </div>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Section: Inventory health comparison ─────────────────────────────────────
 
 function InventoryHealthSection({ metrics, loading }: {
   metrics: StoreMetrics[];
   loading: boolean;
 }) {
+  type DrillState = { storeId: string; storeName: string; metric: DrillDownMetric } | null;
+  const [drill, setDrill] = useState<DrillState>(null);
+
+  function openDrill(storeId: string, storeName: string, metric: DrillDownMetric, count: number) {
+    if (count === 0) return;
+    setDrill({ storeId, storeName, metric });
+  }
+
+  function DrillBtn({ count, cls, storeId, storeName, metric }: {
+    count: number; cls: string; storeId: string; storeName: string; metric: DrillDownMetric;
+  }) {
+    if (count === 0) return <span className="text-muted-foreground">{fmtNum(count)}</span>;
+    return (
+      <button
+        onClick={() => openDrill(storeId, storeName, metric, count)}
+        className={cn("tabular-nums font-medium underline underline-offset-2 decoration-dashed hover:no-underline cursor-pointer transition-opacity hover:opacity-70", cls)}
+      >
+        {fmtNum(count)}
+      </button>
+    );
+  }
+
   return (
-    <Card>
-      <CardHeader className="pb-2 pt-4 px-4">
-        <div className="flex items-center gap-2">
-          <Boxes size={14} className="text-muted-foreground" />
-          <h3 className="text-sm font-semibold">Inventory Health</h3>
-          <span className="text-xs text-muted-foreground">Cross-store comparison</span>
-        </div>
-      </CardHeader>
-      <CardContent className="p-0">
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b">
-                {([
-                  { label: "Store", tip: null },
-                  { label: "Health Score", tip: [
-                    { label: "Inventory Health Score (0–100)", desc: "Starts at 100. Penalties: OOS rate × 1.5 (max −40) · dead-stock share of SKUs × 120 (max −30) · 2 pts per critically-low SKU (max −15)." },
-                    { label: "Colours", desc: "Green ≥75 · Amber ≥50 · Red <50" },
-                  ]},
-                  { label: "Total SKUs", tip: [
-                    { label: "Total SKUs", desc: "Count of active products synced to the database for this store." },
-                  ]},
-                  { label: "OOS", tip: [
-                    { label: "Out of Stock", desc: "Active SKUs where total inventory = 0. These products cannot be purchased right now." },
-                  ]},
-                  { label: "Low Stock", tip: [
-                    { label: "Low Stock", desc: "Products with available units below 15 — candidates for replenishment soon." },
-                  ]},
-                  { label: "Critical", tip: [
-                    { label: "Critical Stock", desc: "Products with ≤3 units available — high-urgency replenishment. At current sales velocity these will go OOS very soon." },
-                  ]},
-                  { label: "Dead Stock", tip: [
-                    { label: "Dead Stock", desc: "Active products with inventory in stock but zero sales in the last 30 days." },
-                    { label: "Sub-categories", desc: "Dead 30d · Dead 60d · Dead 90d · Never Sold (no sale ever recorded)." },
-                  ]},
-                  { label: "Overstocked", tip: [
-                    { label: "Overstocked", desc: "Subset of Dead Stock: products that have NEVER sold a single unit AND have 50+ units sitting in stock." },
-                    { label: "Why it matters", desc: "These are the highest-priority clearance candidates — large quantities of completely untouched inventory tying up cash." },
-                  ]},
-                ] as const).map((col, i) => (
-                  <th key={i} className={cn("px-4 py-2.5 font-medium text-muted-foreground text-left", i > 0 && "text-right")}>
-                    <span className={cn("inline-flex items-center gap-1", i > 0 && "justify-end")}>
-                      {col.label}
-                      {col.tip && <InfoTooltip lines={col.tip as { label: string; desc: string }[]} />}
-                    </span>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                Array.from({ length: 4 }).map((_, i) => (
-                  <tr key={i} className="border-b last:border-0">
-                    {Array.from({ length: 8 }).map((_, j) => (
-                      <td key={j} className="px-4 py-3"><Skeleton className="h-3 w-14" /></td>
-                    ))}
-                  </tr>
-                ))
-              ) : metrics.map((m, idx) => {
-                const color = storeColor(idx);
-                return (
-                  <tr key={m.storeId} className="border-b last:border-0 hover:bg-muted/40 transition-colors">
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
-                        <span className="font-medium">{m.storeName}</span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <HealthBar value={m.inventoryHealthScore} />
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums">{fmtNum(m.activeSKUs)}</td>
-                    <td className="px-4 py-3 text-right tabular-nums">
-                      <span className={m.oosCount > 0 ? "text-red-600 dark:text-red-400 font-medium" : "text-muted-foreground"}>
-                        {fmtNum(m.oosCount)}
+    <>
+      <Card>
+        <CardHeader className="pb-2 pt-4 px-4">
+          <div className="flex items-center gap-2">
+            <Boxes size={14} className="text-muted-foreground" />
+            <h3 className="text-sm font-semibold">Inventory Health</h3>
+            <span className="text-xs text-muted-foreground">Cross-store comparison · click a number to preview products</span>
+          </div>
+        </CardHeader>
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b">
+                  {([
+                    { label: "Store", tip: null },
+                    { label: "Health Score", tip: [
+                      { label: "Inventory Health Score (0–100)", desc: "Starts at 100. Penalties: OOS rate × 1.5 (max −40) · dead-stock share of SKUs × 120 (max −30) · 2 pts per critically-low SKU (max −15)." },
+                      { label: "Colours", desc: "Green ≥75 · Amber ≥50 · Red <50" },
+                    ]},
+                    { label: "Total SKUs", tip: [
+                      { label: "Total SKUs", desc: "Count of active products synced to the database for this store." },
+                    ]},
+                    { label: "OOS", tip: [
+                      { label: "Out of Stock", desc: "Active SKUs where total inventory = 0. Click the number to preview products." },
+                    ]},
+                    { label: "Low Stock", tip: [
+                      { label: "Low Stock", desc: "Products with available units below 15 — candidates for replenishment soon. Click to preview." },
+                    ]},
+                    { label: "Critical", tip: [
+                      { label: "Critical Stock", desc: "Products with ≤3 units available — high-urgency replenishment. Click to preview." },
+                    ]},
+                    { label: "Dead Stock", tip: [
+                      { label: "Dead Stock", desc: "Active products with inventory in stock but zero sales in the last 30 days. Click to preview." },
+                      { label: "Sub-categories", desc: "Dead 30d · Dead 60d · Dead 90d · Never Sold (no sale ever recorded)." },
+                    ]},
+                    { label: "Overstocked", tip: [
+                      { label: "Overstocked", desc: "Never Sold products with 50+ units. Click to preview." },
+                      { label: "Why it matters", desc: "Highest-priority clearance candidates — large quantities of completely untouched inventory tying up cash." },
+                    ]},
+                  ] as const).map((col, i) => (
+                    <th key={i} className={cn("px-4 py-2.5 font-medium text-muted-foreground text-left", i > 0 && "text-right")}>
+                      <span className={cn("inline-flex items-center gap-1", i > 0 && "justify-end")}>
+                        {col.label}
+                        {col.tip && <InfoTooltip lines={col.tip as { label: string; desc: string }[]} />}
                       </span>
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums">
-                      <span className={m.lowStockCount > 5 ? "text-amber-600 dark:text-amber-400 font-medium" : "text-muted-foreground"}>
-                        {fmtNum(m.lowStockCount)}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums">
-                      <span className={m.criticalCount > 0 ? "text-red-600 dark:text-red-400 font-medium" : "text-muted-foreground"}>
-                        {fmtNum(m.criticalCount)}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums">
-                      <span className={m.deadStockCount > 10 ? "text-amber-600 dark:text-amber-400 font-medium" : "text-muted-foreground"}>
-                        {fmtNum(m.deadStockCount)}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">
-                      {fmtNum(m.overstockedCount)}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </CardContent>
-    </Card>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  Array.from({ length: 4 }).map((_, i) => (
+                    <tr key={i} className="border-b last:border-0">
+                      {Array.from({ length: 8 }).map((_, j) => (
+                        <td key={j} className="px-4 py-3"><Skeleton className="h-3 w-14" /></td>
+                      ))}
+                    </tr>
+                  ))
+                ) : metrics.map((m, idx) => {
+                  const color = storeColor(idx);
+                  return (
+                    <tr key={m.storeId} className="border-b last:border-0 hover:bg-muted/40 transition-colors">
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
+                          <span className="font-medium">{m.storeName}</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <HealthBar value={m.inventoryHealthScore} />
+                      </td>
+                      <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">{fmtNum(m.activeSKUs)}</td>
+                      <td className="px-4 py-3 text-right">
+                        <DrillBtn count={m.oosCount} cls="text-red-600 dark:text-red-400" storeId={m.storeId} storeName={m.storeName} metric="oos" />
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <DrillBtn count={m.lowStockCount} cls="text-amber-600 dark:text-amber-400" storeId={m.storeId} storeName={m.storeName} metric="low_stock" />
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <DrillBtn count={m.criticalCount} cls="text-red-600 dark:text-red-400" storeId={m.storeId} storeName={m.storeName} metric="critical" />
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <DrillBtn count={m.deadStockCount} cls="text-amber-600 dark:text-amber-400" storeId={m.storeId} storeName={m.storeName} metric="dead_stock" />
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <DrillBtn count={m.overstockedCount} cls="text-muted-foreground" storeId={m.storeId} storeName={m.storeName} metric="overstocked" />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
+
+      {drill && (
+        <InventoryDrillDownModal
+          storeId={drill.storeId}
+          storeName={drill.storeName}
+          metric={drill.metric}
+          onClose={() => setDrill(null)}
+        />
+      )}
+    </>
   );
 }
 
