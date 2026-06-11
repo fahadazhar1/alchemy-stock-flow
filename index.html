@@ -22,12 +22,84 @@
   <meta property="og:description" content="Lovable Generated Project">
   <meta name="twitter:description" content="Lovable Generated Project">
   <link rel="icon" type="image/png" href="/favicon.png">
+  <style>
+    #splash-screen {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: #ffffff;
+      transition: opacity 0.5s ease, visibility 0.5s ease;
+    }
+    html.dark #splash-screen {
+      background: #0f172a;
+    }
+    #splash-screen.hidden {
+      opacity: 0;
+      visibility: hidden;
+    }
+    #splash-logo {
+      width: 130px;
+      animation: splashIn 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+    #splash-label {
+      margin-top: 20px;
+      font-family: system-ui, -apple-system, sans-serif;
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #64748b;
+      animation: splashIn 0.6s 0.15s cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+    html.dark #splash-label {
+      color: #94a3b8;
+    }
+    #splash-bar {
+      margin-top: 28px;
+      width: 80px;
+      height: 3px;
+      border-radius: 99px;
+      background: #e2e8f0;
+      overflow: hidden;
+      animation: splashIn 0.6s 0.25s cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+    html.dark #splash-bar {
+      background: #1e293b;
+    }
+    #splash-fill {
+      height: 100%;
+      width: 0%;
+      border-radius: 99px;
+      background: linear-gradient(90deg, #2563eb, #06b6d4);
+      animation: splashLoad 4s ease-in-out forwards;
+    }
+    @keyframes splashIn {
+      from { opacity: 0; transform: translateY(12px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes splashLoad {
+      0%   { width: 0%; }
+      30%  { width: 45%; }
+      70%  { width: 72%; }
+      90%  { width: 88%; }
+      100% { width: 95%; }
+    }
+  </style>
 </head>
 
   <body>
     <script>
       (function(){var t=localStorage.getItem('theme');if(t==='dark'||(t!=='light'&&window.matchMedia('(prefers-color-scheme:dark)').matches))document.documentElement.classList.add('dark')})();
     </script>
+    <div id="splash-screen">
+      <img id="splash-logo" src="/darussalam-logo.png" alt="Darussalam" />
+      <div id="splash-label">Inventory Alchemist</div>
+      <div id="splash-bar"><div id="splash-fill"></div></div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
