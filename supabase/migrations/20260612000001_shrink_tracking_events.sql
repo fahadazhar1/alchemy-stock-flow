@@ -1,36 +1,70 @@
--- Shrink shipment_tracking_events (currently 596 MB / 88% of DB)
--- Strategy:
---   1. Delete rows older than 90 days (delivered shipments need no history)
---   2. NULL out raw_payload on all remaining rows (JSONB payloads = bulk of the size)
---   3. Drop idx_ste_recorded_at (87 MB index not used by any app query)
---   4. Schedule weekly auto-cleanup via pg_cron
+-- Shrink shipment_tracking_events (596 MB, 88% of DB)
+--
+-- Why this approach:
+--   ALTER TABLE DROP COLUMN  → catalog-only, instant (no row scan)
+--   Batched DELETE via cron  → 2000 rows/run avoids statement timeout
+--   VACUUM FULL via cron     → reclaims freed pages automatically every Sunday
 
--- Step 1: delete stale events
-DELETE FROM shipment_tracking_events
-WHERE recorded_at < NOW() - INTERVAL '90 days';
+-- 1. Drop the JSONB payload column (main space hog; pages freed by VACUUM FULL below)
+ALTER TABLE shipment_tracking_events DROP COLUMN IF EXISTS raw_payload;
 
--- Step 2: zero out raw API payloads (app never reads them; sonic_cache holds current state)
-UPDATE shipment_tracking_events
-SET raw_payload = NULL
-WHERE raw_payload IS NOT NULL;
-
--- Step 3: drop the unused date index (saves 87 MB; tracking_number index is sufficient)
-DROP INDEX IF EXISTS idx_ste_recorded_at;
-
--- Step 4: weekly auto-cleanup — keep only last 90 days of events
-CREATE OR REPLACE FUNCTION cleanup_tracking_events()
+-- 2. Remove raw_payload from the insert function
+CREATE OR REPLACE FUNCTION record_tracking_event(
+  p_tracking_number text,
+  p_courier         text,
+  p_status          text,
+  p_event_at        timestamptz DEFAULT NULL,
+  p_location        text        DEFAULT NULL,
+  p_remarks         text        DEFAULT NULL
+)
 RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER
 AS $$
 BEGIN
-  DELETE FROM shipment_tracking_events
-  WHERE recorded_at < NOW() - INTERVAL '90 days';
+  INSERT INTO shipment_tracking_events
+    (tracking_number, courier, status, event_at, location, remarks)
+  VALUES
+    (p_tracking_number, p_courier, p_status, p_event_at, p_location, p_remarks)
+  ON CONFLICT (tracking_number, status, event_at) DO NOTHING;
 END;
 $$;
 
--- Schedule every Sunday at 02:00 UTC (requires pg_cron extension, enabled by default on Supabase)
+-- 3. Drop unused date index — immediate 87 MB space release (DROP INDEX frees pages now)
+DROP INDEX IF EXISTS idx_ste_recorded_at;
+
+-- 4. Batched cleanup: deletes 2000 old rows every 10 minutes (safe under statement timeout)
+--    Old rows have low IDs → PK index scan hits them first, efficient even without date index.
+--    Becomes a fast no-op automatically once all pre-90-day rows are gone.
+DO $$ BEGIN
+  PERFORM cron.unschedule('weekly-tracking-events-cleanup');
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+
+DO $$ BEGIN
+  PERFORM cron.unschedule('tracking-events-cleanup');
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+
 SELECT cron.schedule(
-  'weekly-tracking-events-cleanup',
-  '0 2 * * 0',
-  'SELECT cleanup_tracking_events()'
+  'tracking-events-cleanup',
+  '*/10 * * * *',
+  $$DELETE FROM shipment_tracking_events
+    WHERE id IN (
+      SELECT id FROM shipment_tracking_events
+      WHERE recorded_at < NOW() - INTERVAL '90 days'
+      ORDER BY id
+      LIMIT 2000
+    )$$
+);
+
+-- 5. Weekly VACUUM FULL — reclaims disk pages freed by the batched deletes + DROP COLUMN
+DO $$ BEGIN
+  PERFORM cron.unschedule('vacuum-tracking-events');
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+
+SELECT cron.schedule(
+  'vacuum-tracking-events',
+  '0 3 * * 0',
+  'VACUUM FULL shipment_tracking_events'
 );
