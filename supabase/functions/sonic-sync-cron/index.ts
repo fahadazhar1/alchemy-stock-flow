@@ -259,7 +259,6 @@ Deno.serve(async (req) => {
             p_status:          event.status,
             p_event_at:        eventAt ?? undefined,
             p_location:        event.location ?? undefined,
-            p_raw_payload:     event,
           }).then(({ error: e }) => {
             if (e) console.warn(`[SONIC cron] event record failed ${tn}:`, e.message);
           });

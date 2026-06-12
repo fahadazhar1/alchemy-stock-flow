@@ -87,7 +87,6 @@ async function processDeliveryStatus(
     p_status:          status,
     p_event_at:        eventAt ?? undefined,
     p_location:        (payload.location as string | undefined) ?? undefined,
-    p_raw_payload:     payload as any,
   });
 }
 
