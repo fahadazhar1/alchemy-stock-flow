@@ -31,6 +31,9 @@ import { useChannelPerformance } from "@/hooks/useChannelPerformance";
 import { useInventoryDashboard } from "@/hooks/useInventoryDashboard";
 import { OutOfStockWidget } from "./components/OutOfStockWidget";
 import { TopProductsModal } from "./components/TopProductsModal";
+import { DeadstockLosersModal } from "./components/DeadstockLosersModal";
+import { useDeadstockPreview, getDeadstockLabel } from "@/hooks/useDeadstockPreview";
+import { parseISO } from "date-fns";
 import { useSalesKPIs, useCollectionSales, useCustomerMetrics, useFulfillmentMetrics, useDiscountUsage, useTrafficSources, useChannelConversion, useCheckoutAbandonment, useUTMCampaigns } from "@/hooks/useSalesKPIs";
 import { useBundleSales } from "@/hooks/useBundleSales";
 import { supabase } from "@/integrations/supabase/client";
@@ -1192,7 +1195,9 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
   const navigate = useNavigate();
   const { fmtCurrency: fmtGBP } = useCurrency();
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "draft">("all");
+  const [showLosersModal, setShowLosersModal] = useState(false);
   const { data, isLoading } = useInventoryDashboard(statusFilter);
+  const { data: deadstockData, isLoading: deadstockLoading } = useDeadstockPreview(8);
 
   const available   = data?.kpis.available ?? 0;
   const stockValue  = data?.stockValue  ?? 0;
@@ -1361,6 +1366,8 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
 
       <OutOfStockWidget />
 
+      <DeadstockLosersModal open={showLosersModal} onClose={() => setShowLosersModal(false)} />
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3.5">
         <Card className="lg:col-span-2">
           <CardHeader className="pb-2 pt-4 px-4">
@@ -1368,11 +1375,13 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
               <div className="flex items-center gap-2">
                 <TrendingDown size={14} className="text-red-500" />
                 <h3 className="text-sm font-semibold">Shelf life of losers</h3>
-                <span className="text-xs text-muted-foreground">{data?.loserProducts.length ?? 0} products</span>
+                <span className="text-xs text-muted-foreground">{deadstockData?.total ?? 0} products</span>
               </div>
               <div className="flex items-center gap-2">
                 <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => navigate("/campaigns")}>Mark for promo</Button>
-                <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" onClick={() => navigate("/products")}><Eye size={12} /> Review</Button>
+                <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" onClick={() => setShowLosersModal(true)}>
+                  <Eye size={12} /> View all
+                </Button>
               </div>
             </div>
           </CardHeader>
@@ -1381,58 +1390,49 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
             <table className="w-full text-xs">
               <thead>
                 <tr className="border-b">
-                  {["Product","Vendor","Collection","Stock","Days old","Price",""].map((h, i) => (
+                  {["Product","Stock","Status","Unit Price","Value at Risk","Last Sale"].map((h, i) => (
                     <th key={i} className={cn("px-4 py-2 font-medium text-muted-foreground text-left",
-                      i >= 3 && i <= 5 && "text-right")}>{h}</th>
+                      i >= 1 && i !== 2 && "text-right")}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {isLoading ? (
-                  Array.from({ length: 6 }).map((_, i) => <RowSkeleton key={i} cols={7} />)
-                ) : !data?.loserProducts.length ? (
-                  <tr><td colSpan={7} className="px-4 py-6 text-center text-muted-foreground">No slow-moving products</td></tr>
+                {deadstockLoading ? (
+                  Array.from({ length: 6 }).map((_, i) => <RowSkeleton key={i} cols={6} />)
+                ) : !deadstockData?.products.length ? (
+                  <tr><td colSpan={6} className="px-4 py-6 text-center text-muted-foreground">No deadstock or overstocked products</td></tr>
                 ) : (
-                  data.loserProducts.map(l => (
-                    <tr key={l.product_id} className="border-b last:border-b-0 hover:bg-muted/40 transition-colors">
-                      <td className="px-4 py-2.5">
-                        <div className="font-medium">{l.name}</div>
-                        <div className="font-mono text-muted-foreground text-[10px]">{l.sku}</div>
-                      </td>
-                      <td className="px-4 py-2.5 text-muted-foreground">{l.vendor}</td>
-                      <td className="px-4 py-2.5">
-                        <Badge
-                          variant="outline"
-                          className={cn(
-                            "text-[10px] px-1.5 py-0",
-                            l.collection === "Uncategorised"
-                              ? "text-muted-foreground border-dashed"
-                              : ""
-                          )}
-                        >
-                          {l.collection}
-                        </Badge>
-                      </td>
-                      <td className="px-4 py-2.5 text-right tabular-nums">{fmtNum(l.stock)}</td>
-                      <td className="px-4 py-2.5 text-right">
-                        <Badge variant="outline" className={cn("text-[10px] px-1.5 py-0",
-                          l.days > 60
-                            ? "text-red-500 border-red-200 bg-red-50 dark:bg-red-950/30 dark:border-red-800 dark:text-red-400"
-                            : "text-amber-600 border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-400")}>
-                          {l.days}d
-                        </Badge>
-                      </td>
-                      <td className="px-4 py-2.5 text-right tabular-nums">
-                        {l.price != null ? fmtGBP(l.price) : "—"}
-                        {l.compare != null && l.compare > (l.price ?? 0) && (
-                          <span className="text-muted-foreground line-through ml-1">{fmtGBP(l.compare)}</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-2.5">
-                        <button className="text-muted-foreground hover:text-foreground"><MoreHorizontal size={14} /></button>
-                      </td>
-                    </tr>
-                  ))
+                  deadstockData.products.map(p => {
+                    const label = getDeadstockLabel(p);
+                    const LABEL_CLS: Record<string, string> = {
+                      "Dead 90d":    "text-red-500 border-red-200 bg-red-50 dark:bg-red-950/30 dark:border-red-800 dark:text-red-400",
+                      "Dead 60d":    "text-orange-500 border-orange-200 bg-orange-50 dark:bg-orange-950/30 dark:border-orange-800 dark:text-orange-400",
+                      "Dead 30d":    "text-amber-600 border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-400",
+                      "Never Sold":  "text-muted-foreground border-dashed",
+                      "Overstocked": "text-purple-600 border-purple-200 bg-purple-50 dark:bg-purple-950/30 dark:border-purple-800 dark:text-purple-400",
+                    };
+                    let saleStr: string | null = null;
+                    try { saleStr = p.last_sale_at ? format(parseISO(p.last_sale_at), "dd MMM yy") : null; } catch {}
+                    return (
+                      <tr key={p.product_id} className="border-b last:border-b-0 hover:bg-muted/40 transition-colors">
+                        <td className="px-4 py-2.5">
+                          <div className="font-medium">{p.product_name}</div>
+                          <div className="font-mono text-muted-foreground text-[10px]">{p.product_type ?? ""}{p.sku ? ` · ${p.sku}` : ""}</div>
+                        </td>
+                        <td className="px-4 py-2.5 text-right tabular-nums">{fmtNum(p.total_units)}</td>
+                        <td className="px-4 py-2.5">
+                          <Badge variant="outline" className={cn("text-[10px] px-1.5 py-0", LABEL_CLS[label] ?? "")}>
+                            {label}
+                          </Badge>
+                        </td>
+                        <td className="px-4 py-2.5 text-right tabular-nums">{fmtGBP(p.unit_price)}</td>
+                        <td className="px-4 py-2.5 text-right tabular-nums font-semibold">{fmtGBP(p.inventory_value)}</td>
+                        <td className="px-4 py-2.5 text-right text-muted-foreground">
+                          {saleStr ?? <span className="text-red-400 font-medium">Never</span>}
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
