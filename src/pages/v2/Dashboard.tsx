@@ -30,6 +30,7 @@ import { useSalesTrend } from "@/hooks/useSalesTrend";
 import { useChannelPerformance } from "@/hooks/useChannelPerformance";
 import { useInventoryDashboard } from "@/hooks/useInventoryDashboard";
 import { OutOfStockWidget } from "./components/OutOfStockWidget";
+import { TopProductsModal } from "./components/TopProductsModal";
 import { useSalesKPIs, useCollectionSales, useCustomerMetrics, useFulfillmentMetrics, useDiscountUsage, useTrafficSources, useChannelConversion, useCheckoutAbandonment, useUTMCampaigns } from "@/hooks/useSalesKPIs";
 import { useBundleSales } from "@/hooks/useBundleSales";
 import { supabase } from "@/integrations/supabase/client";
@@ -434,6 +435,7 @@ function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing,
   setCustomTo: (d: Date | null) => void;
 }) {
   const navigate = useNavigate();
+  const [showTopProductsModal, setShowTopProductsModal] = useState(false);
   const { fmtCurrency: fmtGBP, fmtAxis: fmtAxisGBP, symbol } = useCurrency();
   const { data: liveProducts, isLoading: productsLoading, error: productsError } = useTopProducts(6, bounds);
   const { data: trendData,    isLoading: trendLoading }    = useSalesTrend(30, bounds);
@@ -748,7 +750,7 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
               <h3 className="text-sm font-semibold">Top selling products
                 <span className="text-muted-foreground font-normal ml-1.5">by revenue · {range}</span>
               </h3>
-              <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" onClick={() => navigate("/products")}>
+              <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" onClick={() => setShowTopProductsModal(true)}>
                 View all <ChevronRight size={11} />
               </Button>
             </div>
@@ -1150,6 +1152,13 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
         </CardContent>
       </Card>
     </div>
+
+    <TopProductsModal
+      open={showTopProductsModal}
+      onClose={() => setShowTopProductsModal(false)}
+      bounds={bounds}
+      range={range}
+    />
   );
 }
 
