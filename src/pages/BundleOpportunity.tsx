@@ -8,7 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { exportToCSV } from "@/lib/export";
-import { PackageOpen, Download, Link2, TrendingUp, ShoppingBag, HelpCircle, Bookmark, CheckCircle2, BookmarkCheck } from "lucide-react";
+import { PackageOpen, Download, Link2, TrendingUp, ShoppingBag, HelpCircle, Bookmark, CheckCircle2, BookmarkCheck, ChevronDown, ChevronUp, Receipt } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
@@ -42,6 +42,14 @@ export default function BundleOpportunity() {
   const [minCount, setMinCount] = useState(3);
   const [savedOpen, setSavedOpen] = useState(false);
   const [showExecuted, setShowExecuted] = useState(false);
+  const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set());
+
+  const toggleOrders = (key: string) =>
+    setExpandedOrders(prev => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
   const queryClient = useQueryClient();
 
   const { data: savedBundles } = useQuery({
@@ -124,6 +132,54 @@ export default function BundleOpportunity() {
   });
 
   const maxCount = data?.[0]?.co_occurrence_count ?? 1;
+
+  const BundleOrderList = ({ productAId, productBId }: { productAId: string; productBId: string }) => {
+    const { data: orders, isLoading } = useQuery({
+      queryKey: ["bundle-order-details", storeId, productAId, productBId],
+      queryFn: async () => {
+        const { data, error } = await (supabase as any).rpc("get_bundle_order_details", {
+          p_product_a_id: productAId,
+          p_product_b_id: productBId,
+          p_store_id: storeId ?? null,
+          p_limit: 10,
+        });
+        if (error) throw error;
+        return (data ?? []) as { order_number: string; ordered_at: string; customer_email: string | null; order_total: number }[];
+      },
+    });
+
+    if (isLoading) return (
+      <div className="space-y-1.5 pt-2">
+        {[1, 2, 3].map(i => <Skeleton key={i} className="h-6 w-full" />)}
+      </div>
+    );
+
+    if (!orders?.length) return (
+      <p className="text-xs text-muted-foreground pt-2 text-center">No order data found</p>
+    );
+
+    return (
+      <div className="pt-2 space-y-1">
+        <div className="grid grid-cols-3 text-[10px] font-medium text-muted-foreground uppercase tracking-wide pb-1 border-b">
+          <span>Order</span>
+          <span>Date</span>
+          <span className="text-right">Total</span>
+        </div>
+        {orders.map((o, i) => (
+          <div key={i} className="grid grid-cols-3 text-xs py-1 border-b border-dashed last:border-0">
+            <span className="font-mono text-foreground">{o.order_number}</span>
+            <span className="text-muted-foreground">
+              {o.ordered_at ? new Date(o.ordered_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "—"}
+            </span>
+            <span className="text-right font-medium">{formatCurrency(Number(o.order_total))}</span>
+          </div>
+        ))}
+        {orders.length === 10 && (
+          <p className="text-[10px] text-muted-foreground text-center pt-1">Showing latest 10 orders</p>
+        )}
+      </div>
+    );
+  };
 
   const InventoryBadge = ({ qty }: { qty: number }) => {
     if (qty <= 0) return <span className="inline-flex items-center text-[10px] font-medium text-red-600 bg-red-50 dark:bg-red-950/40 dark:text-red-400 px-1.5 py-0.5 rounded-sm">Out of stock</span>;
@@ -287,6 +343,28 @@ export default function BundleOpportunity() {
                       <div className="font-bold text-sm">{formatCurrency(Number(pair.estimated_bundle_revenue))}</div>
                     </div>
                   </div>
+
+                  {(() => {
+                    const pairKey = `${pair.product_a_id}-${pair.product_b_id}`;
+                    const isExpanded = expandedOrders.has(pairKey);
+                    return (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="w-full text-xs h-7 text-muted-foreground hover:text-foreground"
+                          onClick={() => toggleOrders(pairKey)}
+                        >
+                          <Receipt className="h-3 w-3 mr-1" />
+                          {isExpanded ? "Hide orders" : `View ${pair.co_occurrence_count} orders`}
+                          {isExpanded ? <ChevronUp className="h-3 w-3 ml-1" /> : <ChevronDown className="h-3 w-3 ml-1" />}
+                        </Button>
+                        {isExpanded && (
+                          <BundleOrderList productAId={pair.product_a_id} productBId={pair.product_b_id} />
+                        )}
+                      </>
+                    );
+                  })()}
 
                   {(() => {
                     const already = savedBundles?.find(
