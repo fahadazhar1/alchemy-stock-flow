@@ -20,7 +20,7 @@ const navItems = [
   { title: "Orders",    url: "/orders",    icon: ShoppingCart },
   { title: "Reports",   url: "/reports",   icon: BarChart2 },
   { title: "Product Master", url: "/products", icon: Package },
-  { title: "Manual Sync", url: "/manual-sync", icon: RefreshCw },
+  { title: "Sales Campaign", url: "/manual-sync", icon: RefreshCw },
   { title: "AI Co-Pilot", url: "/ai-copilot", icon: Brain },
   { title: "Auto-Pilot", url: "/auto-pilot", icon: Bot },
   { title: "Approval Queue", url: "/approvals", icon: CheckSquare },

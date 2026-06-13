@@ -21,7 +21,7 @@ const VIEWER_PAGES = [
   { title: "Orders", url: "/orders" },
   { title: "Reports", url: "/reports" },
   { title: "Product Master", url: "/products" },
-  { title: "Manual Sync", url: "/manual-sync" },
+  { title: "Sales Campaign", url: "/manual-sync" },
   { title: "AI Co-Pilot", url: "/ai-copilot" },
   { title: "Auto-Pilot", url: "/auto-pilot" },
   { title: "Approval Queue", url: "/approvals" },
