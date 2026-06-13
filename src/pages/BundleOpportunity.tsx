@@ -8,7 +8,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { exportToCSV } from "@/lib/export";
-import { PackageOpen, Download, Link2, TrendingUp, ShoppingBag, HelpCircle, Bookmark, CheckCircle2, BookmarkCheck, ChevronDown, ChevronUp, Receipt, Copy, Tag } from "lucide-react";
+import { PackageOpen, Download, Link2, TrendingUp, ShoppingBag, HelpCircle, Bookmark, CheckCircle2, BookmarkCheck, ChevronDown, ChevronUp, Receipt, Copy, Tag, FileText } from "lucide-react";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
@@ -136,6 +138,103 @@ export default function BundleOpportunity() {
 
   const maxCount = data?.[0]?.co_occurrence_count ?? 1;
 
+  const exportToPDF = () => {
+    if (!data?.length) return;
+    const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+
+    // Header
+    doc.setFontSize(20);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(20, 20, 20);
+    doc.text("Bundle Opportunity Finder", 14, 18);
+
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(100);
+    doc.text(
+      `Generated: ${new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}   |   Min. co-purchases: ${minCount}   |   Bundle discount: ${discountPct}%   |   ${data.length} pairs found`,
+      14, 26
+    );
+
+    // Divider line
+    doc.setDrawColor(220, 220, 220);
+    doc.line(14, 29, 283, 29);
+
+    const rows = data.map((pair, idx) => {
+      const total = Number(pair.product_a_price) + Number(pair.product_b_price);
+      const bundlePrice = Math.round(total * (1 - discountPct / 100) * 100) / 100;
+      const saving = Math.round((total - bundlePrice) * 100) / 100;
+      const strength = Math.round((pair.co_occurrence_count / maxCount) * 100);
+      const stockA = pair.product_a_inventory <= 0 ? "Out of stock" : pair.product_a_inventory <= 9 ? `Low: ${pair.product_a_inventory}` : String(pair.product_a_inventory);
+      const stockB = pair.product_b_inventory <= 0 ? "Out of stock" : pair.product_b_inventory <= 9 ? `Low: ${pair.product_b_inventory}` : String(pair.product_b_inventory);
+      return [
+        `#${idx + 1}`,
+        `${pair.product_a_name}\n${pair.product_a_sku}`,
+        stockA,
+        `${pair.product_b_name}\n${pair.product_b_sku}`,
+        stockB,
+        `${pair.co_occurrence_count}×`,
+        `${strength}%`,
+        formatCurrency(total),
+        formatCurrency(bundlePrice),
+        formatCurrency(saving),
+      ];
+    });
+
+    autoTable(doc, {
+      startY: 33,
+      head: [["#", "Product A", "Stock", "Product B", "Stock", "Co-buys", "Strength", "Combined", `Bundle (${discountPct}% off)`, "Customer Saves"]],
+      body: rows,
+      styles: { fontSize: 8, cellPadding: 2.5, valign: "middle" },
+      headStyles: { fillColor: [23, 23, 23], textColor: 255, fontStyle: "bold", fontSize: 8 },
+      alternateRowStyles: { fillColor: [249, 249, 249] },
+      columnStyles: {
+        0: { cellWidth: 10, halign: "center" },
+        1: { cellWidth: 58 },
+        2: { cellWidth: 22, halign: "center" },
+        3: { cellWidth: 58 },
+        4: { cellWidth: 22, halign: "center" },
+        5: { cellWidth: 16, halign: "center" },
+        6: { cellWidth: 18, halign: "center" },
+        7: { cellWidth: 24, halign: "right" },
+        8: { cellWidth: 27, halign: "right" },
+        9: { cellWidth: 24, halign: "right" },
+      },
+      didParseCell: (hookData) => {
+        if (hookData.section !== "body") return;
+        const val = String(hookData.cell.raw ?? "");
+        // Stock columns — colour by status
+        if (hookData.column.index === 2 || hookData.column.index === 4) {
+          if (val === "Out of stock") hookData.cell.styles.textColor = [220, 38, 38];
+          else if (val.startsWith("Low:")) hookData.cell.styles.textColor = [180, 100, 0];
+          else hookData.cell.styles.textColor = [5, 120, 85];
+        }
+        // Bundle price — bold + blue
+        if (hookData.column.index === 8) {
+          hookData.cell.styles.fontStyle = "bold";
+          hookData.cell.styles.textColor = [37, 99, 235];
+        }
+        // Saves — green
+        if (hookData.column.index === 9) hookData.cell.styles.textColor = [5, 120, 85];
+      },
+    });
+
+    // Page footer
+    const pageCount = (doc as any).internal.getNumberOfPages();
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i);
+      doc.setFontSize(8);
+      doc.setTextColor(160);
+      doc.text(
+        `Page ${i} of ${pageCount}   |   Inventory Alchemist — Bundle Report`,
+        14,
+        doc.internal.pageSize.height - 8
+      );
+    }
+
+    doc.save(`bundle-opportunities-${new Date().toISOString().slice(0, 10)}.pdf`);
+  };
+
   const BundleOrderList = ({ productAId, productBId }: { productAId: string; productBId: string }) => {
     const { data: orders, isLoading } = useQuery({
       queryKey: ["bundle-order-details", storeId, productAId, productBId],
@@ -241,14 +340,21 @@ export default function BundleOpportunity() {
             data.map(p => ({
               "Product A": p.product_a_name,
               "SKU A": p.product_a_sku,
+              "Stock A": p.product_a_inventory,
               "Product B": p.product_b_name,
               "SKU B": p.product_b_sku,
+              "Stock B": p.product_b_inventory,
               "Times Bought Together": p.co_occurrence_count,
               "Avg Bundle Revenue": p.estimated_bundle_revenue,
+              "Combined Price": (Number(p.product_a_price) + Number(p.product_b_price)).toFixed(2),
+              [`Bundle Price (${discountPct}% off)`]: (Math.round((Number(p.product_a_price) + Number(p.product_b_price)) * (1 - discountPct / 100) * 100) / 100).toFixed(2),
             })),
             "bundle-opportunities"
           )}>
-            <Download className="h-4 w-4 mr-1" /> Export
+            <Download className="h-4 w-4 mr-1" /> CSV
+          </Button>
+          <Button variant="outline" size="sm" onClick={exportToPDF} disabled={!data?.length}>
+            <FileText className="h-4 w-4 mr-1" /> PDF
           </Button>
         </div>
       </div>
