@@ -34,6 +34,7 @@ import { TopProductsModal } from "./components/TopProductsModal";
 import { DeadstockLosersModal } from "./components/DeadstockLosersModal";
 import { useDeadstockPreview, useDeadstockSummary, getDeadstockLabel } from "@/hooks/useDeadstockPreview";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Checkbox } from "@/components/ui/checkbox";
 import { parseISO } from "date-fns";
 import { useSalesKPIs, useCollectionSales, useCustomerMetrics, useFulfillmentMetrics, useDiscountUsage, useTrafficSources, useChannelConversion, useCheckoutAbandonment, useUTMCampaigns } from "@/hooks/useSalesKPIs";
 import { useBundleSales } from "@/hooks/useBundleSales";
@@ -1198,13 +1199,28 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "draft">("all");
   const [showLosersModal, setShowLosersModal] = useState(false);
   const [deadstockFilter, setDeadstockFilter] = useState("all");
+  const [deadstockSelected, setDeadstockSelected] = useState<Set<string>>(new Set());
   const { data, isLoading } = useInventoryDashboard(statusFilter);
   const { data: deadstockData, isLoading: deadstockLoading } = useDeadstockPreview(8, deadstockFilter);
   const { data: deadstockSummary } = useDeadstockSummary();
 
-  function handleCreateDiscount(productId: string) {
-    sessionStorage.setItem("campaign_prefill_products", JSON.stringify([productId]));
+  function handleCreateDiscount(ids: string[]) {
+    sessionStorage.setItem("campaign_prefill_products", JSON.stringify(ids));
     navigate("/manual-sync");
+  }
+
+  function toggleDeadstockRow(id: string) {
+    setDeadstockSelected(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+
+  function toggleDeadstockAll(allIds: string[]) {
+    setDeadstockSelected(prev =>
+      prev.size === allIds.length ? new Set() : new Set(allIds)
+    );
   }
 
   const available   = data?.kpis.available ?? 0;
@@ -1420,7 +1436,7 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
               {(["all", "Overstocked", "Dead 90d", "Dead 60d", "Dead 30d"] as const).map(f => (
                 <button
                   key={f}
-                  onClick={() => setDeadstockFilter(f)}
+                  onClick={() => { setDeadstockFilter(f); setDeadstockSelected(new Set()); }}
                   className={cn(
                     "text-[10px] px-2.5 py-1 rounded-md font-medium transition-colors",
                     deadstockFilter === f
@@ -1434,10 +1450,52 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
             </div>
           </CardHeader>
           <CardContent className="p-0">
+            {(() => {
+              const visibleIds = deadstockData?.products.map(p => p.product_id) ?? [];
+              return deadstockSelected.size > 0 ? (
+                <div className="flex items-center justify-between px-4 py-2 bg-primary/5 border-b border-primary/20">
+                  <span className="text-xs font-medium text-primary">
+                    {deadstockSelected.size} product{deadstockSelected.size > 1 ? "s" : ""} selected
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 text-xs text-muted-foreground"
+                      onClick={() => setDeadstockSelected(new Set())}
+                    >
+                      Clear
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="h-7 text-xs gap-1.5"
+                      onClick={() => handleCreateDiscount(Array.from(deadstockSelected))}
+                    >
+                      <Tag size={11} /> Create discount for {deadstockSelected.size}
+                    </Button>
+                  </div>
+                </div>
+              ) : null;
+            })()}
             <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
                 <tr className="border-b">
+                  <th className="pl-4 pr-2 py-2 w-8">
+                    {(() => {
+                      const visibleIds = deadstockData?.products.map(p => p.product_id) ?? [];
+                      const allChecked = visibleIds.length > 0 && visibleIds.every(id => deadstockSelected.has(id));
+                      const someChecked = visibleIds.some(id => deadstockSelected.has(id));
+                      return (
+                        <Checkbox
+                          checked={allChecked}
+                          data-state={someChecked && !allChecked ? "indeterminate" : undefined}
+                          onCheckedChange={() => toggleDeadstockAll(visibleIds)}
+                          className="h-3.5 w-3.5"
+                        />
+                      );
+                    })()}
+                  </th>
                   {["Product","Stock","Status","Unit Price","Value at Risk","Last Sale",""].map((h, i) => (
                     <th key={i} className={cn("px-4 py-2 font-medium text-muted-foreground text-left",
                       i >= 1 && i !== 2 && i !== 6 && "text-right")}>{h}</th>
@@ -1475,7 +1533,14 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
                       } catch {}
                     }
                     return (
-                      <tr key={p.product_id} className={cn("border-b last:border-b-0 hover:bg-muted/40 transition-colors", ROW_BORDER[label] ?? "")}>
+                      <tr key={p.product_id} className={cn("border-b last:border-b-0 hover:bg-muted/40 transition-colors", ROW_BORDER[label] ?? "", deadstockSelected.has(p.product_id) && "bg-primary/5")}>
+                        <td className="pl-4 pr-2 py-2.5 w-8">
+                          <Checkbox
+                            checked={deadstockSelected.has(p.product_id)}
+                            onCheckedChange={() => toggleDeadstockRow(p.product_id)}
+                            className="h-3.5 w-3.5"
+                          />
+                        </td>
                         <td className="px-4 py-2.5">
                           <div className="font-medium">{p.product_name}</div>
                           <div className="font-mono text-muted-foreground text-[10px]">{p.product_type ?? ""}{p.sku ? ` · ${p.sku}` : ""}</div>
@@ -1497,7 +1562,7 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end" className="text-xs w-44">
-                              <DropdownMenuItem className="gap-2 text-xs cursor-pointer" onClick={() => handleCreateDiscount(p.product_id)}>
+                              <DropdownMenuItem className="gap-2 text-xs cursor-pointer" onClick={() => handleCreateDiscount([p.product_id])}>
                                 <Tag size={12} /> Create discount
                               </DropdownMenuItem>
                             </DropdownMenuContent>
