@@ -20,9 +20,11 @@ type BundlePair = {
   product_a_id: string;
   product_a_name: string;
   product_a_sku: string;
+  product_a_inventory: number;
   product_b_id: string;
   product_b_name: string;
   product_b_sku: string;
+  product_b_inventory: number;
   co_occurrence_count: number;
   estimated_bundle_revenue: number;
 };
@@ -122,6 +124,12 @@ export default function BundleOpportunity() {
   });
 
   const maxCount = data?.[0]?.co_occurrence_count ?? 1;
+
+  const InventoryBadge = ({ qty }: { qty: number }) => {
+    if (qty <= 0) return <span className="inline-flex items-center text-[10px] font-medium text-red-600 bg-red-50 dark:bg-red-950/40 dark:text-red-400 px-1.5 py-0.5 rounded-sm">Out of stock</span>;
+    if (qty <= 9) return <span className="inline-flex items-center text-[10px] font-medium text-amber-600 bg-amber-50 dark:bg-amber-950/40 dark:text-amber-400 px-1.5 py-0.5 rounded-sm">Low: {qty}</span>;
+    return <span className="inline-flex items-center text-[10px] font-medium text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 dark:text-emerald-400 px-1.5 py-0.5 rounded-sm">{qty} in stock</span>;
+  };
 
   if (isLoading) return (
     <div className="space-y-6">
@@ -232,9 +240,12 @@ export default function BundleOpportunity() {
                   <div className="space-y-2">
                     <div className="flex items-start gap-2 p-2 rounded-lg bg-muted/50">
                       <div className="h-6 w-6 rounded bg-primary/10 flex items-center justify-center shrink-0 mt-0.5 text-[10px] font-bold text-primary">A</div>
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex-1">
                         <p className="text-sm font-medium leading-snug line-clamp-2">{pair.product_a_name}</p>
-                        <p className="font-mono text-[11px] text-muted-foreground">{pair.product_a_sku}</p>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <p className="font-mono text-[11px] text-muted-foreground">{pair.product_a_sku}</p>
+                          <InventoryBadge qty={pair.product_a_inventory} />
+                        </div>
                       </div>
                     </div>
 
@@ -246,9 +257,12 @@ export default function BundleOpportunity() {
 
                     <div className="flex items-start gap-2 p-2 rounded-lg bg-muted/50">
                       <div className="h-6 w-6 rounded bg-secondary/50 flex items-center justify-center shrink-0 mt-0.5 text-[10px] font-bold">B</div>
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex-1">
                         <p className="text-sm font-medium leading-snug line-clamp-2">{pair.product_b_name}</p>
-                        <p className="font-mono text-[11px] text-muted-foreground">{pair.product_b_sku}</p>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <p className="font-mono text-[11px] text-muted-foreground">{pair.product_b_sku}</p>
+                          <InventoryBadge qty={pair.product_b_inventory} />
+                        </div>
                       </div>
                     </div>
                   </div>
