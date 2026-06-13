@@ -31,6 +31,10 @@ type BundlePair = {
   product_b_price: number;
   co_occurrence_count: number;
   estimated_bundle_revenue: number;
+  lift: number | null;
+  confidence_a_to_b: number | null;
+  current_half_count: number;
+  prev_half_count: number;
 };
 
 type BundleSuggestion = BundlePair & {
@@ -130,13 +134,12 @@ export default function BundleOpportunity() {
       const { data, error } = await (supabase as any).rpc("get_bundle_opportunities", {
         p_store_id: storeId ?? null,
         p_min_count: minCount,
+        p_days: 90,
       });
       if (error) throw error;
       return (data ?? []) as BundlePair[];
     },
   });
-
-  const maxCount = data?.[0]?.co_occurrence_count ?? 1;
 
   const exportToPDF = () => {
     if (!data?.length) return;
@@ -164,7 +167,8 @@ export default function BundleOpportunity() {
       const total = Number(pair.product_a_price) + Number(pair.product_b_price);
       const bundlePrice = Math.round(total * (1 - discountPct / 100) * 100) / 100;
       const saving = Math.round((total - bundlePrice) * 100) / 100;
-      const strength = Math.round((pair.co_occurrence_count / maxCount) * 100);
+      const trendDelta = pair.current_half_count - pair.prev_half_count;
+      const trendStr = trendDelta > 0 ? `▲ +${trendDelta}` : trendDelta < 0 ? `▼ ${trendDelta}` : "→ stable";
       const stockA = pair.product_a_inventory <= 0 ? "Out of stock" : pair.product_a_inventory <= 9 ? `Low: ${pair.product_a_inventory}` : String(pair.product_a_inventory);
       const stockB = pair.product_b_inventory <= 0 ? "Out of stock" : pair.product_b_inventory <= 9 ? `Low: ${pair.product_b_inventory}` : String(pair.product_b_inventory);
       return [
@@ -174,7 +178,8 @@ export default function BundleOpportunity() {
         `${pair.product_b_name}\n${pair.product_b_sku}`,
         stockB,
         `${pair.co_occurrence_count}×`,
-        `${strength}%`,
+        pair.lift !== null ? `${pair.lift.toFixed(1)}×` : "—",
+        trendStr,
         formatCurrency(total),
         formatCurrency(bundlePrice),
         formatCurrency(saving),
@@ -183,39 +188,50 @@ export default function BundleOpportunity() {
 
     autoTable(doc, {
       startY: 33,
-      head: [["#", "Product A", "Stock", "Product B", "Stock", "Co-buys", "Strength", "Combined", `Bundle (${discountPct}% off)`, "Customer Saves"]],
+      head: [["#", "Product A", "Stock", "Product B", "Stock", "Co-buys", "Lift", "Trend", "Combined", `Bundle (${discountPct}% off)`, "Customer Saves"]],
       body: rows,
-      styles: { fontSize: 8, cellPadding: 2.5, valign: "middle" },
-      headStyles: { fillColor: [23, 23, 23], textColor: 255, fontStyle: "bold", fontSize: 8 },
+      styles: { fontSize: 7.5, cellPadding: 2.5, valign: "middle" },
+      headStyles: { fillColor: [23, 23, 23], textColor: 255, fontStyle: "bold", fontSize: 7.5 },
       alternateRowStyles: { fillColor: [249, 249, 249] },
       columnStyles: {
-        0: { cellWidth: 10, halign: "center" },
-        1: { cellWidth: 58 },
-        2: { cellWidth: 22, halign: "center" },
-        3: { cellWidth: 58 },
-        4: { cellWidth: 22, halign: "center" },
-        5: { cellWidth: 16, halign: "center" },
-        6: { cellWidth: 18, halign: "center" },
-        7: { cellWidth: 24, halign: "right" },
-        8: { cellWidth: 27, halign: "right" },
+        0: { cellWidth: 9,  halign: "center" },
+        1: { cellWidth: 52 },
+        2: { cellWidth: 20, halign: "center" },
+        3: { cellWidth: 52 },
+        4: { cellWidth: 20, halign: "center" },
+        5: { cellWidth: 14, halign: "center" },
+        6: { cellWidth: 16, halign: "center" },
+        7: { cellWidth: 16, halign: "center" },
+        8: { cellWidth: 22, halign: "right" },
         9: { cellWidth: 24, halign: "right" },
+        10: { cellWidth: 22, halign: "right" },
       },
       didParseCell: (hookData) => {
         if (hookData.section !== "body") return;
         const val = String(hookData.cell.raw ?? "");
-        // Stock columns — colour by status
         if (hookData.column.index === 2 || hookData.column.index === 4) {
           if (val === "Out of stock") hookData.cell.styles.textColor = [220, 38, 38];
           else if (val.startsWith("Low:")) hookData.cell.styles.textColor = [180, 100, 0];
           else hookData.cell.styles.textColor = [5, 120, 85];
         }
-        // Bundle price — bold + blue
-        if (hookData.column.index === 8) {
+        // Lift — colour by score
+        if (hookData.column.index === 6) {
+          const liftVal = parseFloat(val);
+          if (!isNaN(liftVal)) {
+            hookData.cell.styles.textColor = liftVal >= 2 ? [5, 120, 85] : liftVal >= 1.5 ? [180, 100, 0] : [100, 100, 100];
+            hookData.cell.styles.fontStyle = "bold";
+          }
+        }
+        // Trend — green up, red down
+        if (hookData.column.index === 7) {
+          if (val.startsWith("▲")) hookData.cell.styles.textColor = [5, 120, 85];
+          else if (val.startsWith("▼")) hookData.cell.styles.textColor = [220, 38, 38];
+        }
+        if (hookData.column.index === 9) {
           hookData.cell.styles.fontStyle = "bold";
           hookData.cell.styles.textColor = [37, 99, 235];
         }
-        // Saves — green
-        if (hookData.column.index === 9) hookData.cell.styles.textColor = [5, 120, 85];
+        if (hookData.column.index === 10) hookData.cell.styles.textColor = [5, 120, 85];
       },
     });
 
@@ -283,6 +299,28 @@ export default function BundleOpportunity() {
     );
   };
 
+  const LiftBadge = ({ lift }: { lift: number | null }) => {
+    if (lift === null) return null;
+    const [cls, label] =
+      lift >= 3   ? ["text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 dark:text-emerald-400", "Strong"]
+      : lift >= 2 ? ["text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 dark:text-emerald-400", "Good"]
+      : lift >= 1.5 ? ["text-amber-600 bg-amber-50 dark:bg-amber-950/40 dark:text-amber-400", "Moderate"]
+      : lift >= 1.2 ? ["text-blue-600 bg-blue-50 dark:bg-blue-950/40 dark:text-blue-400", "Weak"]
+      : ["text-muted-foreground bg-muted", "Noise"];
+    return (
+      <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-sm ${cls}`}>
+        {lift.toFixed(1)}× lift · {label}
+      </span>
+    );
+  };
+
+  const TrendBadge = ({ current, prev }: { current: number; prev: number }) => {
+    const delta = current - prev;
+    if (delta > 0) return <span className="text-[10px] font-medium text-emerald-600 dark:text-emerald-400">▲ +{delta}</span>;
+    if (delta < 0) return <span className="text-[10px] font-medium text-red-500 dark:text-red-400">▼ {delta}</span>;
+    return <span className="text-[10px] text-muted-foreground">→ stable</span>;
+  };
+
   const InventoryBadge = ({ qty }: { qty: number }) => {
     if (qty <= 0) return <span className="inline-flex items-center text-[10px] font-medium text-red-600 bg-red-50 dark:bg-red-950/40 dark:text-red-400 px-1.5 py-0.5 rounded-sm">Out of stock</span>;
     if (qty <= 9) return <span className="inline-flex items-center text-[10px] font-medium text-amber-600 bg-amber-50 dark:bg-amber-950/40 dark:text-amber-400 px-1.5 py-0.5 rounded-sm">Low: {qty}</span>;
@@ -316,10 +354,12 @@ export default function BundleOpportunity() {
                 <ul className="space-y-1.5 text-muted-foreground list-disc list-inside">
                   <li>Looks at all orders from the <span className="text-foreground font-medium">last 90 days</span></li>
                   <li>Finds products bought <span className="text-foreground font-medium">together in the same order</span></li>
-                  <li><span className="text-foreground font-medium">Min. co-purchases</span> hides weak pairs — raise it for stronger signals only</li>
-                  <li><span className="text-foreground font-medium">Bundle strength</span> ranks each pair against the top pair (top pair = 100%)</li>
-                  <li><span className="text-foreground font-medium">Avg revenue</span> is the combined spend when both products are bought together</li>
-                  <li>Use these insights to create <span className="text-foreground font-medium">bundles or promotions</span> on your store</li>
+                  <li><span className="text-foreground font-medium">Lift</span> measures genuine affinity — how much more likely customers buy these together vs. by chance. Lift &gt; 2× = strong signal</li>
+                  <li><span className="text-foreground font-medium">Confidence</span> = % of buyers who purchased A and also bought B in the same order</li>
+                  <li><span className="text-foreground font-medium">Trend (▲/▼)</span> compares recent 45 days vs the 45 days before — shows if the pairing is growing or fading</li>
+                  <li><span className="text-foreground font-medium">Min. co-purchases</span> hides rare pairs — raise it to see only strong, repeated signals</li>
+                  <li>Pairs are sorted by <span className="text-foreground font-medium">Lift first</span>, so the most meaningful bundles appear at the top</li>
+                  <li><span className="text-foreground font-medium">Avg revenue</span> is the combined spend when both products are in the same order</li>
                 </ul>
               </PopoverContent>
             </Popover>
@@ -400,7 +440,6 @@ export default function BundleOpportunity() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {data.map((pair, idx) => {
-            const strength = Math.round((pair.co_occurrence_count / maxCount) * 100);
             return (
               <Card key={`${pair.product_a_id}-${pair.product_b_id}`} className="overflow-hidden">
                 <CardContent className="p-4 space-y-3">
@@ -409,9 +448,12 @@ export default function BundleOpportunity() {
                     <Badge variant="secondary" className="text-[11px] font-medium">
                       #{idx + 1}
                     </Badge>
-                    <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                      <ShoppingBag className="h-3 w-3" />
-                      <span className="font-semibold text-foreground">{pair.co_occurrence_count}×</span> together
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <div className="flex items-center gap-1">
+                        <ShoppingBag className="h-3 w-3" />
+                        <span className="font-semibold text-foreground">{pair.co_occurrence_count}×</span> together
+                      </div>
+                      <TrendBadge current={pair.current_half_count} prev={pair.prev_half_count} />
                     </div>
                   </div>
 
@@ -476,20 +518,16 @@ export default function BundleOpportunity() {
                     ) : null;
                   })()}
 
-                  <div className="pt-1 border-t flex items-center justify-between">
-                    <div className="space-y-1 flex-1 mr-4">
-                      <div className="flex justify-between text-[11px] text-muted-foreground">
-                        <span>Bundle strength</span>
-                        <span>{strength}%</span>
-                      </div>
-                      <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
-                        <div
-                          className="h-full rounded-full bg-primary transition-all"
-                          style={{ width: `${strength}%` }}
-                        />
-                      </div>
+                  <div className="pt-1 border-t flex items-center justify-between gap-3">
+                    <div className="flex-1 space-y-1">
+                      <LiftBadge lift={pair.lift} />
+                      {pair.confidence_a_to_b !== null && pair.confidence_a_to_b > 0 && (
+                        <p className="text-[10px] text-muted-foreground">
+                          {pair.confidence_a_to_b.toFixed(0)}% of A buyers also buy B
+                        </p>
+                      )}
                     </div>
-                    <div className="text-right">
+                    <div className="text-right shrink-0">
                       <div className="text-xs text-muted-foreground flex items-center gap-1 justify-end">
                         <TrendingUp className="h-3 w-3" /> Avg revenue
                       </div>
