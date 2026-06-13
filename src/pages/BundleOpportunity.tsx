@@ -8,7 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { exportToCSV } from "@/lib/export";
-import { PackageOpen, Download, Link2, TrendingUp, ShoppingBag, HelpCircle, Bookmark, CheckCircle2, BookmarkCheck, ChevronDown, ChevronUp, Receipt } from "lucide-react";
+import { PackageOpen, Download, Link2, TrendingUp, ShoppingBag, HelpCircle, Bookmark, CheckCircle2, BookmarkCheck, ChevronDown, ChevronUp, Receipt, Copy, Tag } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
@@ -21,10 +21,12 @@ type BundlePair = {
   product_a_name: string;
   product_a_sku: string;
   product_a_inventory: number;
+  product_a_price: number;
   product_b_id: string;
   product_b_name: string;
   product_b_sku: string;
   product_b_inventory: number;
+  product_b_price: number;
   co_occurrence_count: number;
   estimated_bundle_revenue: number;
 };
@@ -43,6 +45,7 @@ export default function BundleOpportunity() {
   const [savedOpen, setSavedOpen] = useState(false);
   const [showExecuted, setShowExecuted] = useState(false);
   const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set());
+  const [discountPct, setDiscountPct] = useState(10);
 
   const toggleOrders = (key: string) =>
     setExpandedOrders(prev => {
@@ -250,7 +253,7 @@ export default function BundleOpportunity() {
         </div>
       </div>
 
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-4 flex-wrap">
         <div className="flex items-center gap-2">
           <Label className="text-sm whitespace-nowrap">Min. co-purchases</Label>
           <Input
@@ -261,6 +264,19 @@ export default function BundleOpportunity() {
             onChange={e => setMinCount(Math.max(1, Number(e.target.value)))}
           />
           <Button size="sm" variant="outline" onClick={() => refetch()}>Apply</Button>
+        </div>
+        <div className="flex items-center gap-2">
+          <Tag className="h-3.5 w-3.5 text-muted-foreground" />
+          <Label className="text-sm whitespace-nowrap">Bundle discount</Label>
+          <Input
+            type="number"
+            min="1"
+            max="50"
+            className="h-8 w-16"
+            value={discountPct}
+            onChange={e => setDiscountPct(Math.min(50, Math.max(1, Number(e.target.value))))}
+          />
+          <span className="text-sm text-muted-foreground">%</span>
         </div>
         {data && (
           <Badge variant="secondary" className="text-xs">
@@ -322,6 +338,37 @@ export default function BundleOpportunity() {
                       </div>
                     </div>
                   </div>
+
+                  {(() => {
+                    const total = Number(pair.product_a_price) + Number(pair.product_b_price);
+                    const bundlePrice = Math.round(total * (1 - discountPct / 100) * 100) / 100;
+                    const saving = Math.round((total - bundlePrice) * 100) / 100;
+                    return total > 0 ? (
+                      <div className="rounded-lg bg-primary/5 border border-primary/20 p-2.5 space-y-1.5">
+                        <div className="flex items-center justify-between text-xs text-muted-foreground">
+                          <span>Products total</span>
+                          <span className="line-through">{formatCurrency(total)}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-semibold text-primary">Bundle price ({discountPct}% off)</span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-sm font-bold text-primary">{formatCurrency(bundlePrice)}</span>
+                            <button
+                              onClick={() => { navigator.clipboard.writeText(bundlePrice.toFixed(2)); toast.success("Bundle price copied!"); }}
+                              className="h-5 w-5 flex items-center justify-center rounded hover:bg-primary/10 text-primary transition-colors"
+                              title="Copy price"
+                            >
+                              <Copy className="h-3 w-3" />
+                            </button>
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between text-[11px] text-emerald-600 dark:text-emerald-400">
+                          <span>Customer saves</span>
+                          <span className="font-medium">{formatCurrency(saving)}</span>
+                        </div>
+                      </div>
+                    ) : null;
+                  })()}
 
                   <div className="pt-1 border-t flex items-center justify-between">
                     <div className="space-y-1 flex-1 mr-4">
