@@ -23,11 +23,18 @@ export function useSonicTracking(trackingNumbers: (string | null | undefined)[])
     enabled: valid.length > 0,
     staleTime: 5 * 60 * 1000, // matches cron frequency
     queryFn: async () => {
-      const { data, error } = await supabase.functions.invoke("sonic-tracking", {
-        body: { tracking_numbers: valid },
-      });
+      const { data, error } = await supabase
+        .from("sonic_cache")
+        .select("tracking_number,courier,courier_status,courier_payment_status,shipping_charges,fuel_surcharge,gst,cod_amount,wht,cod_sst,remittance_date")
+        .in("tracking_number", valid);
       if (error) throw error;
-      return (data?.data ?? {}) as Record<string, SonicTrackingData | null>;
+      const map: Record<string, SonicTrackingData | null> = {};
+      for (const row of data ?? []) {
+        const { tracking_number, ...rest } = row;
+        map[tracking_number] = rest as SonicTrackingData;
+      }
+      for (const tn of valid) if (!(tn in map)) map[tn] = null;
+      return map;
     },
   });
 }
