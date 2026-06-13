@@ -526,6 +526,7 @@ function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing,
   }, [salesKPIs, liveProducts, channelData, bounds.label]);
 
   return (
+    <>
     <div className="space-y-3.5">
       {/* Section header */}
       <div className="flex items-center justify-between flex-wrap gap-2">
@@ -1159,6 +1160,7 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
       bounds={bounds}
       range={range}
     />
+    </>
   );
 }
 
