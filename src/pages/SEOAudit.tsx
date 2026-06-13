@@ -157,9 +157,11 @@ function EditDialog({
   return (
     <Dialog open onOpenChange={open => !open && onClose()}>
       <DialogContent className="max-w-xl">
-        <DialogHeader>
-          <DialogTitle className="text-base truncate">{product.product_name}</DialogTitle>
-          <p className="text-xs text-muted-foreground font-mono">{product.sku}</p>
+        <DialogHeader className="pr-6">
+          <DialogTitle className="text-sm font-semibold leading-snug line-clamp-2 break-words">
+            {product.product_name}
+          </DialogTitle>
+          <p className="text-xs text-muted-foreground font-mono mt-0.5">{product.sku}</p>
         </DialogHeader>
 
         <div className="space-y-4 py-1">
@@ -384,15 +386,24 @@ export default function SEOAudit() {
   const { data, isLoading } = useQuery({
     queryKey: ["seo-audit", storeId],
     queryFn: async () => {
-      let q = (supabase as any)
-        .from("v_seo_audit")
-        .select("product_id, product_name, sku, collection_name, product_type, vendor_name, total_inventory, store_id, meta_title, meta_description, image_alt_text")
-        .order("product_name", { ascending: true })
-        .limit(10000);
-      if (storeId) q = q.eq("store_id", storeId);
-      const { data, error } = await q;
-      if (error) throw error;
-      return (data ?? []) as ProductRow[];
+      const PAGE = 1000;
+      const all: ProductRow[] = [];
+      let from = 0;
+      while (true) {
+        let q = (supabase as any)
+          .from("v_seo_audit")
+          .select("product_id, product_name, sku, collection_name, product_type, vendor_name, total_inventory, store_id, meta_title, meta_description, image_alt_text")
+          .order("product_name", { ascending: true })
+          .range(from, from + PAGE - 1);
+        if (storeId) q = q.eq("store_id", storeId);
+        const { data, error } = await q;
+        if (error) throw error;
+        if (!data?.length) break;
+        all.push(...(data as ProductRow[]));
+        if (data.length < PAGE) break;
+        from += PAGE;
+      }
+      return all;
     },
   });
 
