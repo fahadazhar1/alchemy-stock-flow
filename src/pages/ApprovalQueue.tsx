@@ -22,7 +22,7 @@ interface CampaignItem {
   action_status: string | null;
 }
 
-function CampaignProducts({ campaignId }: { campaignId: string }) {
+function CampaignProducts({ campaignId, discountPercent }: { campaignId: string; discountPercent?: number | null }) {
   const { formatCurrency } = useCurrency();
   const { data, isLoading } = useQuery({
     queryKey: ["campaign-items", campaignId],
@@ -93,7 +93,9 @@ function CampaignProducts({ campaignId }: { campaignId: string }) {
           </TableHeader>
           <TableBody>
             {data.map(item => {
-              const change = item.old_price && item.new_price
+              const change = discountPercent != null
+                ? (-discountPercent).toFixed(1)
+                : item.old_price && item.new_price
                 ? (((item.new_price - item.old_price) / item.old_price) * 100).toFixed(1)
                 : null;
               return (
@@ -174,7 +176,7 @@ function CampaignRow({
       {expanded && (
         <TableRow>
           <TableCell colSpan={isPending ? 5 : 6} className="p-0">
-            <CampaignProducts campaignId={c.id} />
+            <CampaignProducts campaignId={c.id} discountPercent={c.discount_percent} />
           </TableCell>
         </TableRow>
       )}
