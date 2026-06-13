@@ -1,6 +1,6 @@
 import {
   LayoutDashboard, Package, RefreshCw, Brain, Bot, FileText,
-  BarChart3, Truck, CheckSquare, FlaskConical, Clock, Settings, Beaker, Store,
+  BarChart3, Truck, CheckSquare, FlaskConical, Clock, Settings, BookOpen, Store,
   ShoppingCart, BarChart2, ListOrdered, Activity, LogOut,
   PackageCheck, ClipboardList, Tag, Archive, PackageOpen, Search, Globe2,
 } from "lucide-react";
@@ -59,11 +59,11 @@ export function AppSidebar() {
           <SidebarGroupLabel>
             {!collapsed && (
               <div className="flex items-center gap-2">
-                <Beaker className="h-4 w-4 text-sidebar-primary" />
-                <span className="font-bold text-sidebar-primary">Inventory Alchemist</span>
+                <BookOpen className="h-4 w-4 text-sidebar-primary" />
+                <span className="font-bold text-sidebar-foreground tracking-wide">Darussalam</span>
               </div>
             )}
-            {collapsed && <Beaker className="h-4 w-4 text-sidebar-primary" />}
+            {collapsed && <BookOpen className="h-4 w-4 text-sidebar-primary" />}
           </SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>

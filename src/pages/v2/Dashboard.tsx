@@ -38,7 +38,7 @@ import { type DateRangeKey, type DateBounds, getDateBounds, getCustomDateBounds,
 
 // ─── Sparkline ───────────────────────────────────────────────────────────────
 
-function Sparkline({ data, color = "#6366f1" }: { data: number[]; color?: string }) {
+function Sparkline({ data, color = "#1ba4e2" }: { data: number[]; color?: string }) {
   const d = data.map((v, i) => ({ i, v }));
   return (
     <AreaChart width={70} height={26} data={d} margin={{ top: 2, right: 0, left: 0, bottom: 0 }}>
@@ -281,7 +281,7 @@ function SyncProgressBanner({ storeName, stage, recordsSynced, status }: {
           ? "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300"
           : done
             ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
-            : "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300"
+            : "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
       )}>
         {storeName}
       </span>
@@ -292,23 +292,23 @@ function SyncProgressBanner({ storeName, stage, recordsSynced, status }: {
       ) : done ? (
         <CheckSquare size={13} className="shrink-0 text-emerald-600" />
       ) : (
-        <Loader2 size={13} className="shrink-0 animate-spin text-indigo-500 dark:text-indigo-400" />
+        <Loader2 size={13} className="shrink-0 animate-spin text-emerald-600 dark:text-emerald-400" />
       )}
 
       {/* Stage label */}
       <span className={cn("shrink-0 text-xs font-medium w-36",
-        failed ? "text-red-600" : done ? "text-emerald-700 dark:text-emerald-400" : "text-indigo-700 dark:text-indigo-300")}>
+        failed ? "text-red-600" : done ? "text-emerald-700 dark:text-emerald-400" : "text-emerald-700 dark:text-emerald-400")}>
         {failed ? "Sync failed" : done ? "Sync complete" : `${label}…`}
       </span>
 
       {/* Progress bar */}
       {!done && !failed ? (
         <>
-          <div className="flex-1 h-1.5 bg-indigo-200/60 dark:bg-indigo-900/60 rounded-full overflow-hidden min-w-[60px]">
-            <div className="h-full rounded-full bg-indigo-500 dark:bg-indigo-400 transition-all duration-700 ease-out"
+          <div className="flex-1 h-1.5 bg-emerald-200/60 dark:bg-emerald-900/60 rounded-full overflow-hidden min-w-[60px]">
+            <div className="h-full rounded-full bg-emerald-600 dark:bg-emerald-500 transition-all duration-700 ease-out"
               style={{ width: `${pct}%` }} />
           </div>
-          <span className="text-xs font-bold tabular-nums text-indigo-600 dark:text-indigo-400 shrink-0 w-9 text-right">
+          <span className="text-xs font-bold tabular-nums text-emerald-700 dark:text-emerald-400 shrink-0 w-9 text-right">
             {pct}%
           </span>
           <span className="text-xs text-muted-foreground shrink-0">
@@ -578,20 +578,20 @@ function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing,
         </div>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">
-          <KpiCard icon={Banknote} iconColor="#4f46e5" iconBg="#eef2ff"
+          <KpiCard icon={Banknote} iconColor="#013220" iconBg="#e8f5ee"
             label={`Revenue (${range})`} value={fmtGBP(salesKPIs?.revenueMTD ?? 0)}
             delta={salesKPIs?.revenueDelta ?? undefined}
             deltaUp={(salesKPIs?.revenueDelta ?? 0) >= 0}
             deltaLabel={comparePeriodLabel(range)}
             prevValue={salesKPIs ? `prev ${fmtGBP(salesKPIs.prevRevenue)}` : undefined}
-            sparkData={sparkRev} sparkColor="#6366f1" />
-          <KpiCard icon={ShoppingCart} iconColor="#7c3aed" iconBg="#ede9fe"
+            sparkData={sparkRev} sparkColor="#1ba4e2" />
+          <KpiCard icon={ShoppingCart} iconColor="#265b48" iconBg="#d4ede6"
             label={`Orders (${range})`} value={fmtNum(salesKPIs?.ordersMTD ?? 0)}
             delta={salesKPIs?.ordersDelta ?? undefined}
             deltaUp={(salesKPIs?.ordersDelta ?? 0) >= 0}
             deltaLabel={comparePeriodLabel(range)}
             prevValue={salesKPIs ? `prev ${fmtNum(salesKPIs.prevOrders)}` : undefined}
-            sparkData={sparkOrd} sparkColor="#8b5cf6" />
+            sparkData={sparkOrd} sparkColor="#1ba4e2" />
           <KpiCard icon={CreditCard} iconColor="#0891b2" iconBg="#cffafe"
             label="Avg. Order Value" value={fmtGBP(salesKPIs?.aov ?? 0)}
             footer={`${fmtNum(salesKPIs?.ordersMTD ?? 0)} orders`} />
@@ -602,7 +602,7 @@ function SalesSection({ bounds, range, onRangeChange, onSyncStart, syncing,
             label="Refund rate (orders)"
             value={salesKPIs ? `${salesKPIs.refundRate}%` : "—"}
             footer={salesKPIs ? `${fmtNum(salesKPIs.ordersMTD > 0 ? Math.round(salesKPIs.refundRate * salesKPIs.ordersMTD / 100) : 0)} orders refunded` : "—"} />
-          <KpiCard icon={ReceiptText} iconColor="#7c3aed" iconBg="#ede9fe"
+          <KpiCard icon={ReceiptText} iconColor="#da3c24" iconBg="#fdecea"
             label={`Refund rate (${symbol})`}
 value={salesKPIs ? `${salesKPIs.refundAmountRate ?? 0}%` : "—"}
 footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"} />
@@ -622,12 +622,12 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
             footer={customerMetrics?.totalCustomers ? `${fmtNum(customerMetrics.newCustomers)} customers · ${fmtGBP(customerMetrics.newRevenue)}` : "Sync to populate"}
             progress={customerMetrics?.totalCustomers ? customerMetrics.newPct : 0}
             progressColor="#0891b2" />
-          <KpiCard icon={Repeat2} iconColor="#7c3aed" iconBg="#ede9fe"
+          <KpiCard icon={Repeat2} iconColor="#265b48" iconBg="#d4ede6"
             label="Returning Customers"
             value={customerMetrics?.totalCustomers ? `${customerMetrics.returningPct.toFixed(1)}%` : "—"}
             footer={customerMetrics?.totalCustomers ? `${fmtNum(customerMetrics.returningCustomers)} customers · ${fmtGBP(customerMetrics.returningRevenue)}` : "Sync to populate"}
             progress={customerMetrics?.totalCustomers ? customerMetrics.returningPct : 0}
-            progressColor="#7c3aed" />
+            progressColor="#265b48" />
           <KpiCard icon={Clock} iconColor="#d97706" iconBg="#fef3c7"
             label="Avg. fulfillment time"
             value={fulfillmentMetrics ? fmtLag(fulfillmentMetrics.avgLagHours) : "—"}
@@ -661,9 +661,9 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
                   <span className="text-muted-foreground font-normal ml-1.5">{bounds.label}</span>
                 </h3>
                 <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                  <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-0.5 bg-indigo-500 rounded" />Revenue</span>
-                  <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-0.5 bg-indigo-300 rounded" style={{ borderTop: "2px dashed #a5b4fc" }} />Prev Revenue</span>
-                  <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-0.5 bg-violet-400 rounded" style={{ borderTop: "2px dashed #c4b5fd" }} />Orders</span>
+                  <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-0.5 rounded" style={{ background: "#1ba4e2" }} />Revenue</span>
+                  <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-0.5 rounded" style={{ borderTop: "2px dashed #7dd3ea" }} />Prev Revenue</span>
+                  <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-0.5 rounded" style={{ borderTop: "2px dashed #8fbfaf" }} />Orders</span>
                   {range === "MTD" && daysRemaining > 0 && (
                     <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-0.5 rounded" style={{ borderTop: "2px dashed #f59e0b" }} />Projected</span>
                   )}
@@ -687,8 +687,8 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
                 <ComposedChart data={extendedTrendData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
                   <defs>
                     <linearGradient id="trendGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#6366f1" stopOpacity={0.25} />
-                      <stop offset="100%" stopColor="#6366f1" stopOpacity={0} />
+                      <stop offset="0%" stopColor="#1ba4e2" stopOpacity={0.25} />
+                      <stop offset="100%" stopColor="#1ba4e2" stopOpacity={0} />
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
@@ -696,10 +696,10 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
                   <YAxis yAxisId="left" tickFormatter={fmtAxisGBP} tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} width={40} />
                   <YAxis yAxisId="right" orientation="right" hide />
                   <Tooltip content={<TrendTooltip />} />
-                  <Area yAxisId="left" type="monotone" dataKey="revenue" fill="url(#trendGrad)" stroke="#6366f1" strokeWidth={2} dot={false} isAnimationActive={false} />
-                  <Line yAxisId="left" type="monotone" dataKey="prevRevenue" stroke="#a5b4fc" strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} />
-                  <Line yAxisId="right" type="monotone" dataKey="orders" stroke="#8b5cf6" strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} />
-                  <Line yAxisId="right" type="monotone" dataKey="prevOrders" stroke="#c4b5fd" strokeWidth={1} strokeDasharray="2 4" dot={false} isAnimationActive={false} />
+                  <Area yAxisId="left" type="monotone" dataKey="revenue" fill="url(#trendGrad)" stroke="#1ba4e2" strokeWidth={2} dot={false} isAnimationActive={false} />
+                  <Line yAxisId="left" type="monotone" dataKey="prevRevenue" stroke="#7dd3ea" strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} />
+                  <Line yAxisId="right" type="monotone" dataKey="orders" stroke="#265b48" strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} />
+                  <Line yAxisId="right" type="monotone" dataKey="prevOrders" stroke="#8fbfaf" strokeWidth={1} strokeDasharray="2 4" dot={false} isAnimationActive={false} />
                   <Line yAxisId="left" type="monotone" dataKey="projected" stroke="#f59e0b" strokeWidth={1.5} strokeDasharray="5 3" dot={false} isAnimationActive={false} connectNulls={false} />
                 </ComposedChart>
               </ResponsiveContainer>
@@ -968,8 +968,7 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
                 <div key={s.name} className="flex items-center gap-2 text-xs">
                   <span className="w-20 text-muted-foreground truncate shrink-0">{s.name}</span>
                   <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
-                    <div className="h-full rounded-full bg-indigo-500"
-                      style={{ width: `${maxOrders > 0 ? (s.orders / maxOrders) * 100 : 0}%` }} />
+                    <div className="h-full rounded-full" style={{ width: `${maxOrders > 0 ? (s.orders / maxOrders) * 100 : 0}%`, background: "#1ba4e2" }} />
                   </div>
                   <span className="w-12 text-right tabular-nums font-medium shrink-0">{fmtNum(s.orders)}</span>
                   <span className="w-9 text-right tabular-nums text-muted-foreground shrink-0">{s.share}%</span>
@@ -1001,7 +1000,7 @@ footer={salesKPIs ? `${fmtGBP(salesKPIs.refundedRevenue ?? 0)} refunded` : "—"
               <p className="text-xs text-muted-foreground py-4 text-center">No channel data</p>
             ) : (() => {
               const maxOrders = Math.max(...(conversionData ?? []).map(c => c.orders));
-              const CONV_COLORS = ["#5E5CE6","#EC4899","#10B981","#F59E0B","#06B6D4"];
+              const CONV_COLORS = ["#013220","#1ba4e2","#10B981","#F59E0B","#265b48"];
               return (conversionData ?? []).map((c, i) => (
                 <div key={c.name} className="flex items-center gap-2 text-xs">
                   <span className="w-20 text-muted-foreground truncate shrink-0">{c.name}</span>
@@ -1227,9 +1226,9 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
         </div>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">
-          <KpiCard icon={Boxes} iconColor="#4f46e5" iconBg="#eef2ff"
+          <KpiCard icon={Boxes} iconColor="#013220" iconBg="#e8f5ee"
             label="Available units" value={fmtNum(available)}
-            sparkData={sparkInv} sparkColor="#6366f1" />
+            sparkData={sparkInv} sparkColor="#1ba4e2" />
           <KpiCard icon={Banknote} iconColor="#059669" iconBg="#d1fae5"
             label="Stock value" value={fmtGBP(stockValue)}
             footer="at current prices" />
@@ -1332,13 +1331,13 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
               <KpiCard label="Central SKUs"    value={fmtNum(data?.wmsPool.totalSKUs ?? 0)}
-                icon={Layers}        iconColor="#4f46e5" iconBg="#eef2ff" footer="Master variants" />
+                icon={Layers}        iconColor="#013220" iconBg="#e8f5ee" footer="Master variants" />
               <KpiCard label="Total available" value={fmtNum(data?.wmsPool.totalAvailable ?? 0)}
                 icon={ShoppingCart}  iconColor="#059669" iconBg="#d1fae5" footer="Sellable" />
               <KpiCard label="Reserved"        value={fmtNum(data?.wmsPool.totalReserved ?? 0)}
                 icon={Clock}         iconColor="#d97706" iconBg="#fef3c7" />
               <KpiCard label="Net available"   value={fmtNum(data?.wmsPool.totalNetAvailable ?? 0)}
-                icon={TrendingUp}    iconColor="#7c3aed" iconBg="#ede9fe" />
+                icon={TrendingUp}    iconColor="#265b48" iconBg="#d4ede6" />
               <KpiCard label="In transit"      value="—"
                 icon={Truck}         iconColor="#0891b2" iconBg="#cffafe" />
               <KpiCard label="Central value"   value={fmtGBP(data?.wmsPool.totalValue ?? 0)}
@@ -1684,7 +1683,7 @@ export default function Dashboard() {
         />
       )}
       {syncing && stores.length > 0 && (
-        <div className="rounded-lg border border-indigo-200 bg-indigo-50/40 dark:border-indigo-800 dark:bg-indigo-950/20 px-4 divide-y divide-indigo-100 dark:divide-indigo-900">
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50/40 dark:border-emerald-800 dark:bg-emerald-950/20 px-4 divide-y divide-emerald-100 dark:divide-emerald-900">
           {stores.map(store => (
             <SyncProgressBanner
               key={store.id}
