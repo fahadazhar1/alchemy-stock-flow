@@ -134,7 +134,21 @@ export function DeadstockLosersModal({ open, onClose }: Props) {
           </div>
         </DialogHeader>
 
-        <ScrollArea className="max-h-[70vh]">
+        {!isLoading && !!data?.length && (() => {
+          const totalUnits = data.reduce((s, p) => s + p.total_units, 0);
+          const totalValue = data.reduce((s, p) => s + p.inventory_value, 0);
+          return (
+            <div className="flex items-center gap-4 px-5 py-2.5 bg-muted/40 border-b text-xs flex-wrap">
+              <span className="text-muted-foreground">{data.length} products</span>
+              <div className="w-px h-3 bg-border" />
+              <span className="text-muted-foreground">Total units: <span className="font-semibold text-foreground">{totalUnits.toLocaleString()}</span></span>
+              <div className="w-px h-3 bg-border" />
+              <span className="text-muted-foreground">Total value at risk: <span className="font-bold text-red-600 dark:text-red-400">{fmtCurrency(totalValue)}</span></span>
+            </div>
+          );
+        })()}
+
+        <ScrollArea className="max-h-[65vh]">
           {isLoading ? (
             <div className="px-5 py-4 space-y-3">
               {Array.from({ length: 10 }).map((_, i) => (

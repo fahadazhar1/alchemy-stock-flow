@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useRole } from "@/hooks/useRole";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
@@ -50,6 +50,19 @@ export default function ManualSync() {
   const [filterMonths, setFilterMonths] = useState<number[]>([]);
   const [filterYears, setFilterYears] = useState<number[]>([]);
   const [selectingAll, setSelectingAll] = useState(false);
+
+  useEffect(() => {
+    const raw = sessionStorage.getItem("campaign_prefill_products");
+    if (!raw) return;
+    sessionStorage.removeItem("campaign_prefill_products");
+    try {
+      const ids: string[] = JSON.parse(raw);
+      if (ids.length) {
+        setSelected(new Set(ids));
+        toast.info(`${ids.length} product${ids.length > 1 ? "s" : ""} pre-selected from deadstock`);
+      }
+    } catch {}
+  }, []);
   const hasDateFilter = filterDates.length > 0 || filterMonths.length > 0 || filterYears.length > 0;
 
   const { data: collections } = useQuery({

@@ -32,7 +32,8 @@ import { useInventoryDashboard } from "@/hooks/useInventoryDashboard";
 import { OutOfStockWidget } from "./components/OutOfStockWidget";
 import { TopProductsModal } from "./components/TopProductsModal";
 import { DeadstockLosersModal } from "./components/DeadstockLosersModal";
-import { useDeadstockPreview, getDeadstockLabel } from "@/hooks/useDeadstockPreview";
+import { useDeadstockPreview, useDeadstockSummary, getDeadstockLabel } from "@/hooks/useDeadstockPreview";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { parseISO } from "date-fns";
 import { useSalesKPIs, useCollectionSales, useCustomerMetrics, useFulfillmentMetrics, useDiscountUsage, useTrafficSources, useChannelConversion, useCheckoutAbandonment, useUTMCampaigns } from "@/hooks/useSalesKPIs";
 import { useBundleSales } from "@/hooks/useBundleSales";
@@ -1196,8 +1197,15 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
   const { fmtCurrency: fmtGBP } = useCurrency();
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "draft">("all");
   const [showLosersModal, setShowLosersModal] = useState(false);
+  const [deadstockFilter, setDeadstockFilter] = useState("all");
   const { data, isLoading } = useInventoryDashboard(statusFilter);
-  const { data: deadstockData, isLoading: deadstockLoading } = useDeadstockPreview(8);
+  const { data: deadstockData, isLoading: deadstockLoading } = useDeadstockPreview(8, deadstockFilter);
+  const { data: deadstockSummary } = useDeadstockSummary();
+
+  function handleCreateDiscount(productId: string) {
+    sessionStorage.setItem("campaign_prefill_products", JSON.stringify([productId]));
+    navigate("/manual-sync");
+  }
 
   const available   = data?.kpis.available ?? 0;
   const stockValue  = data?.stockValue  ?? 0;
@@ -1370,7 +1378,7 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3.5">
         <Card className="lg:col-span-2">
-          <CardHeader className="pb-2 pt-4 px-4">
+          <CardHeader className="pb-0 pt-4 px-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <TrendingDown size={14} className="text-red-500" />
@@ -1384,15 +1392,55 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
                 </Button>
               </div>
             </div>
+
+            {deadstockSummary && (
+              <div className="flex items-center gap-3 pt-2.5 pb-1 flex-wrap text-xs">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-muted-foreground">Deadstock</span>
+                  <span className="font-semibold">{fmtNum(deadstockSummary.deadUnits)} units</span>
+                  <span className="text-muted-foreground">·</span>
+                  <span className="font-semibold text-red-600 dark:text-red-400">{fmtGBP(deadstockSummary.deadValue)}</span>
+                </div>
+                <div className="w-px h-3 bg-border shrink-0" />
+                <div className="flex items-center gap-1.5">
+                  <span className="text-muted-foreground">Overstocked</span>
+                  <span className="font-semibold">{fmtNum(deadstockSummary.overUnits)} units</span>
+                  <span className="text-muted-foreground">·</span>
+                  <span className="font-semibold text-purple-600 dark:text-purple-400">{fmtGBP(deadstockSummary.overValue)}</span>
+                </div>
+                <div className="w-px h-3 bg-border shrink-0" />
+                <div className="flex items-center gap-1.5">
+                  <span className="text-muted-foreground">Total at risk</span>
+                  <span className="font-bold text-foreground">{fmtGBP(deadstockSummary.deadValue + deadstockSummary.overValue)}</span>
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center gap-1 pt-2 pb-1 flex-wrap">
+              {(["all", "Overstocked", "Dead 90d", "Dead 60d", "Dead 30d"] as const).map(f => (
+                <button
+                  key={f}
+                  onClick={() => setDeadstockFilter(f)}
+                  className={cn(
+                    "text-[10px] px-2.5 py-1 rounded-md font-medium transition-colors",
+                    deadstockFilter === f
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                  )}
+                >
+                  {f === "all" ? "All" : f}
+                </button>
+              ))}
+            </div>
           </CardHeader>
           <CardContent className="p-0">
             <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
                 <tr className="border-b">
-                  {["Product","Stock","Status","Unit Price","Value at Risk","Last Sale"].map((h, i) => (
+                  {["Product","Stock","Status","Unit Price","Value at Risk","Last Sale",""].map((h, i) => (
                     <th key={i} className={cn("px-4 py-2 font-medium text-muted-foreground text-left",
-                      i >= 1 && i !== 2 && "text-right")}>{h}</th>
+                      i >= 1 && i !== 2 && i !== 6 && "text-right")}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -1411,10 +1459,23 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
                       "Never Sold":  "text-muted-foreground border-dashed",
                       "Overstocked": "text-purple-600 border-purple-200 bg-purple-50 dark:bg-purple-950/30 dark:border-purple-800 dark:text-purple-400",
                     };
-                    let saleStr: string | null = null;
-                    try { saleStr = p.last_sale_at ? format(parseISO(p.last_sale_at), "dd MMM yy") : null; } catch {}
+                    const ROW_BORDER: Record<string, string> = {
+                      "Dead 90d":    "border-l-2 border-l-red-400",
+                      "Dead 60d":    "border-l-2 border-l-orange-400",
+                      "Dead 30d":    "border-l-2 border-l-amber-400",
+                      "Never Sold":  "border-l-2 border-l-muted-foreground/30",
+                      "Overstocked": "border-l-2 border-l-purple-400",
+                    };
+                    let daysAgoStr: JSX.Element | string = <span className="text-red-400 font-medium">Never</span>;
+                    if (p.last_sale_at) {
+                      try {
+                        const days = Math.floor((Date.now() - parseISO(p.last_sale_at).getTime()) / 86400000);
+                        const cls = days >= 90 ? "text-red-500" : days >= 60 ? "text-orange-500" : days >= 30 ? "text-amber-600" : "text-muted-foreground";
+                        daysAgoStr = <span className={cls}>{days === 0 ? "Today" : days === 1 ? "Yesterday" : `${days}d ago`}</span>;
+                      } catch {}
+                    }
                     return (
-                      <tr key={p.product_id} className="border-b last:border-b-0 hover:bg-muted/40 transition-colors">
+                      <tr key={p.product_id} className={cn("border-b last:border-b-0 hover:bg-muted/40 transition-colors", ROW_BORDER[label] ?? "")}>
                         <td className="px-4 py-2.5">
                           <div className="font-medium">{p.product_name}</div>
                           <div className="font-mono text-muted-foreground text-[10px]">{p.product_type ?? ""}{p.sku ? ` · ${p.sku}` : ""}</div>
@@ -1427,8 +1488,20 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
                         </td>
                         <td className="px-4 py-2.5 text-right tabular-nums">{fmtGBP(p.unit_price)}</td>
                         <td className="px-4 py-2.5 text-right tabular-nums font-semibold">{fmtGBP(p.inventory_value)}</td>
-                        <td className="px-4 py-2.5 text-right text-muted-foreground">
-                          {saleStr ?? <span className="text-red-400 font-medium">Never</span>}
+                        <td className="px-4 py-2.5 text-right tabular-nums text-xs">{daysAgoStr}</td>
+                        <td className="px-2 py-2.5">
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground">
+                                <MoreHorizontal size={13} />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="text-xs w-44">
+                              <DropdownMenuItem className="gap-2 text-xs cursor-pointer" onClick={() => handleCreateDiscount(p.product_id)}>
+                                <Tag size={12} /> Create discount
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         </td>
                       </tr>
                     );
