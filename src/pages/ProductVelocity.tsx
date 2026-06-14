@@ -211,8 +211,8 @@ export default function ProductVelocity() {
         available_units: Math.max(0, Number(r.available_units ?? 0)),
       }));
     },
-    staleTime: 60_000,
-    refetchInterval: 3 * 60 * 1000,
+    staleTime: 5 * 60_000,
+    refetchInterval: 5 * 60 * 1000, // was 3 min — egress
   });
 
   // ── Derived ──

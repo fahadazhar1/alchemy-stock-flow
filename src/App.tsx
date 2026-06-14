@@ -36,7 +36,14 @@ import NotFound from "@/pages/NotFound";
 import { Loader2 } from "lucide-react";
 
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { staleTime: 30000, retry: 1 } },
+  defaultOptions: {
+    queries: {
+      staleTime: 5 * 60_000,        // 5 min — cut redundant re-fetches on navigation (egress)
+      gcTime: 10 * 60_000,          // keep cache around so back-nav is free
+      refetchOnWindowFocus: false,  // don't re-pull every heavy query on tab-back
+      retry: 1,
+    },
+  },
 });
 
 function ProtectedRoute() {

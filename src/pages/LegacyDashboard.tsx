@@ -334,7 +334,7 @@ function useSyncHealth(storeId: string | null) {
       };
     },
     enabled: !!storeId,
-    refetchInterval: 15000, // Refresh health status every 15 seconds
+    refetchInterval: 60000, // Refresh health status every 60s (was 15s — egress)
   });
 }
 
