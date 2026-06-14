@@ -1417,6 +1417,9 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
         </Card>
       </div>
 
+      {/* Central WMS pool — hidden for now (no master-pool data synced yet; all zeros).
+          Restore this block when warehouse/master-pool feed is wired up. */}
+      {false && (
       <Card>
         <CardHeader className="pb-1 pt-4 px-4">
           <div className="flex items-center gap-2">
@@ -1448,6 +1451,7 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
           )}
         </CardContent>
       </Card>
+      )}
 
       <OutOfStockWidget />
 
