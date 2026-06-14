@@ -41,58 +41,39 @@ export function useSalesKPIs(bounds?: DateBounds) {
   return useQuery({
     queryKey: ["sales-kpis", storeId, b.cacheKey],
     queryFn: async (): Promise<SalesKPIs> => {
-      let mtdQ = (supabase as any)
-        .from("orders")
-        .select("total_price, cancelled_at, financial_status")
-        .gte("shopify_created_at", b.startISO)
-        .lte("shopify_created_at", b.endISO)
-        .limit(10000);
-      if (storeId) mtdQ = mtdQ.eq("store_id", storeId);
-
-      let prevQ = (supabase as any)
-        .from("orders")
-        .select("total_price, cancelled_at")
-        .gte("shopify_created_at", b.prevStartISO)
-        .lte("shopify_created_at", b.prevEndISO)
-        .limit(10000);
-      if (storeId) prevQ = prevQ.eq("store_id", storeId);
-
-      let pendingQ = (supabase as any)
-        .from("orders")
-        .select("id", { count: "exact", head: true })
-        .eq("financial_status", "paid")
-        .is("fulfillment_status", null)
-        .is("cancelled_at", null);
-      if (storeId) pendingQ = pendingQ.eq("store_id", storeId);
+      // Server-side aggregation — see migration 20260614000001_sales_kpis_rpc.sql.
+      // Returns ~7 numbers instead of up to 20k raw order rows.
+      const kpiAggQ = (supabase as any).rpc("get_sales_kpis", {
+        p_start_iso:      b.startISO,
+        p_end_iso:        b.endISO,
+        p_prev_start_iso: b.prevStartISO,
+        p_prev_end_iso:   b.prevEndISO,
+        p_store_id:       storeId ?? null,
+      });
 
       const kpiQ = supabase
         .from("v_dashboard_kpis")
         .select("sell_through_ratio_current_month, pending_approvals_count")
         .single();
 
-      const [mtdRes, prevRes, pendingRes, kpiRes] = await Promise.all([
-        mtdQ, prevQ, pendingQ, kpiQ,
-      ]);
+      const [aggRes, kpiRes] = await Promise.all([kpiAggQ, kpiQ]);
 
-      if (mtdRes.error) throw mtdRes.error;
+      if (aggRes.error) throw aggRes.error;
 
-      const rows     = ((mtdRes.data ?? []) as any[]).filter((r: any) => !r.cancelled_at);
-      const prevRows = ((prevRes.data ?? []) as any[]).filter((r: any) => !r.cancelled_at);
+      const agg = (Array.isArray(aggRes.data) ? aggRes.data[0] : aggRes.data) as any;
 
-      const revenueMTD = rows.reduce((s: number, r: any) => s + Number(r.total_price ?? 0), 0);
-      const ordersMTD  = rows.length;
-      const aov        = ordersMTD > 0 ? revenueMTD / ordersMTD : 0;
+      const revenueMTD     = Number(agg?.revenue_mtd      ?? 0);
+      const ordersMTD      = Number(agg?.orders_mtd       ?? 0);
+      const refundedRevenue = Number(agg?.refunded_revenue ?? 0);
+      const refundedOrders = Number(agg?.refunded_orders  ?? 0);
+      const prevRevenue    = Number(agg?.prev_revenue     ?? 0);
+      const prevOrders     = Number(agg?.prev_orders      ?? 0);
 
-      // Refund calculations — includes both fully and partially refunded
-      const refundedRows    = rows.filter((r: any) =>
-        r.financial_status === "refunded" || r.financial_status === "partially_refunded"
-      );
-      const refundedRevenue  = refundedRows.reduce((s: number, r: any) => s + Number(r.total_price ?? 0), 0);
-      const refundRate       = ordersMTD > 0 ? Math.round((refundedRows.length / ordersMTD) * 1000) / 10 : 0;
+      const aov = ordersMTD > 0 ? revenueMTD / ordersMTD : 0;
+
+      // Refund rates — includes both fully and partially refunded
+      const refundRate       = ordersMTD > 0 ? Math.round((refundedOrders / ordersMTD) * 1000) / 10 : 0;
       const refundAmountRate = revenueMTD > 0 ? Math.round((refundedRevenue / revenueMTD) * 1000) / 10 : 0;
-
-      const prevRevenue = prevRows.reduce((s: number, r: any) => s + Number(r.total_price ?? 0), 0);
-      const prevOrders  = prevRows.length;
 
       const revenueDelta = prevRevenue > 0
         ? Math.round(((revenueMTD - prevRevenue) / prevRevenue) * 100)
@@ -111,7 +92,7 @@ export function useSalesKPIs(bounds?: DateBounds) {
         refundRate,
         refundAmountRate,
         refundedRevenue,
-        pendingOrders:    pendingRes.count ?? 0,
+        pendingOrders:    Number(agg?.pending_orders ?? 0),
         pendingApprovals: Number(kpiRow?.pending_approvals_count ?? 0),
         prevRevenue,
         prevOrders,
