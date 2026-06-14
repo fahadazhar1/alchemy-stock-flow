@@ -32,6 +32,34 @@ export interface AgingBucket {
   color: string;
 }
 
+export type MatrixQuadrant = "star" | "cash-cow" | "dead-weight" | "question";
+
+export interface MatrixPoint {
+  product_id: string;
+  name: string;
+  sku: string;
+  stock: number;
+  velocity: number; // units sold in last 30d
+  value: number;    // £ capital tied up (stock × price)
+  quadrant: MatrixQuadrant;
+}
+
+export interface MatrixQuadrantSummary {
+  key: MatrixQuadrant;
+  count: number;
+  units: number;
+  value: number;
+}
+
+export interface ProductivityMatrix {
+  points: MatrixPoint[];                  // top N by capital, plotted as bubbles
+  quadrants: MatrixQuadrantSummary[];     // totals across ALL in-stock SKUs
+  velThreshold: number;                   // x-axis divider (typical mover)
+  stockThreshold: number;                 // y-axis divider (typical stock depth)
+  plotted: number;                        // # of bubbles drawn
+  total: number;                          // # of in-stock SKUs classified
+}
+
 export interface InventoryCategory {
   name: string;
   units: number;
@@ -72,6 +100,7 @@ export interface InventoryDashboardData {
   stockValue: number;
   wmsPool: WmsPool;
   agingBuckets: AgingBucket[];
+  productivityMatrix: ProductivityMatrix;
   categories: InventoryCategory[];
   loserProducts: LoserProduct[];
   replenishment: ReplenItem[];
@@ -106,6 +135,7 @@ const URGENCY_MAP: Record<string, "High" | "Medium" | "Low"> = {
 interface RawDashboardData {
   allRows:      any[];
   replenRows:   any[];
+  velRows:      Array<{ product_id: string; units_sold_30d: number | null }>;
   pcRows:       Array<{ product_id: string; collection_id: string }>;
   collIdToName: Record<string, string>;
 }
@@ -152,6 +182,27 @@ export function useInventoryDashboard(statusFilter: ProductStatusFilter = "all")
       if (storeId) replenQ = replenQ.eq("store_id", storeId);
 
       const replenRes = await replenQ;
+
+      // Per-product 30-day sales velocity — powers the Productivity Matrix x-axis.
+      // v_product_velocity_live only lists SKUs that sold in the last 30d; absent = 0 (dead weight).
+      const velRows: Array<{ product_id: string; units_sold_30d: number | null }> = [];
+      {
+        const VEL_PAGE = 1000;
+        let vFrom = 0;
+        while (true) {
+          let velQ = (supabase as any)
+            .from("v_product_velocity_live")
+            .select("product_id, units_sold_30d")
+            .range(vFrom, vFrom + VEL_PAGE - 1);
+          if (storeId) velQ = velQ.eq("store_id", storeId);
+          const { data: vPage, error: vErr } = await velQ;
+          if (vErr) break; // non-fatal: matrix degrades to all-zero velocity
+          velRows.push(...((vPage ?? []) as typeof velRows));
+          if (!vPage || vPage.length < VEL_PAGE) break;
+          vFrom += VEL_PAGE;
+        }
+      }
+
       const allInStockIds = allRows
         .filter((r: any) => Number(r.total_inventory ?? 0) > 0)
         .map((r: any) => r.product_id as string);
@@ -184,14 +235,14 @@ export function useInventoryDashboard(statusFilter: ProductStatusFilter = "all")
         }
       }
 
-      return { allRows, replenRows: ((replenRes as any).data ?? []) as any[], pcRows, collIdToName };
+      return { allRows, replenRows: ((replenRes as any).data ?? []) as any[], velRows, pcRows, collIdToName };
     },
   });
 
   // Derived data — recomputed synchronously when statusFilter changes, no network request
   const data = useMemo((): InventoryDashboardData | undefined => {
     if (!rawQuery.data) return undefined;
-    const { allRows, replenRows, pcRows, collIdToName } = rawQuery.data;
+    const { allRows, replenRows, velRows, pcRows, collIdToName } = rawQuery.data;
 
     // Apply status filter client-side
     const filteredRows = statusFilter === "all"
@@ -227,6 +278,72 @@ export function useInventoryDashboard(statusFilter: ProductStatusFilter = "all")
         return s + (d >= b.min && d <= b.max ? Number(r.total_inventory ?? 0) : 0);
       }, 0),
     }));
+
+    // ── Productivity matrix (velocity × stock, bubble = £ capital) ──────────────
+    // Quadrants (y = stock held, x = 30d velocity):
+    //   ★ Star        fast + lean stock   → flying off shelves, guard against stockout
+    //   🐄 Cash Cow    fast + deep stock   → the engine, healthy
+    //   💀 Dead Weight slow + deep stock   → frozen capital, promote/liquidate
+    //   ❓ Question    slow + lean stock   → low priority, monitor
+    const velMap = new Map<string, number>(
+      velRows.map(v => [v.product_id, Number(v.units_sold_30d ?? 0)])
+    );
+    const matrixRows = inStockRows.map((r: any) => {
+      const stock = Number(r.total_inventory ?? 0);
+      return {
+        product_id: r.product_id as string,
+        name: (r.product_name as string) ?? "—",
+        sku: (r.sku as string) ?? "—",
+        stock,
+        velocity: velMap.get(r.product_id as string) ?? 0,
+        value: stock * Number(r.min_current_price ?? 0),
+      };
+    });
+
+    const median = (nums: number[]): number => {
+      if (!nums.length) return 0;
+      const s = [...nums].sort((a, b) => a - b);
+      const mid = Math.floor(s.length / 2);
+      return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+    };
+    // Divider = "typical" mover/depth. Median over sellers keeps a dead-heavy catalog from collapsing the x-axis.
+    const velThreshold = Math.max(1, median(matrixRows.filter(m => m.velocity > 0).map(m => m.velocity)));
+    const stockThreshold = Math.max(1, median(matrixRows.map(m => m.stock)));
+
+    const quadrantOf = (m: { velocity: number; stock: number }): MatrixQuadrant => {
+      const fast = m.velocity >= velThreshold;
+      const deep = m.stock >= stockThreshold;
+      if (fast && deep) return "cash-cow";
+      if (fast) return "star";
+      if (deep) return "dead-weight";
+      return "question";
+    };
+
+    const quadKeys: MatrixQuadrant[] = ["star", "cash-cow", "dead-weight", "question"];
+    const matrixQuadrants: MatrixQuadrantSummary[] = quadKeys.map(key => {
+      const items = matrixRows.filter(m => quadrantOf(m) === key);
+      return {
+        key,
+        count: items.length,
+        units: items.reduce((s, m) => s + m.stock, 0),
+        value: items.reduce((s, m) => s + m.value, 0),
+      };
+    });
+
+    // Plot only the top SKUs by capital — they hold most of the money and keep the chart legible.
+    const matrixPoints: MatrixPoint[] = [...matrixRows]
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 200)
+      .map(m => ({ ...m, quadrant: quadrantOf(m) }));
+
+    const productivityMatrix: ProductivityMatrix = {
+      points: matrixPoints,
+      quadrants: matrixQuadrants,
+      velThreshold,
+      stockThreshold,
+      plotted: matrixPoints.length,
+      total: matrixRows.length,
+    };
 
     // ── Collections (Top 5) — uses pre-fetched pcRows filtered to current status ──
     const collInventoryMap = new Map<string, number>();
@@ -330,7 +447,7 @@ export function useInventoryDashboard(statusFilter: ProductStatusFilter = "all")
         )),
       }));
 
-    return { kpis, stockValue, wmsPool, agingBuckets, categories, loserProducts, replenishment, expiringSoon };
+    return { kpis, stockValue, wmsPool, agingBuckets, productivityMatrix, categories, loserProducts, replenishment, expiringSoon };
   }, [rawQuery.data, statusFilter]);
 
   return { ...rawQuery, data };

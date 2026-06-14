@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import {
   ResponsiveContainer, ComposedChart, AreaChart, Area, Line,
   BarChart, Bar, PieChart, Pie, Cell,
+  ScatterChart, Scatter, ZAxis, ReferenceLine,
   XAxis, YAxis, CartesianGrid, Tooltip,
 } from "recharts";
 import {
@@ -197,6 +198,36 @@ function TrendTooltip({ active, payload, label }: { active?: boolean; payload?: 
           </span>
         </div>
       ))}
+    </div>
+  );
+}
+
+// ─── Productivity matrix config & tooltip ────────────────────────────────────
+
+const MATRIX_QUAD = {
+  "star":        { label: "Stars",       icon: "★",  color: "#10B981", hint: "Fast sellers, lean stock — guard against stockout" },
+  "cash-cow":    { label: "Cash Cows",   icon: "🐄", color: "#3B82F6", hint: "Fast sellers, deep stock — your healthy engine" },
+  "dead-weight": { label: "Dead Weight", icon: "💀", color: "#EF4444", hint: "Slow sellers, heavy stock — capital frozen, promote" },
+  "question":    { label: "Question",    icon: "❓", color: "#9CA3AF", hint: "Slow sellers, lean stock — low priority, monitor" },
+} as const;
+
+function MatrixTooltip({ active, payload }: { active?: boolean; payload?: any[] }) {
+  const { fmtCurrency: fmtGBP } = useCurrency();
+  if (!active || !payload?.length) return null;
+  const p = payload[0]?.payload;
+  if (!p) return null;
+  const q = MATRIX_QUAD[p.quadrant as keyof typeof MATRIX_QUAD];
+  return (
+    <div className="rounded-lg border bg-card p-2.5 shadow-lg text-xs max-w-[220px]">
+      <p className="font-semibold mb-1 line-clamp-2">{p.name}</p>
+      <p className="text-muted-foreground mb-1.5">{p.sku}</p>
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <span className="w-2 h-2 rounded-sm inline-block" style={{ background: q?.color }} />
+        <span className="font-medium">{q?.icon} {q?.label}</span>
+      </div>
+      <div className="flex justify-between gap-4"><span className="text-muted-foreground">Sold (30d)</span><span className="font-medium tabular-nums">{p.velocity} units</span></div>
+      <div className="flex justify-between gap-4"><span className="text-muted-foreground">In stock</span><span className="font-medium tabular-nums">{p.stock} units</span></div>
+      <div className="flex justify-between gap-4"><span className="text-muted-foreground">Capital</span><span className="font-medium tabular-nums">{fmtGBP(p.value)}</span></div>
     </div>
   );
 }
@@ -1289,43 +1320,73 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
         <Card className="lg:col-span-2">
           <CardHeader className="pb-2 pt-4 px-4">
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold">Stock aging
-                <span className="text-muted-foreground font-normal ml-1.5">days on shelf · all SKUs</span>
+              <h3 className="text-sm font-semibold">Inventory Productivity Matrix
+                <span className="text-muted-foreground font-normal ml-1.5">sales velocity × stock held · bubble = capital</span>
               </h3>
-              <Button size="sm" variant="ghost" className="h-7 text-xs">View report</Button>
+              <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setShowLosersModal(true)}>View report</Button>
             </div>
           </CardHeader>
           <CardContent className="px-2 pb-3">
             {isLoading ? (
-              <div className="w-full h-[160px] px-2 pt-2 flex items-end gap-3">
-                {Array.from({ length: 5 }).map((_, i) => (
-                  <div key={i} className="flex-1 bg-muted animate-pulse rounded-t" style={{ height: `${40 + i * 18}%` }} />
-                ))}
-              </div>
-            ) : (
+              <div className="w-full h-[200px] px-2 pt-2 bg-muted/40 animate-pulse rounded" />
+            ) : (() => {
+              const matrix = data?.productivityMatrix;
+              const vT = matrix?.velThreshold ?? 1;
+              const sT = matrix?.stockThreshold ?? 1;
+              const byQuad = (q: string) => (matrix?.points ?? []).filter(p => p.quadrant === q);
+              const summary = (q: string) => matrix?.quadrants.find(s => s.key === q);
+              return (
               <>
-                <ResponsiveContainer width="100%" height={160}>
-                  <BarChart data={data?.agingBuckets ?? []} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
-                    <XAxis dataKey="label" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
-                    <YAxis tickFormatter={v => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)}
-                      tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} width={36} />
-                    <Bar dataKey="units" radius={[3, 3, 0, 0]} isAnimationActive={false}>
-                      {(data?.agingBuckets ?? []).map((b, i) => <Cell key={i} fill={b.color} />)}
-                    </Bar>
-                  </BarChart>
+                <ResponsiveContainer width="100%" height={200}>
+                  <ScatterChart margin={{ top: 8, right: 18, left: 0, bottom: 4 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                    <XAxis type="number" dataKey="velocity" name="Sold (30d)"
+                      tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false}
+                      label={{ value: "Sales velocity · units/30d →", position: "insideBottom", offset: -2, fontSize: 9, fill: "hsl(var(--muted-foreground))" }} />
+                    <YAxis type="number" dataKey="stock" name="Stock"
+                      tickFormatter={v => v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(v)}
+                      tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} width={36}
+                      label={{ value: "Stock held ↑", angle: -90, position: "insideLeft", fontSize: 9, fill: "hsl(var(--muted-foreground))" }} />
+                    <ZAxis type="number" dataKey="value" range={[30, 380]} name="Capital" />
+                    <ReferenceLine x={vT} stroke="hsl(var(--muted-foreground))" strokeDasharray="4 4" strokeOpacity={0.5} />
+                    <ReferenceLine y={sT} stroke="hsl(var(--muted-foreground))" strokeDasharray="4 4" strokeOpacity={0.5} />
+                    <Tooltip content={<MatrixTooltip />} cursor={{ strokeDasharray: "3 3" }} />
+                    {(Object.keys(MATRIX_QUAD) as Array<keyof typeof MATRIX_QUAD>).map(q => (
+                      <Scatter key={q} name={MATRIX_QUAD[q].label} data={byQuad(q)} fill={MATRIX_QUAD[q].color} fillOpacity={0.65} isAnimationActive={false} />
+                    ))}
+                  </ScatterChart>
                 </ResponsiveContainer>
-                <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 px-2">
-                  {(data?.agingBuckets ?? []).map((b, i) => (
-                    <div key={i} className="flex items-center gap-1.5 text-xs">
-                      <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: b.color }} />
-                      <span className="text-muted-foreground">{b.label}</span>
-                      <span className="font-medium tabular-nums">{fmtNum(b.units)}</span>
-                    </div>
-                  ))}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3 px-2">
+                  {(Object.keys(MATRIX_QUAD) as Array<keyof typeof MATRIX_QUAD>).map(q => {
+                    const s = summary(q);
+                    const cfg = MATRIX_QUAD[q];
+                    const clickable = q === "dead-weight";
+                    return (
+                      <button
+                        key={q}
+                        onClick={clickable ? () => navigate("/campaigns") : undefined}
+                        className={cn(
+                          "text-left rounded-lg border p-2 transition-colors",
+                          clickable ? "hover:bg-muted cursor-pointer" : "cursor-default"
+                        )}
+                        title={cfg.hint}
+                      >
+                        <div className="flex items-center gap-1.5 mb-0.5">
+                          <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: cfg.color }} />
+                          <span className="text-[11px] font-medium">{cfg.icon} {cfg.label}</span>
+                        </div>
+                        <div className="text-sm font-bold tabular-nums leading-tight">{fmtGBP(s?.value ?? 0)}</div>
+                        <div className="text-[10px] text-muted-foreground tabular-nums">{fmtNum(s?.count ?? 0)} SKUs · {fmtNum(s?.units ?? 0)} units</div>
+                      </button>
+                    );
+                  })}
                 </div>
+                <p className="text-[10px] text-muted-foreground mt-2 px-2">
+                  Dividers at typical mover ({fmtNum(Math.round(vT))}/30d) &amp; typical depth ({fmtNum(Math.round(sT))} units) · plotting top {matrix?.plotted ?? 0} of {fmtNum(matrix?.total ?? 0)} in-stock SKUs by capital
+                </p>
               </>
-            )}
+              );
+            })()}
           </CardContent>
         </Card>
 
