@@ -551,7 +551,7 @@ export function useCollectionSales(bounds?: DateBounds) {
         const rev = Number(r.quantity ?? 0) * Number(r.unit_price ?? 0);
         productRevMap.set(r.product_id, (productRevMap.get(r.product_id) ?? 0) + rev);
       }
-      const productIds = Array.from(productRevMap.keys());
+      const productIds = Array.from(productRevMap.keys()).filter(Boolean);
       if (!productIds.length) return [];
 
       const collectionMap = new Map<string, string>();
