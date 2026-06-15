@@ -34,6 +34,7 @@ function rpcFrom(range: DateRange): string | null {
 | `fetchFulfillmentSummary` | `get_report_fulfillment_summary` | `p_from, p_store_id` | `total, fulfilled, unfulfilled, partial, paid, pending, refunded, total_revenue` |
 | `fetchFulfillmentTrend` | `get_report_fulfillment_trend` | `p_from, p_store_id` | `date, fulfilled, unfulfilled, partial` |
 | `fetchCollectionPerformance` | `get_report_collection_performance` | `p_from, p_store_id` | `collection, revenue, units` |
+| `fetchCollectionProducts` | `get_report_collection_products` | `p_collection, p_from, p_store_id` | `product, revenue, units` (drill-down per collection; same priority attribution) |
 | `fetchRevenueKPIs` | `get_report_revenue_kpis` | `p_from, p_prior_from, p_prior_to, p_store_id` | `revenue, orders, aov, prior_revenue` |
 
 `fetchInventoryHealth` (per-SKU table) has no RPC — it's row-level detail. Keep `.range()` pagination; don't pull all SKUs at once.

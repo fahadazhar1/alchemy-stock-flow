@@ -1,4 +1,4 @@
-import { useState, useRef, type RefObject } from "react";
+import { useState, useRef, Fragment, type RefObject } from "react";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ComposedChart, Area, LineChart, Line, PieChart, Pie, Cell,
@@ -6,12 +6,12 @@ import {
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { AlertTriangle, TrendingDown, RefreshCw, Download, FileText } from "lucide-react";
+import { AlertTriangle, TrendingDown, RefreshCw, Download, FileText, ChevronRight, ChevronDown } from "lucide-react";
 import {
   useSalesByChannel, useSalesTrend, useTopProducts,
   useInventoryHealth, useInventoryKPIs,
   useFulfillmentSummary, useFulfillmentTrend,
-  useCollectionPerformance, useRevenueKPIs,
+  useCollectionPerformance, useCollectionProducts, useRevenueKPIs,
 } from "../lib/useReportData";
 import { useCurrency } from "@/hooks/useCurrency";
 import { downloadCsv, csvName, printElementAsPdf, type CsvColumn } from "../lib/exportReport";
@@ -37,6 +37,39 @@ function PdfButton({ targetRef, title, disabled }:
       disabled={disabled} onClick={() => printElementAsPdf(targetRef.current, title)}>
       <FileText size={12} /> PDF
     </Button>
+  );
+}
+
+// Drill-down: products attributed to one collection, shown in an expanded row.
+function CollectionBreakdown({ collection, range, colSpan }:
+  { collection: string; range: DateRange; colSpan: number }) {
+  const { fmtCurrencyInt: fmt } = useCurrency();
+  const q = useCollectionProducts(collection, range);
+  return (
+    <tr className="bg-muted/30">
+      <td colSpan={colSpan} className="px-4 py-2">
+        {q.isLoading ? (
+          <p className="text-xs text-muted-foreground py-2 px-2">Loading products…</p>
+        ) : q.error ? (
+          <p className="text-xs text-red-500 py-2 px-2">{q.error}</p>
+        ) : !q.data?.length ? (
+          <p className="text-xs text-muted-foreground py-2 px-2">No products sold in this period.</p>
+        ) : (
+          <table className="w-full text-xs">
+            <tbody>
+              {q.data.map((p, i) => (
+                <tr key={i} className="border-b last:border-b-0 border-border/40">
+                  <td className="py-1.5 pl-8 text-muted-foreground w-8">{i + 1}</td>
+                  <td className="py-1.5 font-medium">{p.product}</td>
+                  <td className="py-1.5 tabular-nums text-right w-28">{fmt(p.revenue)}</td>
+                  <td className="py-1.5 tabular-nums text-right w-20 pr-2">{fmtN(p.units)} u</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </td>
+    </tr>
   );
 }
 
@@ -568,6 +601,7 @@ export function CollectionPerformanceReport() {
   const total = q.data?.reduce((s, r) => s + r.revenue, 0) ?? 0;
   const printRef = useRef<HTMLDivElement>(null);
   const rangeLabel = RANGES.find(r => r.value === range)?.label ?? range;
+  const [expanded, setExpanded] = useState<string | null>(null);
 
   return (
     <div className="space-y-4">
@@ -607,10 +641,16 @@ export function CollectionPerformanceReport() {
                 <tbody>
                   {q.data.map((r, i) => {
                     const share = total ? (r.revenue / total) * 100 : 0;
+                    const isOpen = expanded === r.collection;
                     return (
-                      <tr key={i} className="border-b last:border-b-0 hover:bg-muted/40">
+                      <Fragment key={i}>
+                      <tr className="border-b last:border-b-0 hover:bg-muted/40 cursor-pointer"
+                        onClick={() => setExpanded(isOpen ? null : r.collection)}>
                         <td className="px-4 py-2.5 font-medium">
                           <div className="flex items-center gap-2">
+                            {isOpen
+                              ? <ChevronDown size={13} className="text-muted-foreground shrink-0" />
+                              : <ChevronRight size={13} className="text-muted-foreground shrink-0" />}
                             <span className="w-2 h-2 rounded-sm" style={{ background: PIE_COLORS[i % PIE_COLORS.length] }} />
                             {r.collection}
                           </div>
@@ -626,6 +666,8 @@ export function CollectionPerformanceReport() {
                           </div>
                         </td>
                       </tr>
+                      {isOpen && <CollectionBreakdown collection={r.collection} range={range} colSpan={4} />}
+                      </Fragment>
                     );
                   })}
                 </tbody>

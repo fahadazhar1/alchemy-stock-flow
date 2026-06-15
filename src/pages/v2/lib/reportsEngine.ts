@@ -187,6 +187,22 @@ export async function fetchCollectionPerformance(range: DateRange = "30d", store
   }));
 }
 
+/** Products attributed to a single collection (drill-down for the breakdown row). */
+export async function fetchCollectionProducts(collection: string, range: DateRange = "30d", storeId?: string | null) {
+  const { data, error } = await (supabase as any).rpc("get_report_collection_products", {
+    p_collection: collection,
+    p_from: dateFrom(range),
+    p_store_id: storeId ?? null,
+  });
+  if (error) throw error;
+
+  return (data ?? []).map((r: any) => ({
+    product: r.product,
+    revenue: Number(r.revenue),
+    units: Number(r.units),
+  }));
+}
+
 // ─── Revenue KPIs ─────────────────────────────────────────────────────────────
 
 export async function fetchRevenueKPIs(range: DateRange = "30d", storeId?: string | null) {

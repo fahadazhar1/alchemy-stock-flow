@@ -9,6 +9,7 @@ import {
   fetchFulfillmentSummary,
   fetchFulfillmentTrend,
   fetchCollectionPerformance,
+  fetchCollectionProducts,
   fetchRevenueKPIs,
   runCustomReport,
   type DateRange,
@@ -86,6 +87,14 @@ export function useFulfillmentTrend(range: DateRange) {
 export function useCollectionPerformance(range: DateRange) {
   const { storeId } = useStoreFilter();
   return useAsync(() => fetchCollectionPerformance(range, storeId), [range, storeId]);
+}
+
+export function useCollectionProducts(collection: string | null, range: DateRange) {
+  const { storeId } = useStoreFilter();
+  return useAsync(
+    () => collection ? fetchCollectionProducts(collection, range, storeId) : Promise.resolve([]),
+    [collection, range, storeId],
+  );
 }
 
 export function useRevenueKPIs(range: DateRange) {
