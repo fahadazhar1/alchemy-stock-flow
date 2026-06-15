@@ -5,7 +5,8 @@ import {
 } from "recharts";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { AlertTriangle, TrendingDown, RefreshCw } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { AlertTriangle, TrendingDown, RefreshCw, Download } from "lucide-react";
 import {
   useSalesByChannel, useSalesTrend, useTopProducts,
   useInventoryHealth, useInventoryKPIs,
@@ -13,7 +14,21 @@ import {
   useCollectionPerformance, useRevenueKPIs,
 } from "../lib/useReportData";
 import { useCurrency } from "@/hooks/useCurrency";
+import { downloadCsv, csvName, type CsvColumn } from "../lib/exportReport";
 import type { DateRange } from "../lib/reportsEngine";
+
+// ─── CSV export button ────────────────────────────────────────────────────────
+
+function CsvButton({ rows, name, columns }:
+  { rows: any[] | undefined; name: string; columns: CsvColumn<any>[] }) {
+  const disabled = !rows?.length;
+  return (
+    <Button size="sm" variant="outline" className="h-7 gap-1.5 text-xs"
+      disabled={disabled} onClick={() => rows && downloadCsv(csvName(name), columns, rows)}>
+      <Download size={12} /> CSV
+    </Button>
+  );
+}
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -120,7 +135,16 @@ export function SalesOverviewReport() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold">Sales overview</h2>
-        <RangePicker value={range} onChange={setRange} />
+        <div className="flex items-center gap-2">
+          <CsvButton rows={channels.data} name="sales-by-channel"
+            columns={[
+              { key: "channel", header: "Channel" },
+              { key: "revenue", header: "Revenue" },
+              { key: "orders", header: "Orders" },
+              { key: "aov", header: "AOV" },
+            ]} />
+          <RangePicker value={range} onChange={setRange} />
+        </div>
       </div>
 
       {/* KPI row */}
@@ -222,7 +246,18 @@ export function TopProductsReport() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold">Top products by revenue</h2>
-        <RangePicker value={range} onChange={setRange} />
+        <div className="flex items-center gap-2">
+          <CsvButton rows={q.data} name="top-products"
+            columns={[
+              { key: "name", header: "Product" },
+              { key: "type", header: "Type" },
+              { key: "revenue", header: "Revenue" },
+              { key: "units", header: "Units" },
+              { key: "orders", header: "Order lines" },
+              { key: "share", header: "Share %", map: r => total ? ((r.revenue / total) * 100).toFixed(1) : "0" },
+            ]} />
+          <RangePicker value={range} onChange={setRange} />
+        </div>
       </div>
       <Card>
         <CardContent className="p-0">
@@ -288,7 +323,19 @@ export function InventoryHealthReport() {
 
   return (
     <div className="space-y-4">
-      <h2 className="text-sm font-semibold">Inventory health</h2>
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-semibold">Inventory health</h2>
+        <CsvButton rows={filtered} name="inventory-health"
+          columns={[
+            { key: "product", header: "Product" },
+            { key: "sku", header: "SKU" },
+            { key: "inventory", header: "In stock" },
+            { key: "committed", header: "Committed" },
+            { key: "available", header: "Available" },
+            { key: "price", header: "Price" },
+            { key: "status", header: "Status", map: r => r.isOutOfStock ? "Out of stock" : r.isLowStock ? "Low stock" : r.isExpiringSoon ? "Expiring" : "OK" },
+          ]} />
+      </div>
 
       {/* KPIs */}
       <div className="grid grid-cols-4 gap-3">
@@ -391,7 +438,16 @@ export function FulfillmentReport() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold">Fulfillment report</h2>
-        <RangePicker value={range} onChange={setRange} />
+        <div className="flex items-center gap-2">
+          <CsvButton rows={trend.data} name="fulfillment-trend"
+            columns={[
+              { key: "date", header: "Date" },
+              { key: "fulfilled", header: "Fulfilled" },
+              { key: "partial", header: "Partial" },
+              { key: "unfulfilled", header: "Unfulfilled" },
+            ]} />
+          <RangePicker value={range} onChange={setRange} />
+        </div>
       </div>
 
       <div className="grid grid-cols-4 gap-3">
@@ -486,7 +542,16 @@ export function CollectionPerformanceReport() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold">Collection performance</h2>
-        <RangePicker value={range} onChange={setRange} />
+        <div className="flex items-center gap-2">
+          <CsvButton rows={q.data} name="collection-performance"
+            columns={[
+              { key: "collection", header: "Collection" },
+              { key: "revenue", header: "Revenue" },
+              { key: "units", header: "Units" },
+              { key: "share", header: "Share %", map: r => total ? ((r.revenue / total) * 100).toFixed(1) : "0" },
+            ]} />
+          <RangePicker value={range} onChange={setRange} />
+        </div>
       </div>
       <div className="grid gap-4" style={{ gridTemplateColumns: "1fr 260px" }}>
         <Card>

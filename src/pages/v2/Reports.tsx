@@ -12,11 +12,28 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 import { reportTemplates } from "./mockData";
-import { useSavedReports, useReportSchedules, type SavedReport, type ReportSchedule } from "@/hooks/useReports";
+import {
+  useSavedReports, useReportSchedules,
+  useDeleteReport, useToggleSchedule, useDeleteSchedule,
+  type SavedReport, type ReportSchedule,
+} from "@/hooks/useReports";
+import { useRole } from "@/hooks/useRole";
+import { useStoreFilter } from "@/hooks/useStoreFilter";
 
 import FunctionalCustomBuilder from "./components/FunctionalCustomBuilder";
+import SaveReportDialog from "./components/SaveReportDialog";
+import ScheduleDialog from "./components/ScheduleDialog";
+import { Edit2, Trash2 } from "lucide-react";
 import {
   SalesOverviewReport,
   TopProductsReport,
@@ -136,12 +153,17 @@ function SavedRowSkeleton() {
   );
 }
 
-function SavedReportsTab({ reports, isLoading, search, onSearch, onRunReport }: {
+function SavedReportsTab({ reports, isLoading, search, onSearch, onRunReport, onNew, onEdit, onSchedule, onDelete, canEdit }: {
   reports: SavedReport[];
   isLoading: boolean;
   search: string;
   onSearch: (s: string) => void;
   onRunReport: (r: SavedReport) => void;
+  onNew: () => void;
+  onEdit: (r: SavedReport) => void;
+  onSchedule: (r: SavedReport) => void;
+  onDelete: (r: SavedReport) => void;
+  canEdit: boolean;
 }) {
   return (
     <Card>
@@ -161,7 +183,7 @@ function SavedReportsTab({ reports, isLoading, search, onSearch, onRunReport }: 
                 onChange={e => onSearch(e.target.value)}
               />
             </div>
-            <Button size="sm" className="h-8 gap-1.5 text-xs"><Plus size={12} /> New report</Button>
+            {canEdit && <Button size="sm" className="h-8 gap-1.5 text-xs" onClick={onNew}><Plus size={12} /> New report</Button>}
           </div>
         </div>
       </CardHeader>
@@ -215,12 +237,26 @@ function SavedReportsTab({ reports, isLoading, search, onSearch, onRunReport }: 
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-1 justify-end">
-                            <button onClick={() => onRunReport(r)}
+                            <button onClick={() => onRunReport(r)} title="Run report"
                               className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground">
                               <Play size={13} />
                             </button>
-                            <button className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"><Share2 size={13} /></button>
-                            <button className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"><MoreHorizontal size={13} /></button>
+                            {canEdit && (
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <button className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground">
+                                    <MoreHorizontal size={13} />
+                                  </button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="w-40">
+                                  <DropdownMenuItem onClick={() => onRunReport(r)} className="gap-2 text-xs"><Play size={13} /> Run</DropdownMenuItem>
+                                  <DropdownMenuItem onClick={() => onEdit(r)} className="gap-2 text-xs"><Edit2 size={13} /> Edit</DropdownMenuItem>
+                                  <DropdownMenuItem onClick={() => onSchedule(r)} className="gap-2 text-xs"><Calendar size={13} /> Schedule</DropdownMenuItem>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem onClick={() => onDelete(r)} className="gap-2 text-xs text-destructive focus:text-destructive"><Trash2 size={13} /> Delete</DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -253,16 +289,21 @@ function ScheduleSkeleton() {
   );
 }
 
-function ScheduledTab({ schedules, isLoading }: {
+function ScheduledTab({ schedules, isLoading, onNew, onEdit, onToggle, onDelete, canEdit }: {
   schedules: ReportSchedule[];
   isLoading: boolean;
+  onNew: () => void;
+  onEdit: (s: ReportSchedule) => void;
+  onToggle: (s: ReportSchedule) => void;
+  onDelete: (s: ReportSchedule) => void;
+  canEdit: boolean;
 }) {
   return (
     <Card>
       <CardHeader className="pb-2 pt-4 px-4">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-semibold">Scheduled deliveries</h3>
-          <Button size="sm" className="h-8 gap-1.5 text-xs"><Plus size={12} /> New schedule</Button>
+          {canEdit && <Button size="sm" className="h-8 gap-1.5 text-xs" onClick={onNew}><Plus size={12} /> New schedule</Button>}
         </div>
       </CardHeader>
       <CardContent className="p-0">
@@ -293,12 +334,27 @@ function ScheduledTab({ schedules, isLoading }: {
                     <p className="text-[10px] text-muted-foreground">Next run</p>
                     <p className="text-xs font-medium">{s.nextRunLabel}</p>
                   </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <button className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground">
-                      {s.isActive ? <Pause size={13} /> : <Play size={13} />}
-                    </button>
-                    <button className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"><MoreHorizontal size={13} /></button>
-                  </div>
+                  {canEdit && (
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button onClick={() => onToggle(s)} title={s.isActive ? "Pause" : "Resume"}
+                        className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground">
+                        {s.isActive ? <Pause size={13} /> : <Play size={13} />}
+                      </button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"><MoreHorizontal size={13} /></button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-40">
+                          <DropdownMenuItem onClick={() => onEdit(s)} className="gap-2 text-xs"><Edit2 size={13} /> Edit</DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => onToggle(s)} className="gap-2 text-xs">
+                            {s.isActive ? <><Pause size={13} /> Pause</> : <><Play size={13} /> Resume</>}
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem onClick={() => onDelete(s)} className="gap-2 text-xs text-destructive focus:text-destructive"><Trash2 size={13} /> Delete</DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  )}
                 </div>
               ))}
       </CardContent>
@@ -316,8 +372,25 @@ export default function Reports() {
   const [activeTab, setActiveTab] = useState("templates");
   const [activeReport, setActiveReport] = useState<ReportKey | null>(null);
 
+  const { canEdit } = useRole();
+  const { storeId } = useStoreFilter();
+
   const savedQ = useSavedReports(savedSearch);
   const scheduledQ = useReportSchedules();
+
+  const deleteReport = useDeleteReport();
+  const toggleSchedule = useToggleSchedule();
+  const deleteSchedule = useDeleteSchedule();
+
+  // Dialog state
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [editingReport, setEditingReport] = useState<SavedReport | null>(null);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [editingSchedule, setEditingSchedule] = useState<ReportSchedule | null>(null);
+  const [scheduleForReport, setScheduleForReport] = useState<{ id: string; name: string } | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<
+    { kind: "report"; item: SavedReport } | { kind: "schedule"; item: ReportSchedule } | null
+  >(null);
 
   const filteredTemplates = categoryFilter === "All"
     ? reportTemplates
@@ -341,6 +414,38 @@ export default function Reports() {
     setActiveTab("templates");
   };
 
+  const handleNewReport = () => { setEditingReport(null); setSaveOpen(true); };
+  const handleEditReport = (r: SavedReport) => { setEditingReport(r); setSaveOpen(true); };
+  const handleScheduleReport = (r: SavedReport) => {
+    setEditingSchedule(null);
+    setScheduleForReport({ id: r.id, name: r.name });
+    setScheduleOpen(true);
+  };
+  const handleNewSchedule = () => { setEditingSchedule(null); setScheduleForReport(null); setScheduleOpen(true); };
+  const handleEditSchedule = (s: ReportSchedule) => { setEditingSchedule(s); setScheduleForReport(null); setScheduleOpen(true); };
+  const handleToggleSchedule = (s: ReportSchedule) => {
+    toggleSchedule.mutate({ id: s.id, isActive: !s.isActive }, {
+      onSuccess: () => toast.success(s.isActive ? "Schedule paused" : "Schedule resumed"),
+      onError: (e: any) => toast.error(e.message ?? "Failed to update schedule"),
+    });
+  };
+
+  const handleConfirmDelete = () => {
+    if (!confirmDelete) return;
+    if (confirmDelete.kind === "report") {
+      deleteReport.mutate(confirmDelete.item.id, {
+        onSuccess: () => toast.success("Report deleted"),
+        onError: (e: any) => toast.error(e.message ?? "Failed to delete report"),
+      });
+    } else {
+      deleteSchedule.mutate(confirmDelete.item.id, {
+        onSuccess: () => toast.success("Schedule deleted"),
+        onError: (e: any) => toast.error(e.message ?? "Failed to delete schedule"),
+      });
+    }
+    setConfirmDelete(null);
+  };
+
   return (
     <div className="p-6 space-y-4 max-w-[1600px]">
       {/* Header */}
@@ -349,10 +454,11 @@ export default function Reports() {
           <h1 className="text-2xl font-semibold tracking-tight">Reports</h1>
           <p className="text-sm text-muted-foreground mt-0.5">Pre-built reports, custom builder, and scheduled deliveries</p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs"><Share2 size={13} /> Share library</Button>
-          <Button size="sm" className="h-8 gap-1.5 text-xs"><Plus size={13} /> New report</Button>
-        </div>
+        {canEdit && (
+          <div className="flex items-center gap-2">
+            <Button size="sm" className="h-8 gap-1.5 text-xs" onClick={handleNewReport}><Plus size={13} /> New report</Button>
+          </div>
+        )}
       </div>
 
       <Tabs value={activeTab} onValueChange={v => { setActiveTab(v); setActiveReport(null); }}>
@@ -423,6 +529,11 @@ export default function Reports() {
             search={savedSearch}
             onSearch={setSavedSearch}
             onRunReport={handleRunSaved}
+            onNew={handleNewReport}
+            onEdit={handleEditReport}
+            onSchedule={handleScheduleReport}
+            onDelete={r => setConfirmDelete({ kind: "report", item: r })}
+            canEdit={canEdit}
           />
         </TabsContent>
 
@@ -431,9 +542,47 @@ export default function Reports() {
           <ScheduledTab
             schedules={scheduledQ.data ?? []}
             isLoading={scheduledQ.isLoading}
+            onNew={handleNewSchedule}
+            onEdit={handleEditSchedule}
+            onToggle={handleToggleSchedule}
+            onDelete={s => setConfirmDelete({ kind: "schedule", item: s })}
+            canEdit={canEdit}
           />
         </TabsContent>
       </Tabs>
+
+      {/* Dialogs */}
+      <SaveReportDialog
+        open={saveOpen}
+        onOpenChange={setSaveOpen}
+        report={editingReport}
+        storeId={storeId}
+      />
+      <ScheduleDialog
+        open={scheduleOpen}
+        onOpenChange={setScheduleOpen}
+        schedule={editingSchedule}
+        defaultSavedReportId={scheduleForReport?.id ?? null}
+        defaultName={scheduleForReport ? `${scheduleForReport.name} delivery` : undefined}
+        storeId={storeId}
+      />
+      <AlertDialog open={!!confirmDelete} onOpenChange={o => { if (!o) setConfirmDelete(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {confirmDelete?.kind === "schedule" ? "schedule" : "report"}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              "{confirmDelete?.item.name}" will be permanently removed. This can't be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleConfirmDelete}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -12,12 +12,18 @@ import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   LineChart, Line, PieChart, Pie, Cell,
 } from "recharts";
+import { toast } from "sonner";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useCustomReport } from "../lib/useReportData";
 import { useCurrency } from "@/hooks/useCurrency";
+import { useRole } from "@/hooks/useRole";
+import { useStoreFilter } from "@/hooks/useStoreFilter";
 import { RangePicker } from "./ReportPanels";
+import { downloadCsv, csvName, type CsvColumn } from "../lib/exportReport";
+import SaveReportDialog from "./SaveReportDialog";
+import ScheduleDialog from "./ScheduleDialog";
 import type { DateRange } from "../lib/reportsEngine";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -102,11 +108,15 @@ function ResultTooltip({ active, payload, label }: any) {
 
 export default function FunctionalCustomBuilder() {
   const { fmtCurrencyInt: fmt, symbol } = useCurrency();
+  const { canEdit } = useRole();
+  const { storeId } = useStoreFilter();
   const [metrics, setMetrics] = useState<string[]>(["Revenue", "Orders"]);
   const [dimensions, setDimensions] = useState<string[]>(["Channel"]);
   const [filters, setFilters] = useState<string[]>(["Date range"]);
   const [chartType, setChartType] = useState<ChartType>("bar");
   const [dateRange, setDateRange] = useState<DateRange>("30d");
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
 
   const { data, isLoading, error, lastConfig, run } = useCustomReport();
 
@@ -142,6 +152,38 @@ export default function FunctionalCustomBuilder() {
   const tickFmt = isCurrency
     ? (v: number) => `${symbol}${Math.round(v / 1000)}k`
     : (v: number) => fmtN(v);
+
+  // Config persisted with a saved custom report (lets it re-run later).
+  const builderConfig = { metrics, dimensions, filters, dateRange, chartType };
+
+  const csvColumns = (): CsvColumn<typeof chartData[number]>[] => [
+    { key: "label", header: dimensions[0] ?? "Dimension" },
+    ...metrics.map(m => ({
+      key: m,
+      header: m,
+      map: (row: any) => Number(row[m] ?? 0),
+    })),
+  ];
+
+  const handleCsv = () => {
+    if (!chartData.length) return;
+    downloadCsv(csvName("custom-report"), csvColumns(), chartData);
+  };
+
+  const handleCopy = async () => {
+    if (!chartData.length) return;
+    const cols = csvColumns();
+    const tsv = [
+      cols.map(c => c.header).join("\t"),
+      ...chartData.map(row => cols.map(c => (c.map ? c.map(row) : (row as any)[c.key])).join("\t")),
+    ].join("\n");
+    try {
+      await navigator.clipboard.writeText(tsv);
+      toast.success("Copied to clipboard");
+    } catch {
+      toast.error("Couldn't copy to clipboard");
+    }
+  };
 
   return (
     <div className="grid gap-3.5" style={{ gridTemplateColumns: "256px 1fr" }}>
@@ -189,8 +231,12 @@ export default function FunctionalCustomBuilder() {
                 </Button>
               ))}
               <div className="flex-1" />
-              <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5"><Save size={12} /> Save</Button>
-              <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5"><Calendar size={12} /> Schedule</Button>
+              {canEdit && (
+                <>
+                  <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" onClick={() => setSaveOpen(true)}><Save size={12} /> Save</Button>
+                  <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" onClick={() => setScheduleOpen(true)}><Calendar size={12} /> Schedule</Button>
+                </>
+              )}
               <Button size="sm" className="h-7 text-xs gap-1.5" onClick={handleRun} disabled={isLoading}>
                 {isLoading ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
                 {isLoading ? "Running…" : "Run"}
@@ -208,10 +254,10 @@ export default function FunctionalCustomBuilder() {
                   ? <span>{lastConfig?.metrics.join(", ") || "—"} by {lastConfig?.dimensions.join(", ") || "—"}</span>
                   : <span className="text-muted-foreground font-normal">Configure fields above and click Run</span>}
               </h3>
-              {data && (
+              {data && chartData.length > 0 && (
                 <div className="flex gap-1.5">
-                  <Button size="sm" variant="ghost" className="h-7 text-xs gap-1"><Download size={12} /> CSV</Button>
-                  <Button size="sm" variant="ghost" className="h-7 text-xs gap-1"><Share2 size={12} /> Share</Button>
+                  <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" onClick={handleCsv}><Download size={12} /> CSV</Button>
+                  <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" onClick={handleCopy}><Share2 size={12} /> Copy</Button>
                 </div>
               )}
             </div>
@@ -344,6 +390,19 @@ export default function FunctionalCustomBuilder() {
           </CardContent>
         </Card>
       </div>
+
+      <SaveReportDialog
+        open={saveOpen}
+        onOpenChange={setSaveOpen}
+        defaultTemplateName="Custom"
+        defaultConfig={builderConfig}
+        storeId={storeId}
+      />
+      <ScheduleDialog
+        open={scheduleOpen}
+        onOpenChange={setScheduleOpen}
+        storeId={storeId}
+      />
     </div>
   );
 }
