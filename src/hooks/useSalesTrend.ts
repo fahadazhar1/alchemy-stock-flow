@@ -31,27 +31,16 @@ export function useSalesTrend(days = 30, bounds?: DateBounds) {
   return useQuery({
     queryKey: ["sales-trend", storeId, b.cacheKey],
     queryFn: async (): Promise<TrendPoint[]> => {
-      // Fetch current + prev period in parallel
-      let curQ = (supabase as any)
-        .from("orders")
-        .select("shopify_created_at, total_price, id")
-        .gte("shopify_created_at", b.startISO)
-        .lte("shopify_created_at", b.endISO)
-        .is("cancelled_at", null)
-        .limit(10000);
-
-      let prevQ = (supabase as any)
-        .from("orders")
-        .select("shopify_created_at, total_price, id")
-        .gte("shopify_created_at", b.prevStartISO)
-        .lte("shopify_created_at", b.prevEndISO)
-        .is("cancelled_at", null)
-        .limit(10000);
-
-      if (storeId) { curQ = curQ.eq("store_id", storeId); prevQ = prevQ.eq("store_id", storeId); }
-
-      const [curRes, prevRes] = await Promise.all([curQ, prevQ]);
-      if (curRes.error) throw curRes.error;
+      // Server-side daily rollup — see migration 20260615000001_sales_trend_rpc.sql.
+      // Returns ~30-120 daily rows instead of up to 20k raw order rows.
+      const { data, error } = await (supabase as any).rpc("get_sales_trend", {
+        p_start_iso:      b.startISO,
+        p_end_iso:        b.endISO,
+        p_prev_start_iso: b.prevStartISO,
+        p_prev_end_iso:   b.prevEndISO,
+        p_store_id:       storeId ?? null,
+      });
+      if (error) throw error;
 
       // Build day-offset buckets for both periods
       // Key = day index from period start (0, 1, 2...) so they align on X axis
@@ -59,22 +48,21 @@ export function useSalesTrend(days = 30, bounds?: DateBounds) {
       const prevStart = new Date(b.prevStartISO); prevStart.setHours(0, 0, 0, 0);
       const DAY = 86_400_000;
 
-      const bucket = (rows: any[], periodStart: Date) => {
+      // bucket_date is "YYYY-MM-DD" → new Date() parses as UTC midnight, identical
+      // to the old new Date(shopify_created_at.slice(0,10)) bucketing.
+      const fill = (period: "cur" | "prev", periodStart: Date) => {
         const map = new Map<number, { revenue: number; orders: number }>();
-        for (const row of rows ?? []) {
-          if (!row.shopify_created_at) continue;
-          const d = new Date((row.shopify_created_at as string).slice(0, 10));
+        for (const row of (data ?? []) as any[]) {
+          if (row.period !== period || !row.bucket_date) continue;
+          const d = new Date(row.bucket_date as string);
           const idx = Math.round((d.getTime() - periodStart.getTime()) / DAY);
-          const e = map.get(idx) ?? { revenue: 0, orders: 0 };
-          e.revenue += Number(row.total_price ?? 0);
-          e.orders  += 1;
-          map.set(idx, e);
+          map.set(idx, { revenue: Number(row.revenue ?? 0), orders: Number(row.orders ?? 0) });
         }
         return map;
       };
 
-      const curMap  = bucket(curRes.data,  curStart);
-      const prevMap = bucket(prevRes.data ?? [], prevStart);
+      const curMap  = fill("cur",  curStart);
+      const prevMap = fill("prev", prevStart);
 
       const end = new Date();
       const totalDays = Math.ceil((end.getTime() - curStart.getTime()) / DAY) + 1;
