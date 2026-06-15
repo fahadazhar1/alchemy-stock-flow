@@ -62,14 +62,26 @@ export function printElementAsPdf(el: HTMLElement | null, title: string): void {
 
   win.document.write(`<!doctype html><html><head><title>${title}</title>${styles}
     <style>
-      @page { margin: 16mm; }
-      body { background: #fff; color: #111; padding: 0; }
-      .print-title { font: 600 18px/1.3 system-ui, sans-serif; margin: 0 0 12px; }
-      .print-meta { font: 400 11px/1.3 system-ui, sans-serif; color: #666; margin: 0 0 20px; }
+      @page { margin: 14mm; }
+      body { background: #fff; color: #111; padding: 0; font-family: system-ui, sans-serif; }
+      .print-title { font: 600 18px/1.3 system-ui, sans-serif; margin: 0 0 4px; }
+      .print-meta { font: 400 11px/1.3 system-ui, sans-serif; color: #666; margin: 0 0 16px;
+        padding-bottom: 12px; border-bottom: 1px solid #e5e7eb; }
+      /* Stack the report's side-by-side grid (chart + table) vertically and keep
+         each block intact across page breaks for a tidy printout. */
+      .print-body .grid { display: block !important; }
+      .print-body .grid > * { margin-bottom: 16px; page-break-inside: avoid; }
+      .print-body .recharts-wrapper,
+      .print-body .recharts-responsive-container { page-break-inside: avoid; margin: 0 auto; }
+      .print-body svg { max-width: 100% !important; height: auto; }
+      .print-body table { width: 100%; border-collapse: collapse; }
+      .print-body th, .print-body td { padding: 6px 8px; }
+      /* Force chart fills / colour swatches to print (browsers drop them by default). */
+      * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
     </style></head><body>
     <p class="print-title">${title}</p>
     <p class="print-meta">Generated ${new Date().toLocaleString("en-GB")}</p>
-    <div>${el.innerHTML}</div>
+    <div class="print-body">${el.innerHTML}</div>
     </body></html>`);
   win.document.close();
   win.focus();

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, type RefObject } from "react";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ComposedChart, Area, LineChart, Line, PieChart, Pie, Cell,
@@ -6,7 +6,7 @@ import {
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { AlertTriangle, TrendingDown, RefreshCw, Download } from "lucide-react";
+import { AlertTriangle, TrendingDown, RefreshCw, Download, FileText } from "lucide-react";
 import {
   useSalesByChannel, useSalesTrend, useTopProducts,
   useInventoryHealth, useInventoryKPIs,
@@ -14,7 +14,7 @@ import {
   useCollectionPerformance, useRevenueKPIs,
 } from "../lib/useReportData";
 import { useCurrency } from "@/hooks/useCurrency";
-import { downloadCsv, csvName, type CsvColumn } from "../lib/exportReport";
+import { downloadCsv, csvName, printElementAsPdf, type CsvColumn } from "../lib/exportReport";
 import type { DateRange } from "../lib/reportsEngine";
 
 // ─── CSV export button ────────────────────────────────────────────────────────
@@ -26,6 +26,16 @@ function CsvButton({ rows, name, columns }:
     <Button size="sm" variant="outline" className="h-7 gap-1.5 text-xs"
       disabled={disabled} onClick={() => rows && downloadCsv(csvName(name), columns, rows)}>
       <Download size={12} /> CSV
+    </Button>
+  );
+}
+
+function PdfButton({ targetRef, title, disabled }:
+  { targetRef: RefObject<HTMLElement>; title: string; disabled?: boolean }) {
+  return (
+    <Button size="sm" variant="outline" className="h-7 gap-1.5 text-xs"
+      disabled={disabled} onClick={() => printElementAsPdf(targetRef.current, title)}>
+      <FileText size={12} /> PDF
     </Button>
   );
 }
@@ -538,6 +548,8 @@ export function CollectionPerformanceReport() {
   const [range, setRange] = useState<DateRange>("thisweek");
   const q = useCollectionPerformance(range);
   const total = q.data?.reduce((s, r) => s + r.revenue, 0) ?? 0;
+  const printRef = useRef<HTMLDivElement>(null);
+  const rangeLabel = RANGES.find(r => r.value === range)?.label ?? range;
 
   return (
     <div className="space-y-4">
@@ -551,10 +563,12 @@ export function CollectionPerformanceReport() {
               { key: "units", header: "Units" },
               { key: "share", header: "Share %", map: r => total ? ((r.revenue / total) * 100).toFixed(1) : "0" },
             ]} />
+          <PdfButton targetRef={printRef} disabled={!q.data?.length}
+            title={`Collection Performance — ${rangeLabel}`} />
           <RangePicker value={range} onChange={setRange} />
         </div>
       </div>
-      <div className="grid gap-4" style={{ gridTemplateColumns: "1fr 260px" }}>
+      <div ref={printRef} className="grid gap-4" style={{ gridTemplateColumns: "1fr 260px" }}>
         <Card>
           <CardContent className="p-0">
             {q.isLoading ? (
