@@ -141,6 +141,8 @@ export function SalesOverviewReport() {
   const kpis = useRevenueKPIs(range);
   const trend = useSalesTrend(range);
   const channels = useSalesByChannel(range);
+  const printRef = useRef<HTMLDivElement>(null);
+  const rangeLabel = RANGES.find(r => r.value === range)?.label ?? range;
 
   return (
     <div className="space-y-4">
@@ -154,10 +156,13 @@ export function SalesOverviewReport() {
               { key: "orders", header: "Orders" },
               { key: "aov", header: "AOV" },
             ]} />
+          <PdfButton targetRef={printRef} disabled={!channels.data?.length}
+            title={`Sales Overview — ${rangeLabel}`} />
           <RangePicker value={range} onChange={setRange} />
         </div>
       </div>
 
+      <div ref={printRef} className="space-y-4">
       {/* KPI row */}
       <div className="grid grid-cols-3 gap-3">
         {kpis.isLoading ? (
@@ -241,6 +246,7 @@ export function SalesOverviewReport() {
           )}
         </CardContent>
       </Card>
+      </div>
     </div>
   );
 }
@@ -252,6 +258,8 @@ export function TopProductsReport() {
   const [range, setRange] = useState<DateRange>("30d");
   const q = useTopProducts(range);
   const total = q.data?.reduce((s, r) => s + r.revenue, 0) ?? 0;
+  const printRef = useRef<HTMLDivElement>(null);
+  const rangeLabel = RANGES.find(r => r.value === range)?.label ?? range;
 
   return (
     <div className="space-y-4">
@@ -267,9 +275,12 @@ export function TopProductsReport() {
               { key: "orders", header: "Order lines" },
               { key: "share", header: "Share %", map: r => total ? ((r.revenue / total) * 100).toFixed(1) : "0" },
             ]} />
+          <PdfButton targetRef={printRef} disabled={!q.data?.length}
+            title={`Top Products — ${rangeLabel}`} />
           <RangePicker value={range} onChange={setRange} />
         </div>
       </div>
+      <div ref={printRef}>
       <Card>
         <CardContent className="p-0">
           {q.isLoading ? (
@@ -313,6 +324,7 @@ export function TopProductsReport() {
           )}
         </CardContent>
       </Card>
+      </div>
     </div>
   );
 }
@@ -436,6 +448,8 @@ export function FulfillmentReport() {
   const [range, setRange] = useState<DateRange>("30d");
   const summary = useFulfillmentSummary(range);
   const trend = useFulfillmentTrend(range);
+  const printRef = useRef<HTMLDivElement>(null);
+  const rangeLabel = RANGES.find(r => r.value === range)?.label ?? range;
 
   const pieData = summary.data
     ? [
@@ -457,10 +471,13 @@ export function FulfillmentReport() {
               { key: "partial", header: "Partial" },
               { key: "unfulfilled", header: "Unfulfilled" },
             ]} />
+          <PdfButton targetRef={printRef} disabled={!summary.data}
+            title={`Fulfillment Report — ${rangeLabel}`} />
           <RangePicker value={range} onChange={setRange} />
         </div>
       </div>
 
+      <div ref={printRef} className="space-y-4">
       <div className="grid grid-cols-4 gap-3">
         {summary.isLoading ? (
           Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-20 bg-muted rounded-lg animate-pulse" />)
@@ -536,6 +553,7 @@ export function FulfillmentReport() {
             )}
           </CardContent>
         </Card>
+      </div>
       </div>
     </div>
   );
