@@ -2,6 +2,9 @@ import { supabase } from "@/integrations/supabase/client";
 
 export type DateRange = "7d" | "30d" | "90d" | "365d" | "all";
 
+// Range → p_from (timestamptz ISO string, or null for all-time). The RPCs filter
+// on shopify_created_at (actual order date) and exclude cancelled orders, so v2
+// Reports now agree with the rest of the dashboard. See lib/REPORTS_RPCS.md.
 function dateFrom(range: DateRange): string | null {
   if (range === "all") return null;
   const days = { "7d": 7, "30d": 30, "90d": 90, "365d": 365 }[range];
@@ -10,97 +13,60 @@ function dateFrom(range: DateRange): string | null {
   return d.toISOString();
 }
 
+const dayLabel = (date: string) =>
+  new Date(date).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+
 // ─── Sales by channel ────────────────────────────────────────────────────────
 
 export async function fetchSalesByChannel(range: DateRange = "30d", storeId?: string | null) {
-  let q = supabase
-    .from("orders")
-    .select("source_name, total_price, financial_status")
-    .limit(10000);
-  const from = dateFrom(range);
-  if (from) q = q.gte("created_at", from);
-  if (storeId) q = q.eq("store_id", storeId);
-
-  const { data, error } = await q;
+  const { data, error } = await (supabase as any).rpc("get_report_sales_by_channel", {
+    p_from: dateFrom(range),
+    p_store_id: storeId ?? null,
+  });
   if (error) throw error;
 
-  const map: Record<string, { revenue: number; orders: number }> = {};
-  for (const row of data ?? []) {
-    const ch = row.source_name ?? "Unknown";
-    if (!map[ch]) map[ch] = { revenue: 0, orders: 0 };
-    map[ch].revenue += Number(row.total_price ?? 0);
-    map[ch].orders += 1;
-  }
-
-  return Object.entries(map)
-    .map(([channel, v]) => ({ channel, ...v, aov: v.orders ? v.revenue / v.orders : 0 }))
-    .sort((a, b) => b.revenue - a.revenue);
+  return (data ?? []).map((r: any) => ({
+    channel: r.channel,
+    revenue: Number(r.revenue),
+    orders: Number(r.orders),
+    aov: Number(r.aov),
+  }));
 }
 
 // ─── Sales trend (daily/weekly) ───────────────────────────────────────────────
 
 export async function fetchSalesTrend(range: DateRange = "30d", storeId?: string | null) {
-  let q = supabase
-    .from("orders")
-    .select("created_at, total_price")
-    .order("created_at", { ascending: true })
-    .limit(10000);
-  const from = dateFrom(range);
-  if (from) q = q.gte("created_at", from);
-  if (storeId) q = q.eq("store_id", storeId);
-
-  const { data, error } = await q;
+  const { data, error } = await (supabase as any).rpc("get_report_sales_trend", {
+    p_from: dateFrom(range),
+    p_store_id: storeId ?? null,
+  });
   if (error) throw error;
 
-  const map: Record<string, { revenue: number; orders: number }> = {};
-  for (const row of data ?? []) {
-    const day = row.created_at.slice(0, 10);
-    if (!map[day]) map[day] = { revenue: 0, orders: 0 };
-    map[day].revenue += Number(row.total_price ?? 0);
-    map[day].orders += 1;
-  }
-
-  return Object.entries(map).map(([date, v]) => ({
-    date,
-    label: new Date(date).toLocaleDateString("en-GB", { day: "numeric", month: "short" }),
-    ...v,
+  return (data ?? []).map((r: any) => ({
+    date: r.date,
+    label: dayLabel(r.date),
+    revenue: Number(r.revenue),
+    orders: Number(r.orders),
   }));
 }
 
 // ─── Top products by revenue ──────────────────────────────────────────────────
 
 export async function fetchTopProducts(range: DateRange = "30d", limit = 20, storeId?: string | null) {
-  let q = supabase
-    .from("order_items")
-    .select("product_id, quantity, unit_price, created_at, products(name, product_type, vendor_id)")
-    .limit(10000);
-  const from = dateFrom(range);
-  if (from) q = q.gte("created_at", from);
-  if (storeId) q = q.eq("store_id", storeId);
-
-  const { data, error } = await q;
+  const { data, error } = await (supabase as any).rpc("get_report_top_products", {
+    p_from: dateFrom(range),
+    p_limit: limit,
+    p_store_id: storeId ?? null,
+  });
   if (error) throw error;
 
-  const map: Record<string, { name: string; type: string; revenue: number; units: number; orders: number }> = {};
-  for (const row of (data ?? []) as any[]) {
-    const id = row.product_id;
-    if (!map[id]) {
-      map[id] = {
-        name: row.products?.name ?? "Unknown",
-        type: row.products?.product_type ?? "—",
-        revenue: 0,
-        units: 0,
-        orders: 0,
-      };
-    }
-    map[id].revenue += Number(row.unit_price ?? 0) * Number(row.quantity ?? 0);
-    map[id].units += Number(row.quantity ?? 0);
-    map[id].orders += 1;
-  }
-
-  return Object.values(map)
-    .sort((a, b) => b.revenue - a.revenue)
-    .slice(0, limit);
+  return (data ?? []).map((r: any) => ({
+    name: r.name,
+    type: r.type,
+    revenue: Number(r.revenue),
+    units: Number(r.units),
+    orders: Number(r.orders),
+  }));
 }
 
 // ─── Inventory health ─────────────────────────────────────────────────────────
@@ -143,137 +109,98 @@ export async function fetchInventoryHealth(storeId?: string | null) {
 // ─── Inventory summary KPIs ───────────────────────────────────────────────────
 
 export async function fetchInventoryKPIs(storeId?: string | null) {
-  const rows = await fetchInventoryHealth(storeId);
-  const totalSKUs = rows.length;
-  const outOfStock = rows.filter(r => r.isOutOfStock).length;
-  const lowStock = rows.filter(r => r.isLowStock && !r.isOutOfStock).length;
-  const expiringSoon = rows.filter(r => r.isExpiringSoon).length;
-  const totalValue = rows.reduce((s, r) => s + r.stockValue, 0);
-  const totalUnits = rows.reduce((s, r) => s + r.inventory, 0);
-  return { totalSKUs, outOfStock, lowStock, expiringSoon, totalValue, totalUnits };
+  const { data, error } = await (supabase as any).rpc("get_report_inventory_kpis", {
+    p_store_id: storeId ?? null,
+  });
+  if (error) throw error;
+  const row = (Array.isArray(data) ? data[0] : data) ?? {};
+  return {
+    totalSKUs: Number(row.total_skus ?? 0),
+    outOfStock: Number(row.out_of_stock ?? 0),
+    lowStock: Number(row.low_stock ?? 0),
+    expiringSoon: Number(row.expiring_soon ?? 0),
+    totalValue: Number(row.total_value ?? 0),
+    totalUnits: Number(row.total_units ?? 0),
+  };
 }
 
 // ─── Order fulfillment summary ────────────────────────────────────────────────
 
 export async function fetchFulfillmentSummary(range: DateRange = "30d", storeId?: string | null) {
-  let q = supabase
-    .from("orders")
-    .select("fulfillment_status, financial_status, total_price, created_at")
-    .limit(10000);
-  const from = dateFrom(range);
-  if (from) q = q.gte("created_at", from);
-  if (storeId) q = q.eq("store_id", storeId);
-
-  const { data, error } = await q;
+  const { data, error } = await (supabase as any).rpc("get_report_fulfillment_summary", {
+    p_from: dateFrom(range),
+    p_store_id: storeId ?? null,
+  });
   if (error) throw error;
-
-  const rows = data ?? [];
-  const total = rows.length;
-  const fulfilled = rows.filter(r => r.fulfillment_status === "fulfilled").length;
-  const unfulfilled = rows.filter(r => r.fulfillment_status === "unfulfilled" || !r.fulfillment_status).length;
-  const partial = rows.filter(r => r.fulfillment_status === "partial").length;
-  const paid = rows.filter(r => r.financial_status === "paid").length;
-  const pending = rows.filter(r => r.financial_status === "pending").length;
-  const refunded = rows.filter(r => r.financial_status === "refunded").length;
-  const totalRevenue = rows.reduce((s, r) => s + Number(r.total_price ?? 0), 0);
-
-  return { total, fulfilled, unfulfilled, partial, paid, pending, refunded, totalRevenue };
+  const row = (Array.isArray(data) ? data[0] : data) ?? {};
+  return {
+    total: Number(row.total ?? 0),
+    fulfilled: Number(row.fulfilled ?? 0),
+    unfulfilled: Number(row.unfulfilled ?? 0),
+    partial: Number(row.partial ?? 0),
+    paid: Number(row.paid ?? 0),
+    pending: Number(row.pending ?? 0),
+    refunded: Number(row.refunded ?? 0),
+    totalRevenue: Number(row.total_revenue ?? 0),
+  };
 }
 
 // ─── Fulfillment by status over time ─────────────────────────────────────────
 
 export async function fetchFulfillmentTrend(range: DateRange = "30d", storeId?: string | null) {
-  let q = supabase
-    .from("orders")
-    .select("created_at, fulfillment_status")
-    .order("created_at", { ascending: true })
-    .limit(10000);
-  const from = dateFrom(range);
-  if (from) q = q.gte("created_at", from);
-  if (storeId) q = q.eq("store_id", storeId);
-
-  const { data, error } = await q;
+  const { data, error } = await (supabase as any).rpc("get_report_fulfillment_trend", {
+    p_from: dateFrom(range),
+    p_store_id: storeId ?? null,
+  });
   if (error) throw error;
 
-  const map: Record<string, { fulfilled: number; unfulfilled: number; partial: number }> = {};
-  for (const row of data ?? []) {
-    const day = row.created_at.slice(0, 10);
-    if (!map[day]) map[day] = { fulfilled: 0, unfulfilled: 0, partial: 0 };
-    const fs = row.fulfillment_status ?? "unfulfilled";
-    if (fs === "fulfilled") map[day].fulfilled++;
-    else if (fs === "partial") map[day].partial++;
-    else map[day].unfulfilled++;
-  }
-
-  return Object.entries(map).map(([date, v]) => ({
-    date,
-    label: new Date(date).toLocaleDateString("en-GB", { day: "numeric", month: "short" }),
-    ...v,
+  return (data ?? []).map((r: any) => ({
+    date: r.date,
+    label: dayLabel(r.date),
+    fulfilled: Number(r.fulfilled),
+    unfulfilled: Number(r.unfulfilled),
+    partial: Number(r.partial),
   }));
 }
 
 // ─── Collections performance ──────────────────────────────────────────────────
 
 export async function fetchCollectionPerformance(range: DateRange = "30d", storeId?: string | null) {
-  let q = supabase
-    .from("order_items")
-    .select("quantity, unit_price, created_at, products(collection_id, collections(name))")
-    .limit(10000);
-  const from = dateFrom(range);
-  if (from) q = q.gte("created_at", from);
-  if (storeId) q = q.eq("store_id", storeId);
-
-  const { data, error } = await q;
+  const { data, error } = await (supabase as any).rpc("get_report_collection_performance", {
+    p_from: dateFrom(range),
+    p_store_id: storeId ?? null,
+  });
   if (error) throw error;
 
-  const map: Record<string, { collection: string; revenue: number; units: number }> = {};
-  for (const row of (data ?? []) as any[]) {
-    const colId = row.products?.collection_id ?? "unknown";
-    const colName = row.products?.collections?.name ?? "Uncategorised";
-    if (!map[colId]) map[colId] = { collection: colName, revenue: 0, units: 0 };
-    map[colId].revenue += Number(row.unit_price ?? 0) * Number(row.quantity ?? 0);
-    map[colId].units += Number(row.quantity ?? 0);
-  }
-
-  return Object.values(map).sort((a, b) => b.revenue - a.revenue);
+  return (data ?? []).map((r: any) => ({
+    collection: r.collection,
+    revenue: Number(r.revenue),
+    units: Number(r.units),
+  }));
 }
 
 // ─── Revenue KPIs ─────────────────────────────────────────────────────────────
 
 export async function fetchRevenueKPIs(range: DateRange = "30d", storeId?: string | null) {
-  let q = supabase
-    .from("orders")
-    .select("total_price, created_at, financial_status")
-    .limit(10000);
-  const from = dateFrom(range);
-  if (from) q = q.gte("created_at", from);
-  if (storeId) q = q.eq("store_id", storeId);
-
   const days = range === "all" ? 30 : parseInt(range);
   const priorFrom = new Date();
   priorFrom.setDate(priorFrom.getDate() - days * 2);
   const priorTo = new Date();
   priorTo.setDate(priorTo.getDate() - days);
 
-  let priorQ = supabase
-    .from("orders")
-    .select("total_price")
-    .gte("created_at", priorFrom.toISOString())
-    .lt("created_at", priorTo.toISOString())
-    .limit(10000);
-  if (storeId) priorQ = priorQ.eq("store_id", storeId);
+  const { data, error } = await (supabase as any).rpc("get_report_revenue_kpis", {
+    p_from: dateFrom(range),
+    p_prior_from: priorFrom.toISOString(),
+    p_prior_to: priorTo.toISOString(),
+    p_store_id: storeId ?? null,
+  });
+  if (error) throw error;
 
-  const [curr, prior] = await Promise.all([q, priorQ]);
-
-  if (curr.error) throw curr.error;
-
-  const rows = curr.data ?? [];
-  const priorRows = prior.data ?? [];
-
-  const revenue = rows.reduce((s, r) => s + Number(r.total_price ?? 0), 0);
-  const orders = rows.length;
-  const aov = orders ? revenue / orders : 0;
-  const priorRevenue = priorRows.reduce((s, r) => s + Number(r.total_price ?? 0), 0);
+  const row = (Array.isArray(data) ? data[0] : data) ?? {};
+  const revenue = Number(row.revenue ?? 0);
+  const orders = Number(row.orders ?? 0);
+  const aov = Number(row.aov ?? 0);
+  const priorRevenue = Number(row.prior_revenue ?? 0);
   const revenueChange = priorRevenue ? ((revenue - priorRevenue) / priorRevenue) * 100 : null;
 
   return { revenue, orders, aov, revenueChange };
