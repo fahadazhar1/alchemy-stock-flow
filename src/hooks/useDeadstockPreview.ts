@@ -64,24 +64,19 @@ export function useDeadstockSummary() {
     queryKey: ["deadstock-summary", storeId],
     staleTime: 5 * 60_000,
     queryFn: async () => {
-      let q = (supabase as any)
-        .from("v_dead_stock")
-        .select("dead_stock_status,total_units,inventory_value")
-        .limit(10000);
-      if (storeId) q = q.eq("store_id", storeId);
-      const { data, error } = await q;
+      // Server-side aggregation — see migration 20260615000006_deadstock_summary_rpc.sql.
+      const { data, error } = await (supabase as any).rpc("get_deadstock_summary", {
+        p_store_id: storeId ?? null,
+      });
       if (error) throw error;
-      let deadUnits = 0, deadValue = 0, overUnits = 0, overValue = 0;
-      for (const p of (data ?? []) as Pick<DeadstockProduct, "dead_stock_status" | "total_units" | "inventory_value">[]) {
-        if (p.dead_stock_status === "Never Sold" && p.total_units >= 50) {
-          overUnits += p.total_units;
-          overValue += p.inventory_value;
-        } else {
-          deadUnits += p.total_units;
-          deadValue += p.inventory_value;
-        }
-      }
-      return { deadUnits, deadValue, overUnits, overValue, totalProducts: (data ?? []).length };
+      const row = (Array.isArray(data) ? data[0] : data) as any;
+      return {
+        deadUnits:     Number(row?.dead_units     ?? 0),
+        deadValue:     Number(row?.dead_value     ?? 0),
+        overUnits:     Number(row?.over_units     ?? 0),
+        overValue:     Number(row?.over_value     ?? 0),
+        totalProducts: Number(row?.total_products ?? 0),
+      };
     },
   });
 }
