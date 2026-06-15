@@ -100,6 +100,7 @@ function ReportTooltip({ active, payload, label, currency = true }:
 // ─── Date range picker ────────────────────────────────────────────────────────
 
 const RANGES: { label: string; value: DateRange }[] = [
+  { label: "This Week", value: "thisweek" },
   { label: "7d", value: "7d" },
   { label: "30d", value: "30d" },
   { label: "90d", value: "90d" },
@@ -534,7 +535,7 @@ export function FulfillmentReport() {
 
 export function CollectionPerformanceReport() {
   const { fmtCurrencyInt: fmt } = useCurrency();
-  const [range, setRange] = useState<DateRange>("30d");
+  const [range, setRange] = useState<DateRange>("thisweek");
   const q = useCollectionPerformance(range);
   const total = q.data?.reduce((s, r) => s + r.revenue, 0) ?? 0;
 

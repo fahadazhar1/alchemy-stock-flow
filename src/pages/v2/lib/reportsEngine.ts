@@ -1,12 +1,20 @@
 import { supabase } from "@/integrations/supabase/client";
 
-export type DateRange = "7d" | "30d" | "90d" | "365d" | "all";
+export type DateRange = "thisweek" | "7d" | "30d" | "90d" | "365d" | "all";
 
 // Range → p_from (timestamptz ISO string, or null for all-time). The RPCs filter
 // on shopify_created_at (actual order date) and exclude cancelled orders, so v2
 // Reports now agree with the rest of the dashboard. See lib/REPORTS_RPCS.md.
 function dateFrom(range: DateRange): string | null {
   if (range === "all") return null;
+  if (range === "thisweek") {
+    // Start of the current ISO week (Monday 00:00, local time).
+    const d = new Date();
+    const dow = (d.getDay() + 6) % 7; // Mon=0 … Sun=6
+    d.setDate(d.getDate() - dow);
+    d.setHours(0, 0, 0, 0);
+    return d.toISOString();
+  }
   const days = { "7d": 7, "30d": 30, "90d": 90, "365d": 365 }[range];
   const d = new Date();
   d.setDate(d.getDate() - days);
@@ -182,7 +190,9 @@ export async function fetchCollectionPerformance(range: DateRange = "30d", store
 // ─── Revenue KPIs ─────────────────────────────────────────────────────────────
 
 export async function fetchRevenueKPIs(range: DateRange = "30d", storeId?: string | null) {
-  const days = range === "all" ? 30 : parseInt(range);
+  const days = range === "all" ? 30
+    : range === "thisweek" ? Math.max(1, (new Date().getDay() + 6) % 7 + 1)
+    : parseInt(range);
   const priorFrom = new Date();
   priorFrom.setDate(priorFrom.getDate() - days * 2);
   const priorTo = new Date();

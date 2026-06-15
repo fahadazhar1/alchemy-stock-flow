@@ -1,7 +1,7 @@
 import { useState } from "react";
 import {
   BarChart2, Clock, Truck, Globe, TrendingDown, Award, Users,
-  AlertTriangle, Megaphone, Plus, Search, Share2, Save, Play,
+  AlertTriangle, Megaphone, Layers, Plus, Search, Share2, Save, Play,
   Pause, MoreHorizontal, Calendar, Download, LayoutTemplate,
   SlidersHorizontal, Table2, PieChart as PieIcon, LineChart as LineIcon, Hash,
   GripVertical, X, ChevronRight, ArrowLeft,
@@ -60,6 +60,7 @@ const TEMPLATE_REPORT_MAP: Record<string, ReportKey> = {
   "fulfillment-report":       "fulfillment",
   "order-fulfillment":        "fulfillment",
   "collection-performance":   "collection-performance",
+  "collection-perf":          "collection-performance",
   "collections":              "collection-performance",
 };
 
@@ -97,7 +98,7 @@ function ReportPanel({ reportKey, onBack }: { reportKey: ReportKey; onBack: () =
 // ─── Icon map ─────────────────────────────────────────────────────────────────
 
 const iconMap: Record<string, LucideIcon> = {
-  BarChart2, Clock, Truck, Globe, TrendingDown, Award, Users, AlertTriangle, Megaphone,
+  BarChart2, Clock, Truck, Globe, TrendingDown, Award, Users, AlertTriangle, Megaphone, Layers,
 };
 
 // ─── Template card ────────────────────────────────────────────────────────────

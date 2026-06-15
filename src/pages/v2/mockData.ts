@@ -242,6 +242,7 @@ export const reportTemplates = [
   { id:"channel-mix",      name:"Channel Breakdown",  desc:"Revenue and AOV by sales channel",            icon:"Globe",          category:"Sales",     color:"#EC4899", lastRun:"Today"       },
   { id:"loser-report",     name:"Loser Products",     desc:"Slow-movers >20 days, suggested actions",    icon:"TrendingDown",   category:"Inventory", color:"#EF4444", lastRun:"Today"       },
   { id:"winner-report",    name:"Winner Products",    desc:"Fast-movers and low-stock at-risk SKUs",     icon:"Award",          category:"Inventory", color:"#10B981", lastRun:"1 hour ago"  },
+  { id:"collection-perf",  name:"Collection Performance", desc:"Best-performing collections by revenue & units", icon:"Layers",     category:"Marketing", color:"#0EA5E9", lastRun:"Today"       },
   { id:"customer-cohort",  name:"Customer Cohorts",   desc:"New vs returning, repeat rate by month",     icon:"Users",          category:"Customers", color:"#8B5CF6", lastRun:"6 days ago"  },
   { id:"expiry-monitor",   name:"Expiry Monitor",     desc:"Stock expiring in next 30/60/90 days",       icon:"AlertTriangle",  category:"Inventory", color:"#F59E0B", lastRun:"Today"       },
   { id:"campaign-roi",     name:"Campaign ROI",       desc:"Discount lift, units moved, margin impact",  icon:"Megaphone",      category:"Marketing", color:"#06B6D4", lastRun:"Yesterday"   },
