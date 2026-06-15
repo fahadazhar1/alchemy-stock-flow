@@ -708,25 +708,32 @@ async function processSingleOrder(supabase: any, conn: any, o: any): Promise<voi
   }
 
   for (const li of o.line_items ?? []) {
-    if (!li.variant_id) continue;
-    const { data: foundVariant, error: findLineVariantErr } = await supabase.from("variants").select("id, product_id")
-      .eq("store_id", conn.store_id)
-      .eq("shopify_variant_id", String(li.variant_id)).maybeSingle();
-    if (findLineVariantErr) throw findLineVariantErr;
-    let variant = foundVariant;
+    if (Number(li.quantity ?? 0) <= 0) continue;
 
-    // Variant not in DB yet — fetch from Shopify and insert on the fly
-    if (!variant?.id) {
-      variant = await fetchAndInsertVariant(supabase, conn, String(li.variant_id));
+    let variant: { id: string; product_id: string } | null = null;
+    if (li.variant_id) {
+      const { data: foundVariant, error: findLineVariantErr } = await supabase.from("variants").select("id, product_id")
+        .eq("store_id", conn.store_id)
+        .eq("shopify_variant_id", String(li.variant_id)).maybeSingle();
+      if (findLineVariantErr) throw findLineVariantErr;
+      variant = foundVariant;
+
+      // Variant not in DB yet — fetch from Shopify and insert on the fly
+      if (!variant?.id) {
+        variant = await fetchAndInsertVariant(supabase, conn, String(li.variant_id));
+      }
     }
-    if (!variant?.id) continue;
 
+    // Insert the line even when the product/variant was deleted in Shopify
+    // (variant unresolvable). Keeping the row with null product/variant means
+    // revenue & units still reconcile; the report buckets it as 'Uncategorised'.
     const { error: insertItemErr } = await supabase.from("order_items").insert({
       order_id: orderId,
-      variant_id: variant.id,
-      product_id: variant.product_id,
+      variant_id: variant?.id ?? null,
+      product_id: variant?.product_id ?? null,
       quantity: Number(li.quantity ?? 0),
       unit_price: Number(li.price ?? 0),
+      title: li.title ?? li.name ?? null,
       store_id: conn.store_id,
     });
     if (insertItemErr) throw insertItemErr;
