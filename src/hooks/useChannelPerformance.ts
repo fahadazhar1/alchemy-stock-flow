@@ -67,18 +67,14 @@ export function useChannelPerformance(days = 30, bounds?: DateBounds) {
   return useQuery({
     queryKey: ["channel-performance", storeId, b.cacheKey],
     queryFn: async (): Promise<ChannelStat[]> => {
-      // Use shopify_created_at — the actual order date, not DB insert time
-      let q = (supabase as any)
-        .from("orders")
-        .select("source_name, total_price, shopify_created_at")
-        .gte("shopify_created_at", b.startISO)
-        .lte("shopify_created_at", b.endISO)
-        .is("cancelled_at", null)
-        .limit(10000);
-
-      if (storeId) q = q.eq("store_id", storeId);
-
-      const { data, error } = await q;
+      // Server-side pre-aggregation by raw source_name + UTC day.
+      // See migration 20260615000003_channel_performance_rpc.sql.
+      // normalizeKey folding + the sparkline are kept in JS, verbatim.
+      const { data, error } = await (supabase as any).rpc("get_channel_performance", {
+        p_start_iso: b.startISO,
+        p_end_iso:   b.endISO,
+        p_store_id:  storeId ?? null,
+      });
       if (error) throw error;
 
       // Build last-14-day keys for sparkline
@@ -92,16 +88,17 @@ export function useChannelPerformance(days = 30, bounds?: DateBounds) {
       type Entry = { revenue: number; orders: number; dailyMap: Map<string, number> };
       const map = new Map<string, Entry>();
 
+      // Each row is one (source_name, day) bucket; fold raw sources into channels.
       for (const row of (data ?? []) as any[]) {
         const key = normalizeKey(row.source_name);
         if (!map.has(key)) map.set(key, { revenue: 0, orders: 0, dailyMap: new Map() });
         const entry = map.get(key)!;
-        const price = Number(row.total_price) || 0;
-        entry.revenue += price;
-        entry.orders  += 1;
-        if (row.shopify_created_at) {
-          const dk = toDateKey(new Date(row.shopify_created_at));
-          entry.dailyMap.set(dk, (entry.dailyMap.get(dk) ?? 0) + price);
+        const revenue = Number(row.revenue) || 0;
+        entry.revenue += revenue;
+        entry.orders  += Number(row.orders) || 0;
+        if (row.bucket_date) {
+          const dk = row.bucket_date as string; // "YYYY-MM-DD" UTC date — same key space as last14
+          entry.dailyMap.set(dk, (entry.dailyMap.get(dk) ?? 0) + revenue);
         }
       }
 
