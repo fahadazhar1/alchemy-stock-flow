@@ -208,49 +208,56 @@ export async function fetchRevenueKPIs(range: DateRange = "30d", storeId?: strin
 
 // ─── Custom report builder ────────────────────────────────────────────────────
 
+// Dimensions the get_custom_report RPC understands (mirrors its CASE whitelist).
+export const CUSTOM_DIMENSIONS = [
+  "Channel", "Collection", "Product", "SKU", "Vendor", "Type",
+  "Status", "Fulfillment", "Day", "Week", "Month",
+] as const;
+
+// Filter chip label → jsonb key the RPC applies. "Date range" is handled via
+// p_from (the dateRange), so it has no jsonb key.
+export const CUSTOM_FILTER_KEYS = ["status", "fulfillment", "channel", "product_type", "min_revenue"] as const;
+export type CustomFilterKey = typeof CUSTOM_FILTER_KEYS[number];
+
 export type CustomReportConfig = {
   metrics: string[];
   dimensions: string[];
   filters: string[];
   dateRange: DateRange;
+  // Values for the functional filters, keyed by RPC jsonb key (see CUSTOM_FILTER_KEYS).
+  filterValues?: Record<string, string>;
 };
 
 export async function runCustomReport(config: CustomReportConfig, storeId?: string | null) {
-  const { metrics, dimensions, dateRange } = config;
+  const { metrics, dimensions, dateRange, filterValues } = config;
+  const dim = (CUSTOM_DIMENSIONS as readonly string[]).includes(dimensions[0])
+    ? dimensions[0]
+    : "Channel";
 
-  const dim = dimensions[0] ?? "Channel";
-
-  if (dim === "Channel" || dim === "Store") {
-    const rows = await fetchSalesByChannel(dateRange, storeId);
-    return rows.map(r => ({ label: r.channel, ...buildMetricValues(metrics, r) }));
+  const p_filters: Record<string, string> = {};
+  for (const k of CUSTOM_FILTER_KEYS) {
+    const v = filterValues?.[k];
+    if (v != null && String(v).trim() !== "") p_filters[k] = String(v).trim();
   }
 
-  if (dim === "Collection") {
-    const rows = await fetchCollectionPerformance(dateRange, storeId);
-    return rows.map(r => ({
-      label: r.collection,
-      ...buildMetricValues(metrics, { revenue: r.revenue, orders: 0, aov: 0, units: r.units }),
-    }));
-  }
+  const { data, error } = await (supabase as any).rpc("get_custom_report", {
+    p_dimension: dim,
+    p_filters,
+    p_from: dateFrom(dateRange),
+    p_store_id: storeId ?? null,
+    p_limit: 100,
+  });
+  if (error) throw error;
 
-  if (dim === "Day" || dim === "Week" || dim === "Month") {
-    const rows = await fetchSalesTrend(dateRange, storeId);
-    return rows.map(r => ({
-      label: r.label,
-      ...buildMetricValues(metrics, { revenue: r.revenue, orders: r.orders, aov: r.orders ? r.revenue / r.orders : 0, units: 0 }),
-    }));
-  }
-
-  if (dim === "SKU" || dim === "Vendor") {
-    const rows = await fetchTopProducts(dateRange, 20, storeId);
-    return rows.map(r => ({
-      label: r.name,
-      ...buildMetricValues(metrics, { revenue: r.revenue, orders: r.orders, aov: r.orders ? r.revenue / r.orders : 0, units: r.units }),
-    }));
-  }
-
-  const rows = await fetchSalesByChannel(dateRange, storeId);
-  return rows.map(r => ({ label: r.channel, ...buildMetricValues(metrics, r) }));
+  return (data ?? []).map((r: any) => ({
+    label: r.dimension,
+    ...buildMetricValues(metrics, {
+      revenue: Number(r.revenue),
+      orders: Number(r.orders),
+      aov: Number(r.aov),
+      units: Number(r.units),
+    }),
+  }));
 }
 
 function buildMetricValues(

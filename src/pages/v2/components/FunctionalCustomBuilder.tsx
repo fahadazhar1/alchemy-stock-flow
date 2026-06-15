@@ -15,6 +15,10 @@ import {
 import { toast } from "sonner";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { useCustomReport } from "../lib/useReportData";
 import { useCurrency } from "@/hooks/useCurrency";
@@ -42,9 +46,44 @@ const slotAccent: Record<"metrics" | "dimensions" | "filters", string> = {
 
 const fieldLibrary: Record<FieldType, string[]> = {
   Metric:    ["Revenue", "Orders", "AOV", "Units sold"],
-  Dimension: ["Channel", "Collection", "Day", "Week", "Month", "SKU", "Vendor"],
-  Filter:    ["Date range", "Status", "Channel"],
+  Dimension: ["Channel", "Collection", "Product", "Type", "Vendor", "Day", "Week", "Month", "Status", "Fulfillment"],
+  Filter:    ["Date range", "Status", "Fulfillment", "Channel", "Min revenue"],
 };
+
+// Filter chip label → get_custom_report jsonb key. "Date range" maps to the
+// period picker (p_from), so it has no jsonb key.
+const FILTER_KEY: Record<string, string> = {
+  Status: "status", Fulfillment: "fulfillment", Channel: "channel", "Min revenue": "min_revenue",
+};
+
+// Filters with a fixed option set render a dropdown; others render an input.
+const FILTER_OPTIONS: Record<string, string[]> = {
+  Status: ["paid", "pending", "refunded", "partially_refunded", "voided"],
+  Fulfillment: ["fulfilled", "unfulfilled", "partial"],
+};
+
+function FilterValueControl({ label, value, onChange }:
+  { label: string; value: string; onChange: (v: string) => void }) {
+  const opts = FILTER_OPTIONS[label];
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="text-[11px] text-muted-foreground">{label}:</span>
+      {opts ? (
+        <Select value={value} onValueChange={onChange}>
+          <SelectTrigger className="h-7 w-36 text-xs"><SelectValue placeholder="any" /></SelectTrigger>
+          <SelectContent>
+            {opts.map(o => <SelectItem key={o} value={o} className="text-xs">{o}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      ) : (
+        <Input value={value} onChange={e => onChange(e.target.value)}
+          type={label === "Min revenue" ? "number" : "text"}
+          placeholder={label === "Min revenue" ? "0" : "e.g. web"}
+          className="h-7 w-32 text-xs" />
+      )}
+    </div>
+  );
+}
 
 const PIE_COLORS = ["#6366f1", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4"];
 
@@ -113,6 +152,7 @@ export default function FunctionalCustomBuilder() {
   const [metrics, setMetrics] = useState<string[]>(["Revenue", "Orders"]);
   const [dimensions, setDimensions] = useState<string[]>(["Channel"]);
   const [filters, setFilters] = useState<string[]>(["Date range"]);
+  const [filterValues, setFilterValues] = useState<Record<string, string>>({});
   const [chartType, setChartType] = useState<ChartType>("bar");
   const [dateRange, setDateRange] = useState<DateRange>("30d");
   const [saveOpen, setSaveOpen] = useState(false);
@@ -121,17 +161,24 @@ export default function FunctionalCustomBuilder() {
   const { data, isLoading, error, lastConfig, run } = useCustomReport();
 
   const add = (type: FieldType, name: string) => {
-    if (type === "Metric"    && !metrics.includes(name))    setMetrics(s => [...s, name]);
-    if (type === "Dimension" && !dimensions.includes(name)) setDimensions(s => [...s, name]);
-    if (type === "Filter"    && !filters.includes(name))    setFilters(s => [...s, name]);
+    if (type === "Metric"    && !metrics.includes(name)) setMetrics(s => [...s, name]);
+    if (type === "Dimension") setDimensions([name]);   // RPC groups by one dimension
+    if (type === "Filter"    && !filters.includes(name)) setFilters(s => [...s, name]);
   };
   const rm = (kind: "metrics" | "dimensions" | "filters") => (i: number) => {
     if (kind === "metrics")    setMetrics(s => s.filter((_, k) => k !== i));
     if (kind === "dimensions") setDimensions(s => s.filter((_, k) => k !== i));
-    if (kind === "filters")    setFilters(s => s.filter((_, k) => k !== i));
+    if (kind === "filters") {
+      const removed = filters[i];
+      setFilters(s => s.filter((_, k) => k !== i));
+      const key = FILTER_KEY[removed];
+      if (key) setFilterValues(v => { const n = { ...v }; delete n[key]; return n; });
+    }
   };
 
-  const handleRun = () => run({ metrics, dimensions, filters, dateRange });
+  // Active filters that take a value (Date range uses the period picker instead).
+  const valuedFilters = filters.filter(f => FILTER_KEY[f]);
+  const handleRun = () => run({ metrics, dimensions, filters, dateRange, filterValues });
 
   const chartButtons: { id: ChartType; icon: LucideIcon; label: string }[] = [
     { id: "bar",   icon: BarChart2,  label: "Bar" },
@@ -154,7 +201,7 @@ export default function FunctionalCustomBuilder() {
     : (v: number) => fmtN(v);
 
   // Config persisted with a saved custom report (lets it re-run later).
-  const builderConfig = { metrics, dimensions, filters, dateRange, chartType };
+  const builderConfig = { metrics, dimensions, filters, dateRange, chartType, filterValues };
 
   const csvColumns = (): CsvColumn<typeof chartData[number]>[] => [
     { key: "label", header: dimensions[0] ?? "Dimension" },
@@ -220,6 +267,18 @@ export default function FunctionalCustomBuilder() {
               <Slot label="Dimensions" items={dimensions} kind="dimensions" onRemove={rm("dimensions")} />
               <Slot label="Filters"    items={filters}    kind="filters"    onRemove={rm("filters")} />
             </div>
+
+            {/* Filter values */}
+            {valuedFilters.length > 0 && (
+              <div className="flex flex-wrap items-center gap-3 pt-1">
+                <span className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground mr-1">Filter values</span>
+                {valuedFilters.map(f => (
+                  <FilterValueControl key={f} label={f}
+                    value={filterValues[FILTER_KEY[f]] ?? ""}
+                    onChange={val => setFilterValues(v => ({ ...v, [FILTER_KEY[f]]: val }))} />
+                ))}
+              </div>
+            )}
 
             {/* Chart type + actions */}
             <div className="flex items-center gap-2 pt-1">
