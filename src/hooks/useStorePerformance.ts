@@ -456,7 +456,7 @@ function buildInsights(metrics: StoreMetrics[]): string[] {
 export function useStorePerformance(bounds: DateBounds) {
   return useQuery<StorePerformanceData>({
     queryKey: ["store-performance", bounds.cacheKey],
-    staleTime: 60_000,
+    staleTime: 5 * 60_000,
     queryFn: async (): Promise<StorePerformanceData> => {
       // Extract date strings for date-type columns in views
       const startDate = bounds.startISO.slice(0, 10);
@@ -495,115 +495,27 @@ export function useStorePerformance(bounds: DateBounds) {
         };
       }
 
-      // ── 2–9. Parallel queries (no store filter — cross-store page) ──────────
-      const [
-        curOrdersRes,
-        prevOrdersRes,
-        curVelRes,
-        invRes,
-        deadRes,
-        replenRes,
-        curCollRes,
-        prevCollRes,
-      ] = await Promise.all([
-        // [2] Current period orders
-        (supabase as any)
-          .from("orders")
-          .select("id, store_id, total_price, financial_status, cancelled_at, shopify_created_at")
-          .gte("shopify_created_at", bounds.startISO)
-          .lte("shopify_created_at", bounds.endISO)
-          .limit(50_000),
-
-        // [3] Previous period orders
-        (supabase as any)
-          .from("orders")
-          .select("store_id, total_price, cancelled_at, financial_status")
-          .gte("shopify_created_at", bounds.prevStartISO)
-          .lte("shopify_created_at", bounds.prevEndISO)
-          .limit(50_000),
-
-        // [4] Current period order-product revenue (units sold, daily date)
-        (supabase as any)
-          .from("v_order_product_revenue")
-          .select("store_id, quantity, order_date, cancelled_at")
-          .gte("order_date", startDate)
-          .lte("order_date", endDate)
-          .limit(100_000),
-
-        // [5] Inventory summary — active products only, paginated
-        (async () => {
-          const PAGE = 1000;
-          const all: any[] = [];
-          let offset = 0;
-          while (true) {
-            const { data, error } = await (supabase as any)
-              .from("v_product_inventory_summary")
-              .select("store_id, total_inventory, product_status")
-              .eq("product_status", "active")
-              .range(offset, offset + PAGE - 1);
-            if (error || !data?.length) break;
-            all.push(...data);
-            if (data.length < PAGE) break;
-            offset += PAGE;
-          }
-          return { data: all, error: null };
-        })(),
-
-        // [6] Dead stock — paginated (1913 rows, over server cap)
-        (async () => {
-          const PAGE = 1000;
-          const all: any[] = [];
-          let offset = 0;
-          while (true) {
-            const { data, error } = await (supabase as any)
-              .from("v_dead_stock")
-              .select("store_id, dead_stock_status, total_units")
-              .range(offset, offset + PAGE - 1);
-            if (error || !data?.length) break;
-            all.push(...data);
-            if (data.length < PAGE) break;
-            offset += PAGE;
-          }
-          return { data: all, error: null };
-        })(),
-
-        // [7] Replenishment candidates per store
-        (supabase as any)
-          .from("v_replenishment_candidates")
-          .select("store_id, replenishment_status")
-          .limit(10_000),
-
-        // [8] Collection revenue current period
-        (supabase as any)
-          .from("v_collection_revenue")
-          .select("store_id, collection_name, line_revenue, quantity, cancelled_at")
-          .gte("order_date", startDate)
-          .lte("order_date", endDate)
-          .limit(50_000),
-
-        // [9] Collection revenue previous period (for category growth %)
-        (supabase as any)
-          .from("v_collection_revenue")
-          .select("store_id, collection_name, line_revenue, quantity, cancelled_at")
-          .gte("order_date", prevStart)
-          .lte("order_date", prevEnd)
-          .limit(50_000),
+      // ── 2–5. 4 aggregate RPCs replace 8 raw-row queries ──────────────────────
+      // Before: up to 450k rows/refresh. After: ~200 rows/refresh.
+      const [salesRes, dailyRes, invSnapshotRes, catRes] = await Promise.all([
+        (supabase as any).rpc("get_store_sales_metrics", {
+          p_start_iso:  bounds.startISO,
+          p_end_iso:    bounds.endISO,
+          p_prev_start: bounds.prevStartISO,
+          p_prev_end:   bounds.prevEndISO,
+        }),
+        (supabase as any).rpc("get_store_daily_units", {
+          p_start_date: startDate,
+          p_end_date:   endDate,
+        }),
+        (supabase as any).rpc("get_store_inventory_snapshot"),
+        (supabase as any).rpc("get_store_category_revenue", {
+          p_start_date: startDate,
+          p_end_date:   endDate,
+          p_prev_start: prevStart,
+          p_prev_end:   prevEnd,
+        }),
       ]);
-
-      // ── Process raw rows ────────────────────────────────────────────────────
-
-      const curOrders: any[] = (curOrdersRes.data ?? []);
-      const prevOrders: any[] = (prevOrdersRes.data ?? []);
-      const velRows: any[] = (curVelRes.data ?? []);
-      const invRows: any[] = (invRes.data ?? []);
-      const deadRows: any[] = (deadRes.data ?? []);
-      const replenRows: any[] = (replenRes.data ?? []);
-      const curCollRows: any[] = (curCollRes.data ?? []);
-      const prevCollRows: any[] = (prevCollRes.data ?? []);
-
-      const INTERNAL = new Set(["trending now", "all", "top selling"]);
-      const isInternalColl = (n: string | null | undefined) =>
-        !n || INTERNAL.has((n ?? "").toLowerCase());
 
       // ── Group by store ──────────────────────────────────────────────────────
 
@@ -655,78 +567,50 @@ export function useStorePerformance(bounds: DateBounds) {
         return agg.get(sid)!;
       };
 
-      // Current orders
-      for (const r of curOrders) {
-        if (!r.store_id || r.cancelled_at) continue;
-        const a = ensureAgg(r.store_id);
-        a.orders  += 1;
-        a.revenue += Number(r.total_price ?? 0);
-        if (r.financial_status === "refunded" || r.financial_status === "partially_refunded") {
-          a.refundedOrders  += 1;
-          a.refundedRevenue += Number(r.total_price ?? 0);
-        }
-      }
+      // ── Populate agg map from pre-aggregated RPC results ──────────────────
 
-      // Prev orders
-      for (const r of prevOrders) {
-        if (!r.store_id || r.cancelled_at) continue;
-        const a = ensureAgg(r.store_id);
-        a.prevOrders  += 1;
-        a.prevRevenue += Number(r.total_price ?? 0);
-      }
-
-      // Units sold + daily revenue from v_order_product_revenue
-      for (const r of velRows) {
-        if (!r.store_id || r.cancelled_at) continue;
-        const a = ensureAgg(r.store_id);
-        a.unitsSold += Number(r.quantity ?? 0);
-        if (r.order_date) {
-          const dateKey = String(r.order_date).slice(0, 10);
-          a.daily.set(dateKey, (a.daily.get(dateKey) ?? 0) + Number(r.quantity ?? 0));
-        }
-      }
-
-      // Inventory: active SKU count, OOS, total inventory (view already filtered to active)
-      for (const r of invRows) {
+      // Sales metrics: 1 row per store
+      for (const r of ((salesRes.data ?? []) as any[])) {
         if (!r.store_id) continue;
         const a = ensureAgg(r.store_id);
-        a.activeSKUs    += 1;
-        a.totalInventory += Number(r.total_inventory ?? 0);
-        if (Number(r.total_inventory ?? 0) === 0) a.oosSKUs += 1;
+        a.revenue         = Number(r.cur_revenue          ?? 0);
+        a.orders          = Number(r.cur_orders           ?? 0);
+        a.refundedOrders  = Number(r.cur_refunded_orders  ?? 0);
+        a.refundedRevenue = Number(r.cur_refunded_revenue ?? 0);
+        a.prevRevenue     = Number(r.prev_revenue         ?? 0);
+        a.prevOrders      = Number(r.prev_orders          ?? 0);
+        a.unitsSold       = Number(r.units_sold           ?? 0);
       }
 
-      // Dead stock
-      for (const r of deadRows) {
+      // Daily units: (store_id, order_date, units) — for sparklines
+      for (const r of ((dailyRes.data ?? []) as any[])) {
+        if (!r.store_id || !r.order_date) continue;
+        const a = ensureAgg(r.store_id);
+        const dateKey = String(r.order_date).slice(0, 10);
+        a.daily.set(dateKey, (a.daily.get(dateKey) ?? 0) + Number(r.units ?? 0));
+      }
+
+      // Inventory snapshot: 1 row per store
+      for (const r of ((invSnapshotRes.data ?? []) as any[])) {
         if (!r.store_id) continue;
         const a = ensureAgg(r.store_id);
-        a.deadStockCount += 1;
-        if (r.dead_stock_status === "Never Sold" && Number(r.total_units ?? 0) >= 50)
-          a.overstockedCount += 1;
+        a.activeSKUs      = Number(r.active_skus      ?? 0);
+        a.oosSKUs         = Number(r.oos_skus          ?? 0);
+        a.totalInventory  = Number(r.total_inventory   ?? 0);
+        a.deadStockCount  = Number(r.dead_stock_count  ?? 0);
+        a.overstockedCount = Number(r.overstock_count  ?? 0);
+        a.lowStockCount   = Number(r.low_stock_count   ?? 0);
+        a.criticalCount   = Number(r.critical_count    ?? 0);
       }
 
-      // Replenishment candidates
-      for (const r of replenRows) {
-        if (!r.store_id) continue;
-        const a = ensureAgg(r.store_id);
-        a.lowStockCount += 1;
-        if (r.replenishment_status === "Critical") a.criticalCount += 1;
-      }
-
-      // Current collection revenue
-      for (const r of curCollRows) {
-        if (!r.store_id || r.cancelled_at || isInternalColl(r.collection_name)) continue;
-        const a = ensureAgg(r.store_id);
+      // Category revenue: (store_id, collection_name, cur_revenue, cur_units, prev_revenue)
+      for (const r of ((catRes.data ?? []) as any[])) {
+        if (!r.store_id || !r.collection_name) continue;
+        const a    = ensureAgg(r.store_id);
         const name = r.collection_name as string;
-        a.catRevenue.set(name, (a.catRevenue.get(name) ?? 0) + Number(r.line_revenue ?? 0));
-        a.catUnits.set(name,   (a.catUnits.get(name)   ?? 0) + Number(r.quantity     ?? 0));
-      }
-
-      // Prev collection revenue
-      for (const r of prevCollRows) {
-        if (!r.store_id || r.cancelled_at || isInternalColl(r.collection_name)) continue;
-        const a = ensureAgg(r.store_id);
-        const name = r.collection_name as string;
-        a.prevCatRevenue.set(name, (a.prevCatRevenue.get(name) ?? 0) + Number(r.line_revenue ?? 0));
+        a.catRevenue.set(name,     Number(r.cur_revenue  ?? 0));
+        a.catUnits.set(name,       Number(r.cur_units    ?? 0));
+        a.prevCatRevenue.set(name, Number(r.prev_revenue ?? 0));
       }
 
       // ── Build daily trend points for the cross-store chart ─────────────────
