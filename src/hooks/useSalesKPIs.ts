@@ -158,36 +158,24 @@ export function useFulfillmentMetrics(bounds?: DateBounds) {
   return useQuery({
     queryKey: ["fulfillment-metrics", storeId, b.cacheKey],
     queryFn: async (): Promise<FulfillmentMetrics> => {
-      let q = (supabase as any)
-        .from("orders")
-        .select("shopify_created_at, closed_at")
-        .eq("fulfillment_status", "fulfilled")
-        .gte("shopify_created_at", b.startISO)
-        .lte("shopify_created_at", b.endISO)
-        .is("cancelled_at", null)
-        .not("closed_at", "is", null)
-        .limit(10000);
-      if (storeId) q = q.eq("store_id", storeId);
-
-      const { data, error } = await q;
+      // Server-side aggregation — see migration 20260703000001_sales_kpis_secondary_rpcs.sql.
+      // RPC returns the lag sum + count; the mean + 0.1h rounding stay in JS (bit-identical).
+      const { data, error } = await (supabase as any).rpc("get_fulfillment_metrics", {
+        p_start_iso: b.startISO,
+        p_end_iso:   b.endISO,
+        p_store_id:  storeId ?? null,
+      });
       if (error) throw error;
 
-      const rows = (data ?? []) as any[];
-      const lags: number[] = [];
-      for (const r of rows) {
-        if (!r.shopify_created_at || !r.closed_at) continue;
-        const lagMs = new Date(r.closed_at).getTime() - new Date(r.shopify_created_at).getTime();
-        // Allow 0 ms lag (same-day fulfillment) and cap at 30 days
-        if (lagMs >= 0 && lagMs < 30 * 86_400_000) lags.push(lagMs / 3_600_000);
-      }
+      const row = (Array.isArray(data) ? data[0] : data) as any;
+      const sumLagHours   = Number(row?.sum_lag_hours   ?? 0);
+      const ordersAnalyzed = Number(row?.orders_analyzed ?? 0);
 
-      const avgLagHours = lags.length > 0
-        ? lags.reduce((s, v) => s + v, 0) / lags.length
-        : 0;
+      const avgLagHours = ordersAnalyzed > 0 ? sumLagHours / ordersAnalyzed : 0;
 
       return {
         avgLagHours: Math.round(avgLagHours * 10) / 10,
-        ordersAnalyzed: lags.length,
+        ordersAnalyzed,
       };
     },
   });
@@ -211,27 +199,22 @@ export function useDiscountUsage(bounds?: DateBounds) {
   return useQuery({
     queryKey: ["discount-usage", storeId, b.cacheKey],
     queryFn: async (): Promise<DiscountUsage> => {
-      let q = (supabase as any)
-        .from("orders")
-        .select("discount_codes, total_discounts, cancelled_at, total_price")
-        .gte("shopify_created_at", b.startISO)
-        .lte("shopify_created_at", b.endISO)
-        .limit(10000);
-      if (storeId) q = q.eq("store_id", storeId);
-
-      const { data, error } = await q;
+      // Server-side aggregation — see migration 20260703000001_sales_kpis_secondary_rpcs.sql.
+      // RPC returns raw counts + sums; rate/revenueRate rounding stays in JS (identical).
+      const { data, error } = await (supabase as any).rpc("get_discount_usage", {
+        p_start_iso: b.startISO,
+        p_end_iso:   b.endISO,
+        p_store_id:  storeId ?? null,
+      });
       if (error) throw error;
 
-      const rows = ((data ?? []) as any[]).filter((r: any) => !r.cancelled_at);
-      const total = rows.length;
-      const discountedRows = rows.filter(
-        (r: any) => r.discount_codes != null || Number(r.total_discounts ?? 0) > 0
-      );
-      const discounted = discountedRows.length;
-      const rate = total > 0 ? Math.round((discounted / total) * 1000) / 10 : 0;
+      const row = (Array.isArray(data) ? data[0] : data) as any;
+      const total             = Number(row?.total_orders       ?? 0);
+      const discounted        = Number(row?.discounted_orders  ?? 0);
+      const totalRevenue      = Number(row?.total_revenue      ?? 0);
+      const discountedRevenue = Number(row?.discounted_revenue ?? 0);
 
-      const totalRevenue = rows.reduce((s: number, r: any) => s + Number(r.total_price ?? 0), 0);
-      const discountedRevenue = discountedRows.reduce((s: number, r: any) => s + Number(r.total_price ?? 0), 0);
+      const rate = total > 0 ? Math.round((discounted / total) * 1000) / 10 : 0;
       const revenueRate = totalRevenue > 0 ? Math.round((discountedRevenue / totalRevenue) * 1000) / 10 : 0;
 
       return { rate, discountedOrders: discounted, totalOrders: total, discountedRevenue, totalRevenue, revenueRate };
@@ -370,27 +353,25 @@ export function useChannelConversion(bounds?: DateBounds) {
   return useQuery({
     queryKey: ["channel-conversion", storeId, b.cacheKey],
     queryFn: async (): Promise<ChannelConversion[]> => {
-      let q = (supabase as any)
-        .from("orders")
-        .select("source_name, total_price, cancelled_at")
-        .gte("shopify_created_at", b.startISO)
-        .lte("shopify_created_at", b.endISO)
-        .limit(10000);
-      if (storeId) q = q.eq("store_id", storeId);
-
-      const { data, error } = await q;
+      // Server-side aggregation — see migration 20260703000001_sales_kpis_secondary_rpcs.sql.
+      // RPC groups by source_name; the null→"Unknown" merge, sort, top-5 and share stay in JS.
+      const { data, error } = await (supabase as any).rpc("get_channel_conversion", {
+        p_start_iso: b.startISO,
+        p_end_iso:   b.endISO,
+        p_store_id:  storeId ?? null,
+      });
       if (error) throw error;
 
-      const rows = ((data ?? []) as any[]).filter((r: any) => !r.cancelled_at);
+      const rows = (data ?? []) as any[];
       const map = new Map<string, { orders: number; revenue: number }>();
       for (const r of rows) {
         const name = (r.source_name as string | null) || "Unknown";
         const e = map.get(name) ?? { orders: 0, revenue: 0 };
-        e.orders  += 1;
-        e.revenue += Number(r.total_price ?? 0);
+        e.orders  += Number(r.orders ?? 0);
+        e.revenue += Number(r.revenue ?? 0);
         map.set(name, e);
       }
-      const totalOrders = rows.length;
+      const totalOrders = rows.reduce((s, r: any) => s + Number(r.orders ?? 0), 0);
       return Array.from(map.entries())
         .sort((a, b) => b[1].orders - a[1].orders)
         .slice(0, 5)
