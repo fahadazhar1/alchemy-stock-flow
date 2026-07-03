@@ -1505,13 +1505,14 @@ Deno.serve(async (req) => {
             .eq("store_id", storeId)
             .in("shopify_product_id", shopifyProductIds);
 
-          for (const p of dbProducts ?? []) {
-            // Upsert into product_collections
+          // Bulk upsert — one request for the whole page instead of one per product
+          const rows = (dbProducts ?? []).map((p: any) => ({ product_id: p.id, collection_id: collectionDbId }));
+          if (rows.length) {
             await supabase.from("product_collections").upsert(
-              { product_id: p.id, collection_id: collectionDbId },
+              rows,
               { onConflict: "product_id,collection_id", ignoreDuplicates: true }
             );
-            linked++;
+            linked += rows.length;
           }
         }
         pageInfo = parseNextPageInfo(res.headers.get("Link") ?? res.headers.get("link") ?? "");
