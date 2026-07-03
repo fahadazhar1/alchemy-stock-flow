@@ -122,7 +122,7 @@ const WEBHOOK_TOPICS = [
   "orders/create", "orders/updated",
   "fulfillments/create", "fulfillments/update",
   "inventory_levels/update",
-  "collections/create", "collections/update",
+  "collections/create", "collections/update", "collections/delete",
 ];
 
 async function registerWebhooks(supabase: any, connectionId: string) {
@@ -420,14 +420,18 @@ async function syncCollections(supabase: any, conn: any, log: any, totalRef: { n
         return true;
       }
       // All smart pages done — advance to per-collection product linking.
-      // Expand merged with ALL DB collections for this store so incremental syncs
-      // (which only fetch recently-updated collections in Phase 1) still relink every product.
-      const { data: allStoreCols } = await supabase
-        .from("collections").select("id, shopify_collection_id")
-        .eq("store_id", conn.store_id).not("shopify_collection_id", "is", null);
-      const fullMap = { ...merged };
-      for (const row of (allStoreCols ?? []) as { id: string; shopify_collection_id: string }[]) {
-        if (!fullMap[row.shopify_collection_id]) fullMap[row.shopify_collection_id] = row.id;
+      // Only relink collections Phase 1 actually found changed (created/renamed/reruled).
+      // On a full sync (no syncSince) we still need every collection since there's no prior
+      // state to diff against — but incremental ticks must NOT re-crawl the whole store,
+      // that's what was hammering the Shopify API + DB on every 15/30/60min tick.
+      let fullMap = { ...merged };
+      if (!syncSince) {
+        const { data: allStoreCols } = await supabase
+          .from("collections").select("id, shopify_collection_id")
+          .eq("store_id", conn.store_id).not("shopify_collection_id", "is", null);
+        for (const row of (allStoreCols ?? []) as { id: string; shopify_collection_id: string }[]) {
+          if (!fullMap[row.shopify_collection_id]) fullMap[row.shopify_collection_id] = row.id;
+        }
       }
       const collIds = Object.keys(fullMap);
       if (collIds.length > 0) {
@@ -442,14 +446,17 @@ async function syncCollections(supabase: any, conn: any, log: any, totalRef: { n
         return false;
       }
     } else {
-      // Smart collections fetch failed — advance using whatever custom collections we have,
-      // but also pull all existing DB collections so we don't miss unmodified ones.
-      const { data: allStoreCols2 } = await supabase
-        .from("collections").select("id, shopify_collection_id")
-        .eq("store_id", conn.store_id).not("shopify_collection_id", "is", null);
-      const fallbackMap = { ...existingMap };
-      for (const row of (allStoreCols2 ?? []) as { id: string; shopify_collection_id: string }[]) {
-        if (!fallbackMap[row.shopify_collection_id]) fallbackMap[row.shopify_collection_id] = row.id;
+      // Smart collections fetch failed — advance using whatever custom collections we have.
+      // Only fall back to ALL DB collections on a full sync; incremental ticks stay scoped
+      // to what Phase 1 found changed.
+      let fallbackMap = { ...existingMap };
+      if (!syncSince) {
+        const { data: allStoreCols2 } = await supabase
+          .from("collections").select("id, shopify_collection_id")
+          .eq("store_id", conn.store_id).not("shopify_collection_id", "is", null);
+        for (const row of (allStoreCols2 ?? []) as { id: string; shopify_collection_id: string }[]) {
+          if (!fallbackMap[row.shopify_collection_id]) fallbackMap[row.shopify_collection_id] = row.id;
+        }
       }
       const collIds = Object.keys(fallbackMap);
       if (collIds.length > 0) {
@@ -840,6 +847,21 @@ async function handleInventoryWebhook(supabase: any, conn: any, payload: any) {
     .eq("store_id", conn.store_id);
 }
 
+// Called when Shopify fires collections/delete. Removes the local row directly
+// instead of triggering a full incremental sync (which would re-crawl every collection).
+async function handleCollectionDeleteWebhook(supabase: any, conn: any, payload: any) {
+  if (!payload?.id) return;
+  const shopifyId = String(payload.id);
+  const { data: col } = await supabase
+    .from("collections").select("id")
+    .eq("store_id", conn.store_id).eq("shopify_collection_id", shopifyId).maybeSingle();
+  if (!col?.id) return;
+  // products.collection_id has no ON DELETE clause — clear it before removing the collection.
+  // product_collections.collection_id cascades on delete.
+  await supabase.from("products").update({ collection_id: null }).eq("collection_id", col.id);
+  await supabase.from("collections").delete().eq("id", col.id);
+}
+
 // ------------ Velocity metrics refresh ------------
 async function refreshVelocityMetrics(supabase: any, storeId: string | null) {
   try {
@@ -1027,8 +1049,12 @@ Deno.serve(async (req) => {
         // Update this inventory item's quantity in real-time across all locations
         // @ts-ignore
         EdgeRuntime.waitUntil(handleInventoryWebhook(supabase, conn, payload));
+      } else if (topic === "collections/delete" && payload) {
+        // Remove the local row directly — no need to re-crawl every collection for this
+        // @ts-ignore
+        EdgeRuntime.waitUntil(handleCollectionDeleteWebhook(supabase, conn, payload));
       } else {
-        // Products, collections — trigger incremental sync
+        // Products, collections create/update — trigger incremental sync
         // @ts-ignore
         EdgeRuntime.waitUntil(syncShopifyData(supabase, conn.id));
       }
