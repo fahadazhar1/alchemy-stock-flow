@@ -843,58 +843,13 @@ async function handleInventoryWebhook(supabase: any, conn: any, payload: any) {
 // ------------ Velocity metrics refresh ------------
 async function refreshVelocityMetrics(supabase: any, storeId: string | null) {
   try {
-    const now = new Date();
-    const windows = [
-      { col: "units_sold_7d",  days: 7  },
-      { col: "units_sold_14d", days: 14 },
-      { col: "units_sold_21d", days: 21 },
-      { col: "units_sold_30d", days: 30 },
-    ];
-
-    // Get all products for this store
-    const productQ = storeId
-      ? supabase.from("products").select("id").eq("store_id", storeId)
-      : supabase.from("products").select("id");
-    const { data: products } = await productQ;
-    if (!products?.length) return;
-
-    const allProductIds = (products as { id: string }[]).map(p => p.id);
-
-    for (const { col, days } of windows) {
-      const cutoff = new Date(now.getTime() - days * 86_400_000).toISOString();
-
-      // Aggregate actual sales from order_items within the window
-      let q = (supabase as any)
-        .from("order_items")
-        .select("product_id, quantity, orders!inner(cancelled_at, shopify_created_at)")
-        .gte("orders.shopify_created_at", cutoff)
-        .is("orders.cancelled_at", null);
-      if (storeId) q = q.eq("store_id", storeId);
-      const { data: items } = await q;
-
-      // Build map of actual counts — products not in map get 0
-      const map = new Map<string, number>();
-      for (const item of (items ?? []) as any[]) {
-        const pid = item.product_id as string;
-        map.set(pid, (map.get(pid) ?? 0) + Number(item.quantity ?? 0));
-      }
-
-      // Upsert every product: real count if it sold, 0 if it didn't
-      // This ensures stale values are always cleared on each refresh
-      const upsertRows = allProductIds.map(productId => ({
-        product_id: productId,
-        [col]: map.get(productId) ?? 0,
-        updated_at: now.toISOString(),
-      }));
-
-      // Batch in chunks of 500 to avoid request size limits
-      for (let i = 0; i < upsertRows.length; i += 500) {
-        await supabase.from("product_velocity_metrics").upsert(
-          upsertRows.slice(i, i + 500),
-          { onConflict: "product_id", ignoreDuplicates: false }
-        );
-      }
-    }
+    // Server-side recompute — see migration 20260703000003_recompute_velocity_rpc.sql.
+    // Computes units_sold_7/14/21/30d entirely inside Postgres (no order_items/products
+    // rows leave the DB), replacing the old read-all-then-write-back loop that pulled
+    // ~35k rows/tick over the API. Figure-identical to the old JS path — verified
+    // row-by-row across all products / 4 stores (0 mismatches) before switching.
+    const { error } = await supabase.rpc("recompute_velocity_metrics", { p_store_id: storeId ?? null });
+    if (error) throw error;
   } catch (e) {
     console.warn("refreshVelocityMetrics failed (non-fatal):", e);
   }
