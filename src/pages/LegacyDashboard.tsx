@@ -334,7 +334,7 @@ function useSyncHealth(storeId: string | null) {
       };
     },
     enabled: !!storeId,
-    refetchInterval: 60000, // Refresh health status every 60s (was 15s — egress)
+    refetchInterval: 180_000, // 3 min floor per egress rules (was 60s)
   });
 }
 

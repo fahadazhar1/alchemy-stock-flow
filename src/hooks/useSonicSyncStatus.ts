@@ -11,7 +11,7 @@ export interface SonicSyncStatus {
 export function useSonicSyncStatus(storeId?: string | null) {
   return useQuery<SonicSyncStatus>({
     queryKey: ["sonic-sync-status", storeId ?? "all"],
-    refetchInterval: 30_000,
+    refetchInterval: 180_000,
     queryFn: async () => {
       let totalQuery = supabase
         .from("orders")

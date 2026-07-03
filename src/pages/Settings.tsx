@@ -101,7 +101,7 @@ export default function Settings() {
     },
     enabled: !!selectedStoreId,
     refetchInterval: (query) =>
-      (query.state.data as Record<string, unknown> | null)?.last_sync_status === "in_progress" ? 8000 : false,
+      (query.state.data as Record<string, unknown> | null)?.last_sync_status === "in_progress" ? 180_000 : false,
   });
 
   const { data: currentSyncLog } = useQuery({
@@ -121,7 +121,7 @@ export default function Settings() {
     },
     enabled: !!(connection as Record<string, unknown> | null)?.id &&
       (connection as Record<string, unknown> | null)?.last_sync_status === "in_progress",
-    refetchInterval: 8000,
+    refetchInterval: 180_000,
   });
 
   const isConnected = !!connection;

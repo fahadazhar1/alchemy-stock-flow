@@ -517,27 +517,28 @@ async function syncCollections(supabase: any, conn: any, log: any, totalRef: { n
             const shopifyIds = shopifyProds.map((p: any) => String(p.id));
             const { data: dbProds } = await supabase.from("products").select("id, shopify_product_id")
               .in("shopify_product_id", shopifyIds);
-            const prodMap = new Map<string, string>(
-              ((dbProds ?? []) as any[]).map((d: any) => [d.shopify_product_id, d.id])
-            );
-            // Parallel product-collection links — avoids sequential update bottleneck
-            await Promise.all(shopifyProds.map(async (p: any) => {
-              const prodId = prodMap.get(String(p.id));
-              if (!prodId) return;
+            const matchedIds: string[] = ((dbProds ?? []) as any[]).map((d: any) => d.id);
+
+            // Batched into 2 requests total per page (was up to 2 requests PER PRODUCT —
+            // 751k+/718k+ individual calls historically per pg_stat_statements, the
+            // dominant source of request volume on the project).
+            if (matchedIds.length > 0) {
               // Skip setting collection_id for operational collections (Trending Now, Top Selling)
               // so real category collections always win. Still upsert into product_collections for filtering.
               if (!isExcludedPrimary) {
                 // Custom collections always win as primary; smart collections only fill in if no primary is set
-                if (isCustomCollection) {
-                  await supabase.from("products").update({ collection_id: collId }).eq("id", prodId);
-                } else {
-                  await supabase.from("products").update({ collection_id: collId }).eq("id", prodId).is("collection_id", null);
-                }
+                await supabase.rpc("set_products_primary_collection", {
+                  p_product_ids: matchedIds,
+                  p_collection_id: collId,
+                  p_force: isCustomCollection,
+                });
               }
-              await supabase.from("product_collections")
-                .upsert({ product_id: prodId, collection_id: collId }, { onConflict: "product_id,collection_id" });
-              totalRef.n++;
-            }));
+              await supabase.from("product_collections").upsert(
+                matchedIds.map((id) => ({ product_id: id, collection_id: collId })),
+                { onConflict: "product_id,collection_id" }
+              );
+              totalRef.n += matchedIds.length;
+            }
           }
           const link = res.headers.get("Link") ?? res.headers.get("link");
           const next = parseNextPageInfo(link);
