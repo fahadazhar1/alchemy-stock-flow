@@ -375,13 +375,21 @@ export default function ProductMaster() {
       return;
     }
 
-    const { data: locResult } = await supabase.functions.invoke("shopify-sync", {
+    const { data: locResult, error: locError } = await supabase.functions.invoke("shopify-sync", {
       body: { action: "get_locations", connection_id: shopifyConn.id },
     });
+    if (locError || locResult?.ok === false) {
+      toast.error(`Could not load Shopify locations — ${locResult?.error ?? locError?.message ?? "unknown error"}`);
+      return;
+    }
     const locs: Array<{ id: string; name: string }> = (locResult?.locations ?? []).map((l: any) => ({
       id: String(l.id),
       name: l.name,
     }));
+    if (locs.length === 0) {
+      toast.error("No Shopify locations found — cannot adjust stock");
+      return;
+    }
 
     setAdjustLocations(locs);
     setAdjustLocationId(locs[0]?.id ?? "");
