@@ -7,7 +7,7 @@ import {
   TrendingUp, TrendingDown, AlertTriangle, ShoppingCart,
   Boxes, Activity, Package, BarChart3, Lightbulb,
   ArrowUp, ArrowDown, Minus, Globe2, Layers, Zap,
-  ChevronRight, ChevronLeft, RefreshCw, Loader2, CalendarDays, Download, Clock,
+  ChevronRight, ChevronLeft, RefreshCw, Loader2, CalendarDays, Download,
 } from "lucide-react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -34,10 +34,10 @@ import {
   type DrillDownProduct,
 } from "@/hooks/useInventoryDrillDown";
 import {
-  useDailySalesPulse,
-  type DailyStorePulse,
-  type DailyChannelStat,
-} from "@/hooks/useDailySalesPulse";
+  useStoreSalesPulse,
+  type StoreSalesPulse,
+  type ChannelSalesStat,
+} from "@/hooks/useStoreSalesPulse";
 
 // ─── Store accent colors (auto-assigned by index) ─────────────────────────────
 
@@ -604,15 +604,15 @@ function StoreCardsSection({ metrics, loading }: {
   );
 }
 
-// ─── Section: Daily Sales Pulse (Today vs Yesterday, all channels) ───────────
+// ─── Section: Sales Pulse (current vs previous period, all channels) ─────────
 
-function DailyChannelRow({ c, sym }: { c: DailyChannelStat; sym: string }) {
+function ChannelSalesRow({ c, sym }: { c: ChannelSalesStat; sym: string }) {
   return (
     <div className="flex items-center gap-2.5 py-1.5">
       <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: c.color }} />
       <span className="text-xs font-medium truncate flex-1 min-w-0">{c.name}</span>
-      <span className="text-[11px] text-muted-foreground tabular-nums w-9 text-right shrink-0">{fmtNum(c.todayOrders)}</span>
-      <span className="text-xs font-semibold tabular-nums w-16 text-right shrink-0">{fmtC(c.todayRevenue, sym)}</span>
+      <span className="text-[11px] text-muted-foreground tabular-nums w-9 text-right shrink-0">{fmtNum(c.orders)}</span>
+      <span className="text-xs font-semibold tabular-nums w-16 text-right shrink-0">{fmtC(c.revenue, sym)}</span>
       <span className="w-11 text-right shrink-0">
         <DeltaBadge value={c.revenueDelta} />
       </span>
@@ -620,57 +620,50 @@ function DailyChannelRow({ c, sym }: { c: DailyChannelStat; sym: string }) {
   );
 }
 
-function DailyPulseCard({ p, idx }: { p: DailyStorePulse; idx: number }) {
+function SalesPulseCard({ p, idx }: { p: StoreSalesPulse; idx: number }) {
   const color = storeColor(idx);
   return (
     <Card className="overflow-hidden flex flex-col">
       <div className="h-1.5 w-full" style={{ background: color }} />
       <CardContent className="p-4 flex-1 flex flex-col gap-3">
 
-        {/* Store name + timezone caption */}
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
-            <h3 className="font-semibold text-sm">{p.storeName}</h3>
-            <span className="text-[10px] text-muted-foreground uppercase tracking-wide font-mono">{p.currency}</span>
-          </div>
-          <div className="flex items-center gap-1 mt-1 text-[10px] text-muted-foreground">
-            <Clock size={9} />
-            Today vs yesterday · store-local day
-          </div>
+        <div className="flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
+          <h3 className="font-semibold text-sm">{p.storeName}</h3>
+          <span className="text-[10px] text-muted-foreground uppercase tracking-wide font-mono">{p.currency}</span>
         </div>
 
         {/* Net sales + orders */}
         <div className="grid grid-cols-2 gap-3 pt-1 border-t">
           <div>
-            <div className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">Net Sales Today</div>
-            <div className="text-lg font-bold tabular-nums leading-none">{fmtC(p.todayRevenue, p.currencySymbol)}</div>
+            <div className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">Net Sales</div>
+            <div className="text-lg font-bold tabular-nums leading-none">{fmtC(p.revenue, p.currencySymbol)}</div>
             <div className="flex items-center gap-1.5 mt-1.5">
               <DeltaBadge value={p.revenueDelta} />
-              <span className="text-[10px] text-muted-foreground truncate">yest. {fmtC(p.yesterdayRevenue, p.currencySymbol)}</span>
+              <span className="text-[10px] text-muted-foreground truncate">prev {fmtC(p.prevRevenue, p.currencySymbol)}</span>
             </div>
           </div>
           <div>
-            <div className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">Orders Today</div>
-            <div className="text-lg font-bold tabular-nums leading-none">{fmtNum(p.todayOrders)}</div>
+            <div className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">Orders</div>
+            <div className="text-lg font-bold tabular-nums leading-none">{fmtNum(p.orders)}</div>
             <div className="flex items-center gap-1.5 mt-1.5">
               <DeltaBadge value={p.ordersDelta} />
-              <span className="text-[10px] text-muted-foreground truncate">yest. {fmtNum(p.yesterdayOrders)}</span>
+              <span className="text-[10px] text-muted-foreground truncate">prev {fmtNum(p.prevOrders)}</span>
             </div>
           </div>
         </div>
 
-        {/* All channels — net sales & orders, today vs yesterday */}
+        {/* All channels — net sales & orders for the selected period */}
         <div className="border-t pt-2 flex-1 flex flex-col min-h-0">
           <div className="flex items-center justify-between mb-1">
             <span className="text-[10px] text-muted-foreground uppercase tracking-wide">By channel</span>
             <span className="text-[10px] text-muted-foreground">{p.channels.length} active</span>
           </div>
           {!p.channels.length ? (
-            <p className="text-[11px] text-muted-foreground py-3 text-center">No orders in the last 2 days.</p>
+            <p className="text-[11px] text-muted-foreground py-3 text-center">No orders in this period.</p>
           ) : (
             <div className="max-h-56 overflow-y-auto pr-1 -mr-1 divide-y divide-border/50">
-              {p.channels.map(c => <DailyChannelRow key={c.key} c={c} sym={p.currencySymbol} />)}
+              {p.channels.map(c => <ChannelSalesRow key={c.key} c={c} sym={p.currencySymbol} />)}
             </div>
           )}
         </div>
@@ -679,9 +672,11 @@ function DailyPulseCard({ p, idx }: { p: DailyStorePulse; idx: number }) {
   );
 }
 
-function DailySalesPulseSection({ pulse, loading }: {
-  pulse: DailyStorePulse[];
+function SalesPulseSection({ pulse, loading, bounds, range }: {
+  pulse: StoreSalesPulse[];
   loading: boolean;
+  bounds: DateBounds;
+  range: DateRangeKey;
 }) {
   return (
     <div>
@@ -693,8 +688,8 @@ function DailySalesPulseSection({ pulse, loading }: {
           </span>
           Live
         </span>
-        <h2 className="text-base font-semibold">Daily Sales Pulse</h2>
-        <span className="text-xs text-muted-foreground">Net sales &amp; full channel mix · today vs yesterday, per store's local day</span>
+        <h2 className="text-base font-semibold">Sales Pulse</h2>
+        <span className="text-xs text-muted-foreground">Net sales &amp; full channel mix · {bounds.label} {comparePeriodLabel(range)}</span>
       </div>
       {loading ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
@@ -711,7 +706,7 @@ function DailySalesPulseSection({ pulse, loading }: {
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-          {pulse.map((p, i) => <DailyPulseCard key={p.storeId} p={p} idx={i} />)}
+          {pulse.map((p, i) => <SalesPulseCard key={p.storeId} p={p} idx={i} />)}
         </div>
       )}
     </div>
@@ -1399,7 +1394,9 @@ export default function StorePerformanceDashboard() {
   }, [range, customFrom, customTo]);
 
   const { data, isLoading, isFetching, refetch } = useStorePerformance(bounds);
-  const { data: pulseData, isLoading: pulseLoading } = useDailySalesPulse();
+  const {
+    data: pulseData, isLoading: pulseLoading, isFetching: pulseFetching, refetch: refetchPulse,
+  } = useStoreSalesPulse(bounds);
   const queryClient = useQueryClient();
 
   const metrics    = data?.storeMetrics     ?? [];
@@ -1421,7 +1418,7 @@ export default function StorePerformanceDashboard() {
           <div className="flex items-center gap-2 mb-1">
             <Globe2 size={18} className="text-primary" />
             <h1 className="text-xl font-bold tracking-tight">Store Performance Dashboard</h1>
-            {isFetching && <Loader2 size={14} className="animate-spin text-muted-foreground" />}
+            {(isFetching || pulseFetching) && <Loader2 size={14} className="animate-spin text-muted-foreground" />}
           </div>
           <p className="text-sm text-muted-foreground">
             Cross-store operational and inventory performance · <span className="font-medium">{bounds.label}</span>
@@ -1436,8 +1433,8 @@ export default function StorePerformanceDashboard() {
             onCustomChange={(f, t) => { setCustomFrom(f); setCustomTo(t); }}
           />
           <Button size="sm" variant="outline" className="h-8 text-xs gap-1.5"
-            onClick={() => refetch()} disabled={isFetching}>
-            {isFetching
+            onClick={() => { refetch(); refetchPulse(); }} disabled={isFetching || pulseFetching}>
+            {(isFetching || pulseFetching)
               ? <Loader2 size={12} className="animate-spin" />
               : <RefreshCw size={12} />}
             Refresh
@@ -1445,14 +1442,14 @@ export default function StorePerformanceDashboard() {
         </div>
       </div>
 
+      {/* ── Sales Pulse: net sales + full channel mix, follows the date filter ── */}
+      <section>
+        <SalesPulseSection pulse={pulseData ?? []} loading={pulseLoading} bounds={bounds} range={range} />
+      </section>
+
       {/* ── Store performance cards (top) ────────────────────────────────────── */}
       <section>
         <StoreCardsSection metrics={metrics} loading={isLoading} />
-      </section>
-
-      {/* ── Daily Sales Pulse: net sales + full channel mix, today vs yesterday ── */}
-      <section>
-        <DailySalesPulseSection pulse={pulseData ?? []} loading={pulseLoading} />
       </section>
 
       {/* ── Store ranking ────────────────────────────────────────────────────── */}
