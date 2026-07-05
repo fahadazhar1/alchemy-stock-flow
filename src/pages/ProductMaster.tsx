@@ -20,6 +20,7 @@ import { Progress } from "@/components/ui/progress";
 import { useCollectionRefresh } from "@/hooks/useCollectionRefresh";
 import { DateRangeFilter, matchesDateFilter } from "@/components/DateRangeFilter";
 import { useStoreFilter } from "@/hooks/useStoreFilter";
+import { useAuth } from "@/contexts/AuthContext";
 
 const PAGE_SIZE = 20;
 
@@ -47,6 +48,7 @@ interface PriceEditData {
 export default function ProductMaster() {
   const { formatCurrency } = useCurrency();
   const { storeId } = useStoreFilter();
+  const { user } = useAuth();
   const [page, setPage] = useState(0);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -445,6 +447,19 @@ export default function ProductMaster() {
       await supabase.from("inventory_sync_logs").insert({
         action_type: "inventory_adjustment", campaign_name: null, items_affected: 1, status: "success",
         metadata: { sku: adjustRow.sku, adjustment, location_id: adjustLocationId, new_quantity: newQty },
+      });
+
+      await (supabase as any).from("stock_adjustment_history").insert({
+        variant_id: adjustRow.variantId,
+        product_id: adjustRow.productId,
+        store_id: storeId ?? null,
+        variant_sku: adjustRow.sku,
+        product_name: adjustRow.productName,
+        adjustment,
+        quantity_before: adjustRow.currentStock,
+        quantity_after: newQty,
+        location_name: adjustLocations.find((l) => l.id === adjustLocationId)?.name ?? null,
+        adjusted_by: user?.email ?? null,
       });
 
       toast.success(`Stock updated — ${adjustRow.sku} adjusted by ${adjustment > 0 ? "+" : ""}${adjustment} units`);

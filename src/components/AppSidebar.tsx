@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, Package, RefreshCw, Brain, Bot, FileText,
   BarChart3, Truck, CheckSquare, FlaskConical, Clock, Settings, BookOpen, Store,
-  ShoppingCart, BarChart2, ListOrdered, Activity, LogOut,
+  ShoppingCart, BarChart2, ListOrdered, Activity, LogOut, ChevronRight, History,
   PackageCheck, ClipboardList, Tag, Archive, PackageOpen, Search, Globe2,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
@@ -9,7 +9,9 @@ import { useLocation } from "react-router-dom";
 import {
   Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent,
   SidebarGroupLabel, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarFooter, useSidebar,
+  SidebarMenuSub, SidebarMenuSubButton, SidebarMenuSubItem,
 } from "@/components/ui/sidebar";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useAuth } from "@/contexts/AuthContext";
 import { usePageVisibility } from "@/hooks/usePageVisibility";
 import { Button } from "@/components/ui/button";
@@ -19,7 +21,13 @@ const navItems = [
   { title: "Store Performance - WIP", url: "/store-performance", icon: Globe2 },
   { title: "Orders",    url: "/orders",    icon: ShoppingCart },
   { title: "Reports",   url: "/reports",   icon: BarChart2 },
-  { title: "Product Master", url: "/products", icon: Package },
+  {
+    title: "Product Master", url: "/products", icon: Package,
+    children: [
+      { title: "All Products", url: "/products", icon: Package },
+      { title: "Inventory Adjustments", url: "/products/inventory-history", icon: History },
+    ],
+  },
   { title: "Sales Campaign", url: "/manual-sync", icon: RefreshCw },
   { title: "AI Co-Pilot", url: "/ai-copilot", icon: Brain },
   { title: "Auto-Pilot", url: "/auto-pilot", icon: Bot },
@@ -67,21 +75,62 @@ export function AppSidebar() {
           </SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {visibleNavItems.map((item) => (
-                <SidebarMenuItem key={item.url}>
-                  <SidebarMenuButton asChild>
-                    <NavLink
-                      to={item.url}
-                      end
-                      className="hover:bg-sidebar-accent/50"
-                      activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
-                    >
-                      <item.icon className="h-4 w-4 shrink-0" />
-                      {!collapsed && <span>{item.title}</span>}
-                    </NavLink>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
+              {visibleNavItems.map((item) => {
+                if (!item.children) {
+                  return (
+                    <SidebarMenuItem key={item.url}>
+                      <SidebarMenuButton asChild>
+                        <NavLink
+                          to={item.url}
+                          end
+                          className="hover:bg-sidebar-accent/50"
+                          activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                        >
+                          <item.icon className="h-4 w-4 shrink-0" />
+                          {!collapsed && <span>{item.title}</span>}
+                        </NavLink>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  );
+                }
+
+                const isActiveGroup = location.pathname.startsWith(item.url);
+                return (
+                  <Collapsible key={item.url} defaultOpen={isActiveGroup} className="group/collapsible">
+                    <SidebarMenuItem>
+                      <CollapsibleTrigger asChild>
+                        <SidebarMenuButton className="hover:bg-sidebar-accent/50">
+                          <item.icon className="h-4 w-4 shrink-0" />
+                          {!collapsed && (
+                            <>
+                              <span>{item.title}</span>
+                              <ChevronRight className="ml-auto h-4 w-4 shrink-0 transition-transform group-data-[state=open]/collapsible:rotate-90" />
+                            </>
+                          )}
+                        </SidebarMenuButton>
+                      </CollapsibleTrigger>
+                      <CollapsibleContent>
+                        <SidebarMenuSub>
+                          {item.children.map((child) => (
+                            <SidebarMenuSubItem key={child.url}>
+                              <SidebarMenuSubButton asChild>
+                                <NavLink
+                                  to={child.url}
+                                  end
+                                  activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                                >
+                                  <child.icon className="h-3.5 w-3.5 shrink-0" />
+                                  <span>{child.title}</span>
+                                </NavLink>
+                              </SidebarMenuSubButton>
+                            </SidebarMenuSubItem>
+                          ))}
+                        </SidebarMenuSub>
+                      </CollapsibleContent>
+                    </SidebarMenuItem>
+                  </Collapsible>
+                );
+              })}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>

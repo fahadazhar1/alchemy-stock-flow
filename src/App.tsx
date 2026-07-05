@@ -11,6 +11,7 @@ import Dashboard from "@/pages/v2/Dashboard";
 import Orders from "@/pages/v2/Orders";
 import Reports from "@/pages/v2/Reports";
 import ProductMaster from "@/pages/ProductMaster";
+import InventoryAdjustments from "@/pages/InventoryAdjustments";
 import ManualSync from "@/pages/ManualSync";
 import AICoPilot from "@/pages/AICoPilot";
 import AutoPilot from "@/pages/AutoPilot";
@@ -79,6 +80,7 @@ function AppRoutes() {
           <Route path="/orders" element={<Orders />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/products" element={<ProductMaster />} />
+          <Route path="/products/inventory-history" element={<InventoryAdjustments />} />
           <Route path="/manual-sync" element={<ManualSync />} />
           <Route path="/ai-copilot" element={<AICoPilot />} />
           <Route path="/auto-pilot" element={<AutoPilot />} />
