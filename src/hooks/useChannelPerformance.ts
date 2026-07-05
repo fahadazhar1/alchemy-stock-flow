@@ -15,7 +15,7 @@ export interface ChannelStat {
   dailyRevenue: number[];
 }
 
-const CHANNEL_META: Record<string, { name: string; color: string }> = {
+export const CHANNEL_META: Record<string, { name: string; color: string }> = {
   web:                  { name: "Online Store",  color: "#5E5CE6" },
   pos:                  { name: "Point of Sale", color: "#10B981" },
   shop:                 { name: "Shop App",      color: "#EC4899" },
@@ -35,7 +35,7 @@ const CHANNEL_META: Record<string, { name: string; color: string }> = {
   unknown:              { name: "Other",         color: "#9CA3AF" },
 };
 
-function normalizeKey(source: string | null): string {
+export function normalizeKey(source: string | null): string {
   const k = (source ?? "").toLowerCase().trim();
   if (k === "" || k === "null") return "admin";
   if (k === "web" || k.includes("online_store") || k.includes("online store")) return "web";
