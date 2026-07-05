@@ -11,9 +11,13 @@ import { useStoreFilter } from "@/hooks/useStoreFilter";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
+  DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent,
+  DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   Activity, Download, Search, TrendingUp, TrendingDown,
   Minus, ChevronDown, ChevronRight, Zap, BarChart2, Package,
-  ArrowUpDown, ArrowUp, ArrowDown,
+  ArrowUpDown, ArrowUp, ArrowDown, ListFilter, X,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -39,6 +43,13 @@ type OrderDetail = {
 
 type SortCol = "units_sold_7d" | "units_sold_14d" | "units_sold_30d" | "product_name" | "total_inventory";
 type Trend   = "Spiking" | "Steady" | "Slowing" | "New";
+type InventoryStatus = "Out of Stock" | "Low Stock" | "In Stock";
+
+function getInventoryStatus(row: VelocityRow): InventoryStatus {
+  if (row.available_units === 0) return "Out of Stock";
+  if (row.available_units <= 10) return "Low Stock";
+  return "In Stock";
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -185,7 +196,15 @@ export default function ProductVelocity() {
   const [sortCol, setSortCol]       = useState<SortCol>("units_sold_7d");
   const [sortDir, setSortDir]       = useState<"asc" | "desc">("desc");
   const [expanded, setExpanded]     = useState<string | null>(null);
-  const [trendFilter, setTrendFilter] = useState<Trend | "All">("All");
+  const [trendFilters, setTrendFilters]         = useState<Trend[]>([]);
+  const [inventoryFilters, setInventoryFilters] = useState<InventoryStatus[]>([]);
+
+  function toggleTrendFilter(t: Trend) {
+    setTrendFilters(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]);
+  }
+  function toggleInventoryFilter(s: InventoryStatus) {
+    setInventoryFilters(prev => prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s]);
+  }
 
   const { data: rows = [], isLoading } = useQuery({
     queryKey: ["product-velocity-live", storeId],
@@ -229,7 +248,8 @@ export default function ProductVelocity() {
       const q = search.toLowerCase();
       return !q || r.product_name.toLowerCase().includes(q) || r.sku.toLowerCase().includes(q);
     })
-    .filter(r => trendFilter === "All" || getTrend(r) === trendFilter)
+    .filter(r => trendFilters.length === 0 || trendFilters.includes(getTrend(r)))
+    .filter(r => inventoryFilters.length === 0 || inventoryFilters.includes(getInventoryStatus(r)))
     .sort((a, b) => {
       const val = (r: VelocityRow) =>
         sortCol === "product_name" ? r.product_name : r[sortCol as keyof VelocityRow];
@@ -345,7 +365,7 @@ export default function ProductVelocity() {
       </div>
 
       {/* Filters */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 flex-wrap">
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
@@ -355,30 +375,104 @@ export default function ProductVelocity() {
             onChange={e => setSearch(e.target.value)}
           />
         </div>
-        <div className="flex items-center gap-1.5">
-          {(["All", "Spiking", "Steady", "Slowing"] as const).map(t => (
-            <Button
-              key={t}
-              variant={trendFilter === t ? "default" : "outline"}
-              size="sm"
-              className="text-xs h-8"
-              onClick={() => setTrendFilter(t)}
-            >
-              {t}
-              {t === "Spiking" && spikingCount > 0 && (
-                <span className="ml-1.5 bg-red-500 text-white text-[10px] rounded-full px-1.5">
-                  {spikingCount}
-                </span>
-              )}
-              {t === "Slowing" && slowingCount > 0 && (
-                <span className="ml-1.5 bg-blue-500 text-white text-[10px] rounded-full px-1.5">
-                  {slowingCount}
+
+        {/* Trend multi-select */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm" className="text-xs h-8 gap-1.5">
+              <ListFilter className="h-3.5 w-3.5" />
+              Trend
+              {trendFilters.length > 0 && (
+                <span className="ml-0.5 bg-primary text-primary-foreground text-[10px] rounded-full px-1.5">
+                  {trendFilters.length}
                 </span>
               )}
             </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-48">
+            <DropdownMenuLabel>Filter by trend</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            {(["Spiking", "Steady", "Slowing", "New"] as Trend[]).map(t => (
+              <DropdownMenuCheckboxItem
+                key={t}
+                checked={trendFilters.includes(t)}
+                onCheckedChange={() => toggleTrendFilter(t)}
+                onSelect={e => e.preventDefault()}
+              >
+                {TREND_CONFIG[t].label}
+                {t === "Spiking" && <span className="ml-auto text-xs text-muted-foreground">{spikingCount}</span>}
+                {t === "Slowing" && <span className="ml-auto text-xs text-muted-foreground">{slowingCount}</span>}
+              </DropdownMenuCheckboxItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+
+        {/* Inventory multi-select */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm" className="text-xs h-8 gap-1.5">
+              <Package className="h-3.5 w-3.5" />
+              Inventory
+              {inventoryFilters.length > 0 && (
+                <span className="ml-0.5 bg-primary text-primary-foreground text-[10px] rounded-full px-1.5">
+                  {inventoryFilters.length}
+                </span>
+              )}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-48">
+            <DropdownMenuLabel>Filter by inventory</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            {(["Out of Stock", "Low Stock", "In Stock"] as InventoryStatus[]).map(s => (
+              <DropdownMenuCheckboxItem
+                key={s}
+                checked={inventoryFilters.includes(s)}
+                onCheckedChange={() => toggleInventoryFilter(s)}
+                onSelect={e => e.preventDefault()}
+              >
+                {s}
+              </DropdownMenuCheckboxItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+
+        {(trendFilters.length > 0 || inventoryFilters.length > 0) && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-xs h-8 text-muted-foreground"
+            onClick={() => { setTrendFilters([]); setInventoryFilters([]); }}
+          >
+            <X className="h-3.5 w-3.5 mr-1" /> Clear filters
+          </Button>
+        )}
+      </div>
+
+      {/* Active filter chips */}
+      {(trendFilters.length > 0 || inventoryFilters.length > 0) && (
+        <div className="flex items-center gap-1.5 flex-wrap -mt-2">
+          {trendFilters.map(t => (
+            <Badge
+              key={`trend-${t}`}
+              variant="outline"
+              className={cn("text-[11px] border flex items-center gap-1 cursor-pointer", TREND_CONFIG[t].cls)}
+              onClick={() => toggleTrendFilter(t)}
+            >
+              {TREND_CONFIG[t].label} <X className="h-3 w-3" />
+            </Badge>
+          ))}
+          {inventoryFilters.map(s => (
+            <Badge
+              key={`inv-${s}`}
+              variant="outline"
+              className="text-[11px] border flex items-center gap-1 cursor-pointer"
+              onClick={() => toggleInventoryFilter(s)}
+            >
+              {s} <X className="h-3 w-3" />
+            </Badge>
           ))}
         </div>
-      </div>
+      )}
 
       {/* Table */}
       <div className="rounded-xl border overflow-x-auto">
