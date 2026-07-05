@@ -379,7 +379,12 @@ export default function ProductMaster() {
       body: { action: "get_locations", connection_id: shopifyConn.id },
     });
     if (locError || locResult?.ok === false) {
-      toast.error(`Could not load Shopify locations — ${locResult?.error ?? locError?.message ?? "unknown error"}`);
+      let detail = locResult?.error ?? locError?.message ?? "unknown error";
+      const ctx = (locError as any)?.context;
+      if (ctx?.json) {
+        try { detail = (await ctx.json())?.error ?? detail; } catch { /* body already consumed or not JSON */ }
+      }
+      toast.error(`Could not load Shopify locations — ${detail}`);
       return;
     }
     const locs: Array<{ id: string; name: string }> = (locResult?.locations ?? []).map((l: any) => ({
