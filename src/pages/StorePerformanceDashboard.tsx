@@ -14,6 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Calendar } from "@/components/ui/calendar";
 import { cn } from "@/lib/utils";
@@ -620,7 +621,32 @@ function ChannelSalesRow({ c, sym }: { c: ChannelSalesStat; sym: string }) {
   );
 }
 
-function SalesPulseCard({ p, idx }: { p: StoreSalesPulse; idx: number }) {
+function delta(cur: number, prev: number): number | null {
+  if (prev <= 0) return null;
+  return Math.round(((cur - prev) / prev) * 100);
+}
+
+// Collapse a store's per-channel breakdown down to a single selected channel,
+// keeping the same shape so SalesPulseCard doesn't need to branch on filter state.
+function applyChannelFilter(p: StoreSalesPulse, channelKey: string | "all"): StoreSalesPulse {
+  if (channelKey === "all") return p;
+  const c = p.channels.find(ch => ch.key === channelKey);
+  if (!c) {
+    return { ...p, revenue: 0, orders: 0, prevRevenue: 0, prevOrders: 0, revenueDelta: null, ordersDelta: null, channels: [] };
+  }
+  return {
+    ...p,
+    revenue: c.revenue,
+    orders: c.orders,
+    prevRevenue: c.prevRevenue,
+    prevOrders: c.prevOrders,
+    revenueDelta: c.revenueDelta,
+    ordersDelta: delta(c.orders, c.prevOrders),
+    channels: [c],
+  };
+}
+
+function SalesPulseCard({ p, idx, channelFiltered }: { p: StoreSalesPulse; idx: number; channelFiltered: boolean }) {
   const color = storeColor(idx);
   return (
     <Card className="overflow-hidden flex flex-col">
@@ -654,19 +680,24 @@ function SalesPulseCard({ p, idx }: { p: StoreSalesPulse; idx: number }) {
         </div>
 
         {/* All channels — net sales & orders for the selected period */}
-        <div className="border-t pt-2 flex-1 flex flex-col min-h-0">
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-[10px] text-muted-foreground uppercase tracking-wide">By channel</span>
-            <span className="text-[10px] text-muted-foreground">{p.channels.length} active</span>
-          </div>
-          {!p.channels.length ? (
-            <p className="text-[11px] text-muted-foreground py-3 text-center">No orders in this period.</p>
-          ) : (
-            <div className="max-h-56 overflow-y-auto pr-1 -mr-1 divide-y divide-border/50">
-              {p.channels.map(c => <ChannelSalesRow key={c.key} c={c} sym={p.currencySymbol} />)}
+        {!channelFiltered && (
+          <div className="border-t pt-2 flex-1 flex flex-col min-h-0">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[10px] text-muted-foreground uppercase tracking-wide">By channel</span>
+              <span className="text-[10px] text-muted-foreground">{p.channels.length} active</span>
             </div>
-          )}
-        </div>
+            {!p.channels.length ? (
+              <p className="text-[11px] text-muted-foreground py-3 text-center">No orders in this period.</p>
+            ) : (
+              <div className="max-h-56 overflow-y-auto pr-1 -mr-1 divide-y divide-border/50">
+                {p.channels.map(c => <ChannelSalesRow key={c.key} c={c} sym={p.currencySymbol} />)}
+              </div>
+            )}
+          </div>
+        )}
+        {channelFiltered && !p.channels.length && (
+          <p className="text-[11px] text-muted-foreground py-3 text-center border-t pt-3">No orders on this channel.</p>
+        )}
       </CardContent>
     </Card>
   );
@@ -678,9 +709,26 @@ function SalesPulseSection({ pulse, loading, bounds, range }: {
   bounds: DateBounds;
   range: DateRangeKey;
 }) {
+  const [channelFilter, setChannelFilter] = useState<string>("all");
+
+  const channelOptions = useMemo(() => {
+    const map = new Map<string, { key: string; name: string }>();
+    for (const p of pulse) {
+      for (const c of p.channels) {
+        if (!map.has(c.key)) map.set(c.key, { key: c.key, name: c.name });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [pulse]);
+
+  const filteredPulse = useMemo(
+    () => pulse.map(p => applyChannelFilter(p, channelFilter)),
+    [pulse, channelFilter],
+  );
+
   return (
     <div>
-      <div className="flex items-center gap-2.5 mb-3">
+      <div className="flex items-center gap-2.5 mb-3 flex-wrap">
         <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-cyan-500/10 text-cyan-600 dark:text-cyan-400">
           <span className="relative flex h-1.5 w-1.5">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75" />
@@ -690,6 +738,17 @@ function SalesPulseSection({ pulse, loading, bounds, range }: {
         </span>
         <h2 className="text-base font-semibold">Sales Pulse</h2>
         <span className="text-xs text-muted-foreground">Net sales &amp; full channel mix · {bounds.label} {comparePeriodLabel(range)}</span>
+        <div className="ml-auto">
+          <Select value={channelFilter} onValueChange={setChannelFilter}>
+            <SelectTrigger className="h-7 text-xs w-[150px]"><SelectValue placeholder="All channels" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All channels</SelectItem>
+              {channelOptions.map(c => (
+                <SelectItem key={c.key} value={c.key}>{c.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
       {loading ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
@@ -706,7 +765,9 @@ function SalesPulseSection({ pulse, loading, bounds, range }: {
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-          {pulse.map((p, i) => <SalesPulseCard key={p.storeId} p={p} idx={i} />)}
+          {filteredPulse.map((p, i) => (
+            <SalesPulseCard key={p.storeId} p={p} idx={i} channelFiltered={channelFilter !== "all"} />
+          ))}
         </div>
       )}
     </div>
