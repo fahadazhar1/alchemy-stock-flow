@@ -70,6 +70,8 @@ const SEO_QUERY = `
           id
           seo { title description }
           featuredImage { altText }
+          description
+          variants(first: 1) { edges { node { barcode } } }
         }
       }
     }
@@ -108,7 +110,13 @@ async function syncSEOForConnection(
       data?: {
         products: {
           pageInfo: { hasNextPage: boolean; endCursor: string };
-          edges: { node: { id: string; seo: { title: string | null; description: string | null }; featuredImage: { altText: string | null } | null } }[];
+          edges: { node: {
+            id: string;
+            seo: { title: string | null; description: string | null };
+            featuredImage: { altText: string | null } | null;
+            description: string | null;
+            variants: { edges: { node: { barcode: string | null } }[] } | null;
+          } }[];
         };
       };
       errors?: unknown[];
@@ -121,12 +129,15 @@ async function syncSEOForConnection(
     // Concurrent DB updates within each page — much faster than sequential
     await Promise.all(edges.map(async ({ node }) => {
       const shopifyProductId = node.id.replace("gid://shopify/Product/", "");
+      const bodyText = (node.description ?? "").trim();
       const { error } = await supabase
         .from("products")
         .update({
           meta_title:       node.seo?.title        || null,
           meta_description: node.seo?.description  || null,
           image_alt_text:   node.featuredImage?.altText || null,
+          barcode:          node.variants?.edges?.[0]?.node?.barcode?.trim() || null,
+          description_word_count: bodyText ? bodyText.split(/\s+/).length : 0,
         })
         .eq("shopify_product_id", shopifyProductId)
         .eq("store_id", storeId);

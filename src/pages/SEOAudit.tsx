@@ -39,13 +39,16 @@ type ProductRow = {
   meta_title: string | null;
   meta_description: string | null;
   image_alt_text: string | null;
+  barcode: string | null;
+  description_word_count: number | null;
 };
 
 type IssueKey =
   | "no_collection" | "no_type" | "no_vendor"
   | "no_meta_title" | "no_meta_description" | "no_alt_text"
   | "short_name" | "long_name" | "duplicate_title"
-  | "title_too_short" | "title_too_long" | "desc_too_short" | "desc_too_long";
+  | "title_too_short" | "title_too_long" | "desc_too_short" | "desc_too_long"
+  | "no_barcode" | "duplicate_description" | "thin_description";
 
 type EditFields = {
   meta_title: string;
@@ -70,6 +73,9 @@ const ISSUE_LABELS: Record<IssueKey, string> = {
   title_too_long:      "SEO Title Too Long",
   desc_too_short:      "SEO Desc Too Short",
   desc_too_long:       "SEO Desc Too Long",
+  no_barcode:          "No ISBN/Barcode",
+  duplicate_description: "Duplicate SEO Desc",
+  thin_description:    "Thin Description (<200 words)",
 };
 
 const ISSUE_COLORS: Record<IssueKey, string> = {
@@ -86,6 +92,9 @@ const ISSUE_COLORS: Record<IssueKey, string> = {
   title_too_long:      "bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/30 dark:text-sky-400",
   desc_too_short:      "bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-950/30 dark:text-violet-400",
   desc_too_long:       "bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-950/30 dark:text-violet-400",
+  no_barcode:          "bg-teal-50 text-teal-700 border-teal-200 dark:bg-teal-950/30 dark:text-teal-400",
+  duplicate_description: "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200 dark:bg-fuchsia-950/30 dark:text-fuchsia-400",
+  thin_description:    "bg-lime-50 text-lime-700 border-lime-200 dark:bg-lime-950/30 dark:text-lime-400",
 };
 
 // Issues shown in filter tabs (primary ones)
@@ -93,9 +102,10 @@ const FILTER_ISSUE_KEYS: IssueKey[] = [
   "no_collection", "no_type", "no_vendor",
   "no_meta_title", "no_meta_description", "no_alt_text",
   "short_name", "long_name", "duplicate_title",
+  "no_barcode", "duplicate_description", "thin_description",
 ];
 
-function getIssues(row: ProductRow, dupTitles: Set<string>): IssueKey[] {
+function getIssues(row: ProductRow, dupTitles: Set<string>, dupDescs: Set<string>): IssueKey[] {
   const issues: IssueKey[] = [];
   if (!row.collection_name)             issues.push("no_collection");
   if (!row.product_type?.trim())        issues.push("no_type");
@@ -112,6 +122,7 @@ function getIssues(row: ProductRow, dupTitles: Set<string>): IssueKey[] {
   if (!row.meta_description?.trim()) {
     issues.push("no_meta_description");
   } else {
+    if (dupDescs.has(row.meta_description.toLowerCase().trim())) issues.push("duplicate_description");
     if (row.meta_description.length < 100) issues.push("desc_too_short");
     if (row.meta_description.length > 160) issues.push("desc_too_long");
   }
@@ -119,6 +130,13 @@ function getIssues(row: ProductRow, dupTitles: Set<string>): IssueKey[] {
   if (!row.image_alt_text?.trim())      issues.push("no_alt_text");
   if (row.product_name.length < 20)     issues.push("short_name");
   if (row.product_name.length > 150)    issues.push("long_name");
+
+  // description_word_count is null until the extended SEO sync has run —
+  // skip barcode/thin checks then, so pre-sync data doesn't false-flag.
+  if (row.description_word_count != null) {
+    if (!row.barcode?.trim())              issues.push("no_barcode");
+    if (row.description_word_count < 200)  issues.push("thin_description");
+  }
   return issues;
 }
 
@@ -392,7 +410,7 @@ export default function SEOAudit() {
       while (true) {
         let q = (supabase as any)
           .from("v_seo_audit")
-          .select("product_id, product_name, sku, collection_name, product_type, vendor_name, total_inventory, store_id, meta_title, meta_description, image_alt_text")
+          .select("product_id, product_name, sku, collection_name, product_type, vendor_name, total_inventory, store_id, meta_title, meta_description, image_alt_text, barcode, description_word_count")
           .order("product_name", { ascending: true })
           .range(from, from + PAGE - 1);
         if (storeId) q = q.eq("store_id", storeId);
@@ -407,15 +425,19 @@ export default function SEOAudit() {
     },
   });
 
-  // Duplicate title detection + issue enrichment
+  // Duplicate title/description detection + issue enrichment
   const enriched = useMemo(() => {
     const titleCounts = new Map<string, number>();
+    const descCounts  = new Map<string, number>();
     (data ?? []).forEach(r => {
-      const k = r.meta_title?.toLowerCase().trim();
-      if (k) titleCounts.set(k, (titleCounts.get(k) ?? 0) + 1);
+      const t = r.meta_title?.toLowerCase().trim();
+      if (t) titleCounts.set(t, (titleCounts.get(t) ?? 0) + 1);
+      const d = r.meta_description?.toLowerCase().trim();
+      if (d) descCounts.set(d, (descCounts.get(d) ?? 0) + 1);
     });
     const dupTitles = new Set([...titleCounts.entries()].filter(([, c]) => c > 1).map(([t]) => t));
-    return (data ?? []).map(r => ({ ...r, issues: getIssues(r, dupTitles) }));
+    const dupDescs  = new Set([...descCounts.entries()].filter(([, c]) => c > 1).map(([t]) => t));
+    return (data ?? []).map(r => ({ ...r, issues: getIssues(r, dupTitles, dupDescs) }));
   }, [data]);
 
   const withIssues = enriched.filter(r => r.issues.length > 0);
@@ -566,7 +588,7 @@ export default function SEOAudit() {
             <Search className="h-6 w-6" /> SEO Audit
           </h1>
           <p className="text-sm text-muted-foreground">
-            Products missing SEO title, description, alt text, collection, type, or vendor
+            Products missing SEO title, description, alt text, ISBN/barcode, collection, type, or vendor — plus duplicate and thin content
           </p>
         </div>
         <div className="flex gap-2">
@@ -583,6 +605,8 @@ export default function SEOAudit() {
               "SEO Title": r.meta_title ?? "",
               "SEO Description": r.meta_description ?? "",
               "Image Alt": r.image_alt_text ?? "",
+              "ISBN/Barcode": r.barcode ?? "",
+              "Desc Words": r.description_word_count ?? "",
               "Name Length": r.product_name.length,
               Issues: (r as any).issues?.map((i: IssueKey) => ISSUE_LABELS[i]).join("; ") ?? "",
             })),
