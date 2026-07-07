@@ -8,7 +8,6 @@ const corsHeaders = {
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 
 const admin = createClient(SUPABASE_URL, SERVICE_ROLE, { auth: { persistSession: false } });
 
@@ -21,11 +20,9 @@ function json(body: unknown, status = 200) {
 
 async function requireAdmin(req: Request): Promise<{ userId: string } | Response> {
   const authHeader = req.headers.get("Authorization") ?? "";
-  const caller = createClient(SUPABASE_URL, ANON_KEY, {
-    auth: { persistSession: false },
-    global: { headers: { Authorization: authHeader } },
-  });
-  const { data: { user }, error } = await caller.auth.getUser();
+  const token = authHeader.replace(/^Bearer\s+/i, "");
+  if (!token) return json({ ok: false, error: "Not authenticated" }, 401);
+  const { data: { user }, error } = await admin.auth.getUser(token);
   if (error || !user) return json({ ok: false, error: "Not authenticated" }, 401);
 
   const { data: roleRow } = await admin
