@@ -15,6 +15,7 @@ import { useState, useEffect } from "react";
 import { useStore } from "@/contexts/StoreContext";
 import { format } from "date-fns";
 import { usePageVisibility } from "@/hooks/usePageVisibility";
+import { UserManagement } from "@/components/settings/UserManagement";
 
 const VIEWER_PAGES = [
   { title: "Store Performance", url: "/store-performance" },
@@ -42,7 +43,7 @@ const VIEWER_PAGES = [
 ];
 
 export default function Settings() {
-  const { canEdit } = useRole();
+  const { canEdit, isAdmin } = useRole();
   const queryClient = useQueryClient();
   const { data: settings } = useQuery({
     queryKey: ["app-settings"],
@@ -348,6 +349,8 @@ export default function Settings() {
           )}
         </CardContent>
       </Card>
+
+      {isAdmin && <UserManagement />}
 
       <Card>
         <CardHeader>
