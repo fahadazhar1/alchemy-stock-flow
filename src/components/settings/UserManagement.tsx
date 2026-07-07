@@ -30,7 +30,11 @@ interface AppUser {
 
 async function callAdminUsers(payload: Record<string, unknown>) {
   const { data, error } = await supabase.functions.invoke("admin-users", { body: payload });
-  if (error) throw new Error(error.message);
+  if (error) {
+    const ctx = (error as { context?: Response }).context;
+    const body = ctx ? await ctx.json().catch(() => null) : null;
+    throw new Error(body?.error || error.message);
+  }
   if (data && (data as { ok?: boolean }).ok === false) {
     throw new Error((data as { error?: string }).error || "Request failed");
   }
