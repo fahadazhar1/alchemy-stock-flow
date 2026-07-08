@@ -26,10 +26,17 @@ export function getDeadstockLabel(p: DeadstockProduct): string {
 const COLS =
   "product_id,product_name,sku,product_type,total_units,unit_price,inventory_value,dead_stock_status,last_sale_at";
 
-export function useDeadstockPreview(limit = 8, filter = "all") {
+export interface PriceRange {
+  min?: number;
+  max?: number;
+}
+
+export function useDeadstockPreview(limit = 8, filter = "all", priceRange?: PriceRange) {
   const { storeId } = useStoreFilter();
+  const min = priceRange?.min;
+  const max = priceRange?.max;
   return useQuery<{ products: DeadstockProduct[]; total: number }>({
-    queryKey: ["deadstock-preview", storeId, limit, filter],
+    queryKey: ["deadstock-preview", storeId, limit, filter, min, max],
     staleTime: 5 * 60_000,
     queryFn: async () => {
       let q = (supabase as any)
@@ -43,6 +50,8 @@ export function useDeadstockPreview(limit = 8, filter = "all") {
       } else if (filter !== "all") {
         q = q.eq("dead_stock_status", filter);
       }
+      if (min != null) q = q.gte("unit_price", min);
+      if (max != null) q = q.lte("unit_price", max);
       const { data, error, count } = await q;
       if (error) throw error;
       return { products: data ?? [], total: count ?? 0 };

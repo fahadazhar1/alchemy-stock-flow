@@ -19,6 +19,7 @@ import type { LucideIcon } from "lucide-react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Tooltip as UITooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -1226,13 +1227,18 @@ function RowSkeleton({ cols = 5 }: { cols?: number }) {
 
 function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; syncing: boolean }) {
   const navigate = useNavigate();
-  const { fmtCurrency: fmtGBP } = useCurrency();
+  const { fmtCurrency: fmtGBP, symbol: currencySymbol } = useCurrency();
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "draft">("all");
   const [showLosersModal, setShowLosersModal] = useState(false);
   const [deadstockFilter, setDeadstockFilter] = useState("all");
   const [deadstockSelected, setDeadstockSelected] = useState<Set<string>>(new Set());
+  const [deadstockPriceMin, setDeadstockPriceMin] = useState("");
+  const [deadstockPriceMax, setDeadstockPriceMax] = useState("");
   const { data, isLoading } = useInventoryDashboard(statusFilter);
-  const { data: deadstockData, isLoading: deadstockLoading } = useDeadstockPreview(8, deadstockFilter);
+  const { data: deadstockData, isLoading: deadstockLoading } = useDeadstockPreview(8, deadstockFilter, {
+    min: deadstockPriceMin.trim() === "" ? undefined : Number(deadstockPriceMin),
+    max: deadstockPriceMax.trim() === "" ? undefined : Number(deadstockPriceMax),
+  });
   const { data: deadstockSummary } = useDeadstockSummary();
 
   function handleCreateDiscount(ids: string[]) {
@@ -1497,21 +1503,51 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
               </div>
             )}
 
-            <div className="flex items-center gap-1 pt-2 pb-1 flex-wrap">
-              {(["all", "Overstocked", "Dead 90d", "Dead 60d", "Dead 30d"] as const).map(f => (
-                <button
-                  key={f}
-                  onClick={() => { setDeadstockFilter(f); setDeadstockSelected(new Set()); }}
-                  className={cn(
-                    "text-[10px] px-2.5 py-1 rounded-md font-medium transition-colors",
-                    deadstockFilter === f
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                  )}
-                >
-                  {f === "all" ? "All" : f}
-                </button>
-              ))}
+            <div className="flex items-center gap-3 pt-2 pb-1 flex-wrap">
+              <div className="flex items-center gap-1">
+                {(["all", "Overstocked", "Dead 90d", "Dead 60d", "Dead 30d"] as const).map(f => (
+                  <button
+                    key={f}
+                    onClick={() => { setDeadstockFilter(f); setDeadstockSelected(new Set()); }}
+                    className={cn(
+                      "text-[10px] px-2.5 py-1 rounded-md font-medium transition-colors",
+                      deadstockFilter === f
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                    )}
+                  >
+                    {f === "all" ? "All" : f}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] text-muted-foreground">Unit price</span>
+                <Input
+                  type="number"
+                  inputMode="decimal"
+                  placeholder={`Min ${currencySymbol}`}
+                  value={deadstockPriceMin}
+                  onChange={e => setDeadstockPriceMin(e.target.value)}
+                  className="h-6 w-20 text-[10px] px-2"
+                />
+                <span className="text-[10px] text-muted-foreground">–</span>
+                <Input
+                  type="number"
+                  inputMode="decimal"
+                  placeholder={`Max ${currencySymbol}`}
+                  value={deadstockPriceMax}
+                  onChange={e => setDeadstockPriceMax(e.target.value)}
+                  className="h-6 w-20 text-[10px] px-2"
+                />
+                {(deadstockPriceMin || deadstockPriceMax) && (
+                  <button
+                    onClick={() => { setDeadstockPriceMin(""); setDeadstockPriceMax(""); }}
+                    className="text-[10px] text-muted-foreground hover:text-foreground underline"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
             </div>
           </CardHeader>
           <CardContent className="p-0">

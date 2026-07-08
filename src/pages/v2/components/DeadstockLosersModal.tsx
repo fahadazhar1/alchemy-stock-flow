@@ -4,6 +4,7 @@ import autoTable from "jspdf-autotable";
 import { Download, FileText, Package } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -70,15 +71,22 @@ export function DeadstockLosersModal({ open, onClose }: Props) {
   const { fmtCurrency, symbol } = useCurrency();
   const { data: allData, isLoading } = useDeadstockAll(open);
   const [filter, setFilter] = useState<Filter>("all");
+  const [priceMin, setPriceMin] = useState("");
+  const [priceMax, setPriceMax] = useState("");
 
   useEffect(() => {
-    if (open) setFilter("all");
+    if (open) { setFilter("all"); setPriceMin(""); setPriceMax(""); }
   }, [open]);
 
-  const data = useMemo(
-    () => allData?.filter(p => matchesFilter(p, filter)),
-    [allData, filter]
-  );
+  const data = useMemo(() => {
+    const min = priceMin.trim() === "" ? null : Number(priceMin);
+    const max = priceMax.trim() === "" ? null : Number(priceMax);
+    return allData?.filter(p =>
+      matchesFilter(p, filter) &&
+      (min == null || p.unit_price >= min) &&
+      (max == null || p.unit_price <= max)
+    );
+  }, [allData, filter, priceMin, priceMax]);
 
   function handleCSV() {
     if (!data?.length) return;
@@ -153,21 +161,51 @@ export function DeadstockLosersModal({ open, onClose }: Props) {
             </div>
           </div>
 
-          <div className="flex items-center gap-1 pt-2.5 flex-wrap">
-            {FILTERS.map(f => (
-              <button
-                key={f}
-                onClick={() => setFilter(f)}
-                className={cn(
-                  "text-[10px] px-2.5 py-1 rounded-md font-medium transition-colors",
-                  filter === f
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                )}
-              >
-                {f === "all" ? "All" : f}
-              </button>
-            ))}
+          <div className="flex items-center gap-3 pt-2.5 flex-wrap">
+            <div className="flex items-center gap-1">
+              {FILTERS.map(f => (
+                <button
+                  key={f}
+                  onClick={() => setFilter(f)}
+                  className={cn(
+                    "text-[10px] px-2.5 py-1 rounded-md font-medium transition-colors",
+                    filter === f
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                  )}
+                >
+                  {f === "all" ? "All" : f}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] text-muted-foreground">Unit price</span>
+              <Input
+                type="number"
+                inputMode="decimal"
+                placeholder={`Min ${symbol}`}
+                value={priceMin}
+                onChange={e => setPriceMin(e.target.value)}
+                className="h-6 w-20 text-[10px] px-2"
+              />
+              <span className="text-[10px] text-muted-foreground">–</span>
+              <Input
+                type="number"
+                inputMode="decimal"
+                placeholder={`Max ${symbol}`}
+                value={priceMax}
+                onChange={e => setPriceMax(e.target.value)}
+                className="h-6 w-20 text-[10px] px-2"
+              />
+              {(priceMin || priceMax) && (
+                <button
+                  onClick={() => { setPriceMin(""); setPriceMax(""); }}
+                  className="text-[10px] text-muted-foreground hover:text-foreground underline"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
           </div>
         </DialogHeader>
 
