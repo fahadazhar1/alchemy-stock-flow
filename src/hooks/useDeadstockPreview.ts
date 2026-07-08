@@ -31,12 +31,13 @@ export interface PriceRange {
   max?: number;
 }
 
-export function useDeadstockPreview(limit = 8, filter = "all", priceRange?: PriceRange) {
+export function useDeadstockPreview(limit = 8, filters: string[] = [], priceRange?: PriceRange) {
   const { storeId } = useStoreFilter();
   const min = priceRange?.min;
   const max = priceRange?.max;
+  const sortedFilters = [...filters].sort();
   return useQuery<{ products: DeadstockProduct[]; total: number }>({
-    queryKey: ["deadstock-preview", storeId, limit, filter, min, max],
+    queryKey: ["deadstock-preview", storeId, limit, sortedFilters, min, max],
     staleTime: 5 * 60_000,
     queryFn: async () => {
       let q = (supabase as any)
@@ -45,10 +46,13 @@ export function useDeadstockPreview(limit = 8, filter = "all", priceRange?: Pric
         .order("inventory_value", { ascending: false })
         .limit(limit);
       if (storeId) q = q.eq("store_id", storeId);
-      if (filter === "Overstocked") {
-        q = q.eq("dead_stock_status", "Never Sold").gte("total_units", 50);
-      } else if (filter !== "all") {
-        q = q.eq("dead_stock_status", filter);
+      if (filters.length > 0) {
+        const orParts = filters.map(f =>
+          f === "Overstocked"
+            ? "and(dead_stock_status.eq.Never Sold,total_units.gte.50)"
+            : `dead_stock_status.eq.${f}`
+        );
+        q = q.or(orParts.join(","));
       }
       if (min != null) q = q.gte("unit_price", min);
       if (max != null) q = q.lte("unit_price", max);

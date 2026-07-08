@@ -1230,12 +1230,12 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
   const { fmtCurrency: fmtGBP, symbol: currencySymbol } = useCurrency();
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "draft">("all");
   const [showLosersModal, setShowLosersModal] = useState(false);
-  const [deadstockFilter, setDeadstockFilter] = useState("all");
+  const [deadstockFilters, setDeadstockFilters] = useState<string[]>([]);
   const [deadstockSelected, setDeadstockSelected] = useState<Set<string>>(new Set());
   const [deadstockPriceMin, setDeadstockPriceMin] = useState("");
   const [deadstockPriceMax, setDeadstockPriceMax] = useState("");
   const { data, isLoading } = useInventoryDashboard(statusFilter);
-  const { data: deadstockData, isLoading: deadstockLoading } = useDeadstockPreview(8, deadstockFilter, {
+  const { data: deadstockData, isLoading: deadstockLoading } = useDeadstockPreview(8, deadstockFilters, {
     min: deadstockPriceMin.trim() === "" ? undefined : Number(deadstockPriceMin),
     max: deadstockPriceMax.trim() === "" ? undefined : Number(deadstockPriceMax),
   });
@@ -1505,20 +1505,29 @@ function InventorySection({ onSyncStart, syncing }: { onSyncStart: () => void; s
 
             <div className="flex items-center gap-3 pt-2 pb-1 flex-wrap">
               <div className="flex items-center gap-1">
-                {(["all", "Overstocked", "Dead 90d", "Dead 60d", "Dead 30d"] as const).map(f => (
-                  <button
-                    key={f}
-                    onClick={() => { setDeadstockFilter(f); setDeadstockSelected(new Set()); }}
-                    className={cn(
-                      "text-[10px] px-2.5 py-1 rounded-md font-medium transition-colors",
-                      deadstockFilter === f
-                        ? "bg-primary text-primary-foreground"
-                        : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                    )}
-                  >
-                    {f === "all" ? "All" : f}
-                  </button>
-                ))}
+                {(["all", "Overstocked", "Dead 90d", "Dead 60d", "Dead 30d"] as const).map(f => {
+                  const active = f === "all" ? deadstockFilters.length === 0 : deadstockFilters.includes(f);
+                  return (
+                    <button
+                      key={f}
+                      onClick={() => {
+                        setDeadstockSelected(new Set());
+                        setDeadstockFilters(prev => {
+                          if (f === "all") return [];
+                          return prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f];
+                        });
+                      }}
+                      className={cn(
+                        "text-[10px] px-2.5 py-1 rounded-md font-medium transition-colors",
+                        active
+                          ? "bg-primary text-primary-foreground"
+                          : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                      )}
+                    >
+                      {f === "all" ? "All" : f}
+                    </button>
+                  );
+                })}
               </div>
               <div className="flex items-center gap-1.5">
                 <span className="text-[10px] text-muted-foreground">Unit price</span>

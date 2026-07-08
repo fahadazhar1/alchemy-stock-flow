@@ -17,10 +17,9 @@ import { format, parseISO } from "date-fns";
 const FILTERS = ["all", "Overstocked", "Dead 90d", "Dead 60d", "Dead 30d"] as const;
 type Filter = (typeof FILTERS)[number];
 
-function matchesFilter(p: DeadstockProduct, filter: Filter) {
-  if (filter === "all") return true;
-  if (filter === "Overstocked") return isOverstocked(p);
-  return p.dead_stock_status === filter;
+function matchesFilters(p: DeadstockProduct, filters: Filter[]) {
+  if (filters.length === 0) return true;
+  return filters.some(f => f === "Overstocked" ? isOverstocked(p) : p.dead_stock_status === f);
 }
 
 interface Props {
@@ -70,23 +69,23 @@ function Row({ p, fmtCurrency }: { p: DeadstockProduct; fmtCurrency: (v: number)
 export function DeadstockLosersModal({ open, onClose }: Props) {
   const { fmtCurrency, symbol } = useCurrency();
   const { data: allData, isLoading } = useDeadstockAll(open);
-  const [filter, setFilter] = useState<Filter>("all");
+  const [filters, setFilters] = useState<Filter[]>([]);
   const [priceMin, setPriceMin] = useState("");
   const [priceMax, setPriceMax] = useState("");
 
   useEffect(() => {
-    if (open) { setFilter("all"); setPriceMin(""); setPriceMax(""); }
+    if (open) { setFilters([]); setPriceMin(""); setPriceMax(""); }
   }, [open]);
 
   const data = useMemo(() => {
     const min = priceMin.trim() === "" ? null : Number(priceMin);
     const max = priceMax.trim() === "" ? null : Number(priceMax);
     return allData?.filter(p =>
-      matchesFilter(p, filter) &&
+      matchesFilters(p, filters) &&
       (min == null || p.unit_price >= min) &&
       (max == null || p.unit_price <= max)
     );
-  }, [allData, filter, priceMin, priceMax]);
+  }, [allData, filters, priceMin, priceMax]);
 
   function handleCSV() {
     if (!data?.length) return;
@@ -163,20 +162,28 @@ export function DeadstockLosersModal({ open, onClose }: Props) {
 
           <div className="flex items-center gap-3 pt-2.5 flex-wrap">
             <div className="flex items-center gap-1">
-              {FILTERS.map(f => (
-                <button
-                  key={f}
-                  onClick={() => setFilter(f)}
-                  className={cn(
-                    "text-[10px] px-2.5 py-1 rounded-md font-medium transition-colors",
-                    filter === f
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                  )}
-                >
-                  {f === "all" ? "All" : f}
-                </button>
-              ))}
+              {FILTERS.map(f => {
+                const active = f === "all" ? filters.length === 0 : filters.includes(f);
+                return (
+                  <button
+                    key={f}
+                    onClick={() => {
+                      setFilters(prev => {
+                        if (f === "all") return [];
+                        return prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f];
+                      });
+                    }}
+                    className={cn(
+                      "text-[10px] px-2.5 py-1 rounded-md font-medium transition-colors",
+                      active
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                    )}
+                  >
+                    {f === "all" ? "All" : f}
+                  </button>
+                );
+              })}
             </div>
             <div className="flex items-center gap-1.5">
               <span className="text-[10px] text-muted-foreground">Unit price</span>
