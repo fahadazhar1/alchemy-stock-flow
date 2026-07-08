@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useState } from "react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { Download, FileText, Package } from "lucide-react";
@@ -9,8 +10,17 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { exportToCSV } from "@/lib/export";
 import { useCurrency } from "@/hooks/useCurrency";
-import { useDeadstockAll, getDeadstockLabel, type DeadstockProduct } from "@/hooks/useDeadstockPreview";
+import { useDeadstockAll, getDeadstockLabel, isOverstocked, type DeadstockProduct } from "@/hooks/useDeadstockPreview";
 import { format, parseISO } from "date-fns";
+
+const FILTERS = ["all", "Overstocked", "Dead 90d", "Dead 60d", "Dead 30d"] as const;
+type Filter = (typeof FILTERS)[number];
+
+function matchesFilter(p: DeadstockProduct, filter: Filter) {
+  if (filter === "all") return true;
+  if (filter === "Overstocked") return isOverstocked(p);
+  return p.dead_stock_status === filter;
+}
 
 interface Props {
   open: boolean;
@@ -58,7 +68,17 @@ function Row({ p, fmtCurrency }: { p: DeadstockProduct; fmtCurrency: (v: number)
 
 export function DeadstockLosersModal({ open, onClose }: Props) {
   const { fmtCurrency, symbol } = useCurrency();
-  const { data, isLoading } = useDeadstockAll(open);
+  const { data: allData, isLoading } = useDeadstockAll(open);
+  const [filter, setFilter] = useState<Filter>("all");
+
+  useEffect(() => {
+    if (open) setFilter("all");
+  }, [open]);
+
+  const data = useMemo(
+    () => allData?.filter(p => matchesFilter(p, filter)),
+    [allData, filter]
+  );
 
   function handleCSV() {
     if (!data?.length) return;
@@ -131,6 +151,23 @@ export function DeadstockLosersModal({ open, onClose }: Props) {
                 <FileText size={12} /> PDF
               </Button>
             </div>
+          </div>
+
+          <div className="flex items-center gap-1 pt-2.5 flex-wrap">
+            {FILTERS.map(f => (
+              <button
+                key={f}
+                onClick={() => setFilter(f)}
+                className={cn(
+                  "text-[10px] px-2.5 py-1 rounded-md font-medium transition-colors",
+                  filter === f
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                )}
+              >
+                {f === "all" ? "All" : f}
+              </button>
+            ))}
           </div>
         </DialogHeader>
 
