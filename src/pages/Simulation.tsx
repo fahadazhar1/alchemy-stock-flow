@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { formatCurrency } from "@/lib/timezone";
+import { useCurrency } from "@/hooks/useCurrency";
 import { FlaskConical, ShieldCheck, AlertTriangle, Zap, TrendingUp, TrendingDown, Target, Warehouse } from "lucide-react";
 import { Json } from "@/integrations/supabase/types";
 import { useStoreFilter } from "@/hooks/useStoreFilter";
@@ -39,6 +39,7 @@ function getRiskWarnings(s: Scenario, baseInventory: number): string[] {
 }
 
 export default function Simulation() {
+  const { formatCurrency } = useCurrency();
   const queryClient = useQueryClient();
   const { storeId, isAllStores } = useStoreFilter();
   const { data: centralKPIs } = useCentralInventoryKPIs();
@@ -50,22 +51,18 @@ export default function Simulation() {
   const { data: products } = useQuery({
     queryKey: ["sim-products", storeId],
     queryFn: async () => {
-      const { data: losers } = await supabase.from("v_loser_products").select("product_id").limit(200);
-      let ids = losers?.map(p => p.product_id) ?? [];
-      if (storeId) {
-        const { data: storeProds } = await supabase.from("products").select("id").eq("store_id", storeId);
-        const storeSet = new Set((storeProds ?? []).map(p => p.id));
-        ids = ids.filter(id => id && storeSet.has(id));
-      }
-      return ids;
+      let q = supabase.from("v_loser_products").select("product_id").limit(200);
+      if (storeId) q = q.eq("store_id", storeId);
+      const { data } = await q;
+      return (data ?? []).map(p => p.product_id).filter(Boolean) as string[];
     },
   });
 
   const { data: settings } = useQuery({
     queryKey: ["app-settings"],
     queryFn: async () => {
-      const { data } = await supabase.from("app_settings").select("*").eq("setting_key", "pricing_config").single();
-      return data?.setting_value as Record<string, unknown> | null;
+      const { data } = await supabase.from("app_settings").select("*").eq("setting_key", "pricing_config").maybeSingle();
+      return (data?.setting_value ?? null) as Record<string, unknown> | null;
     },
   });
 

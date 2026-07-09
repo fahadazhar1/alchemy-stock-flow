@@ -1023,6 +1023,8 @@ export type Database = {
           access_token: string | null
           connected_at: string | null
           created_at: string | null
+          currency: string | null
+          currency_symbol: string | null
           id: string
           is_active: boolean
           platform: string | null
@@ -1036,6 +1038,8 @@ export type Database = {
           access_token?: string | null
           connected_at?: string | null
           created_at?: string | null
+          currency?: string | null
+          currency_symbol?: string | null
           id?: string
           is_active?: boolean
           platform?: string | null
@@ -1049,6 +1053,8 @@ export type Database = {
           access_token?: string | null
           connected_at?: string | null
           created_at?: string | null
+          currency?: string | null
+          currency_symbol?: string | null
           id?: string
           is_active?: boolean
           platform?: string | null
@@ -1312,6 +1318,7 @@ export type Database = {
           p_overwrite_existing?: boolean
           p_product_ids: string[]
           p_rounding_mode?: string
+          p_store_id?: string
         }
         Returns: Json
       }
@@ -1328,6 +1335,7 @@ export type Database = {
           p_product_ids?: string[]
           p_rounding_mode?: string
           p_source?: string
+          p_store_id?: string
           p_variant_ids?: string[]
         }
         Returns: Json

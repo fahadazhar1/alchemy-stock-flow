@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useRole } from "@/hooks/useRole";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "sonner";
-import { Store as StoreIcon, Plus, Pencil, Link, RefreshCw, Warehouse } from "lucide-react";
+import { Store as StoreIcon, Plus, Pencil, RefreshCw, Warehouse, Trash2 } from "lucide-react";
 import { formatUAEDateTime } from "@/lib/timezone";
 import { useCentralInventoryKPIs } from "@/hooks/useCentralInventory";
 
@@ -25,11 +26,43 @@ interface StoreForm {
 const emptyForm: StoreForm = { store_name: "", store_code: "", platform: "shopify", store_url: "", is_active: true };
 
 export default function StoreManagement() {
+  const { canEdit } = useRole();
   const queryClient = useQueryClient();
   const [editOpen, setEditOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [form, setForm] = useState<StoreForm>(emptyForm);
   const { data: centralKPIs } = useCentralInventoryKPIs();
+
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [deleteName, setDeleteName] = useState("");
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDelete = async () => {
+    if (!deleteId) return;
+    setDeleting(true);
+    try {
+      const tables = [
+        "products", "variants", "orders", "order_items",
+        "pricing_campaigns", "pricing_campaign_items",
+        "inventory_sync_logs", "product_velocity_metrics",
+        "simulation_logs", "inventory_batches", "ai_recommendations",
+      ] as const;
+      for (const table of tables) {
+        const { error } = await supabase.from(table as any).update({ store_id: null } as any).eq("store_id", deleteId);
+        if (error) throw error;
+      }
+      const { error } = await supabase.from("stores").delete().eq("id", deleteId);
+      if (error) throw error;
+      toast.success(`"${deleteName}" deleted`);
+      queryClient.invalidateQueries({ queryKey: ["all-stores"] });
+      queryClient.invalidateQueries({ queryKey: ["stores"] });
+    } catch (e: any) {
+      toast.error(e?.message || "Delete failed");
+    } finally {
+      setDeleting(false);
+      setDeleteId(null);
+    }
+  };
 
   const { data: stores, isLoading } = useQuery({
     queryKey: ["all-stores"],
@@ -74,7 +107,7 @@ export default function StoreManagement() {
           <h1 className="text-2xl font-bold flex items-center gap-2"><StoreIcon className="h-6 w-6" /> Store Management</h1>
           <p className="text-sm text-muted-foreground">Manage your connected stores and sync configurations</p>
         </div>
-        <Button onClick={openAdd}><Plus className="h-4 w-4 mr-1" /> Add Store</Button>
+        <Button onClick={openAdd} disabled={!canEdit}><Plus className="h-4 w-4 mr-1" /> Add Store</Button>
       </div>
 
       {/* Central WMS Summary */}
@@ -123,8 +156,9 @@ export default function StoreManagement() {
                   <TableCell className="text-xs">{s.connected_at ? formatUAEDateTime(s.connected_at) : '-'}</TableCell>
                   <TableCell>
                     <div className="flex gap-1">
-                      <Button variant="ghost" size="sm" onClick={() => openEdit(s)}><Pencil className="h-3 w-3" /></Button>
-                      <Button variant="ghost" size="sm" title="Sync Store Data"><RefreshCw className="h-3 w-3" /></Button>
+                      <Button variant="ghost" size="sm" onClick={() => openEdit(s)} disabled={!canEdit}><Pencil className="h-3 w-3" /></Button>
+                      <Button variant="ghost" size="sm" title="Sync Store Data" disabled={!canEdit}><RefreshCw className="h-3 w-3" /></Button>
+                      <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" title="Delete Store" onClick={() => { setDeleteId(s.id); setDeleteName(s.store_name); }} disabled={!canEdit}><Trash2 className="h-3 w-3" /></Button>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -133,6 +167,17 @@ export default function StoreManagement() {
           </Table>
         </div>
       )}
+
+      <Dialog open={!!deleteId} onOpenChange={open => { if (!open && !deleting) setDeleteId(null); }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Delete Store</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">This will permanently delete <strong>{deleteName}</strong> and unlink all associated products, orders, and data. This cannot be undone.</p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteId(null)} disabled={deleting}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDelete} disabled={deleting || !canEdit}>{deleting ? "Deleting…" : "Delete"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent>
@@ -144,7 +189,7 @@ export default function StoreManagement() {
             <div><Label>Store URL</Label><Input value={form.store_url} onChange={e => setForm({ ...form, store_url: e.target.value })} placeholder="https://..." /></div>
             <div className="flex items-center justify-between"><Label>Active</Label><Switch checked={form.is_active} onCheckedChange={v => setForm({ ...form, is_active: v })} /></div>
           </div>
-          <DialogFooter><Button onClick={handleSave}>{editId ? "Update" : "Create"}</Button></DialogFooter>
+          <DialogFooter><Button onClick={handleSave} disabled={!canEdit}>{editId ? "Update" : "Create"}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

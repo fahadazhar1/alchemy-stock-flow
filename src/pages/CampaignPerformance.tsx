@@ -10,8 +10,10 @@ import { exportToCSV } from "@/lib/export";
 import { BarChart3, Download, Power, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { useStoreFilter } from "@/hooks/useStoreFilter";
+import { useCurrency } from "@/hooks/useCurrency";
 
 export default function CampaignPerformance() {
+  const { symbol } = useCurrency();
   const queryClient = useQueryClient();
   const { storeId } = useStoreFilter();
 
@@ -37,43 +39,38 @@ export default function CampaignPerformance() {
   const handleDeactivate = async (campaignId: string, currentStatus: string) => {
     try {
       if (currentStatus === "Executed") {
-        const { data: items, error: itemsErr } = await supabase
-          .from("pricing_campaign_items").select("variant_id").eq("campaign_id", campaignId);
-        if (itemsErr) throw itemsErr;
-        const variantIds = (items ?? []).map(item => item.variant_id).filter(Boolean);
-        if (variantIds.length > 0) {
-          const { error: rpcError } = await supabase.rpc("revert_multiple_variant_pricing", { p_variant_ids: variantIds });
-          if (rpcError) throw rpcError;
-          const { data, error: pushErr } = await supabase.functions.invoke("shopify-sync", {
-            body: { action: "revert_prices", campaign_id: campaignId },
-          });
-          if (pushErr || (data && !data.ok)) {
-            const msg = data?.error ?? data?.errors?.[0] ?? pushErr?.message ?? "Unknown error";
-            toast.warning("Campaign ended but Shopify revert failed: " + msg);
-          }
+        const { error: rpcError } = await supabase.rpc("revert_variant_pricing", { p_campaign_id: campaignId });
+        if (rpcError) {
+          console.error("revert_variant_pricing failed:", rpcError);
+          toast.warning("DB price revert failed — still ending campaign: " + rpcError.message);
+        }
+        const { data, error: pushErr } = await supabase.functions.invoke("shopify-sync", {
+          body: { action: "revert_prices", campaign_id: campaignId },
+        });
+        if (pushErr || (data && !data.ok)) {
+          const msg = data?.error ?? data?.errors?.[0] ?? pushErr?.message ?? "Unknown error";
+          toast.warning("Campaign ended but Shopify revert failed: " + msg);
         }
       }
       const { error } = await supabase.from("pricing_campaigns")
         .update({ workflow_status: "Ended", ended_at: new Date().toISOString() })
         .eq("id", campaignId);
       if (error) throw error;
-      toast.success(currentStatus === "Executed" ? "Campaign ended and prices reverted on Shopify" : "Campaign deactivated");
+      toast.success(currentStatus === "Executed" ? "Campaign ended — prices reverted" : "Campaign deactivated");
       queryClient.invalidateQueries({ queryKey: ["campaign-performance-all"] });
-    } catch { toast.error("Failed to deactivate campaign"); }
+    } catch (e) {
+      console.error("handleDeactivate failed:", e);
+      const msg = (e as any)?.message ?? "Unknown error";
+      toast.error("Failed to deactivate campaign: " + msg);
+    }
   };
 
   const handleRemoveDiscounts = async (campaignId: string, campaignName: string) => {
     try {
-      const { data: items, error: itemsErr } = await supabase
-        .from("pricing_campaign_items").select("variant_id").eq("campaign_id", campaignId);
-      if (itemsErr) throw itemsErr;
-      const variantIdsToRevert = (items ?? []).map(item => item.variant_id).filter(Boolean);
-      const { data: rpcResult, error: rpcError } = await supabase.rpc("revert_multiple_variant_pricing", { p_variant_ids: variantIdsToRevert });
+      const { data: rpcResult, error: rpcError } = await supabase.rpc("revert_variant_pricing", { p_campaign_id: campaignId });
       if (rpcError) throw rpcError;
       const revertedCount = Number((rpcResult as Record<string, unknown>)?.affected_count || 0);
-      // ... rest of the code
       toast.success(`Reverted ${revertedCount} variants — pushing original prices to Shopify…`);
-
       const { data, error: pushErr } = await supabase.functions.invoke("shopify-sync", {
         body: { action: "revert_prices", campaign_id: campaignId },
       });
@@ -83,7 +80,11 @@ export default function CampaignPerformance() {
       } else {
         toast.success(`Original prices restored on Shopify — ${data?.pushed ?? 0} variants updated`);
       }
-    } catch { toast.error("Failed to remove discounts"); }
+    } catch (e) {
+      console.error("handleRemoveDiscounts failed:", e);
+      const msg = (e as any)?.message ?? "Unknown error";
+      toast.error("Failed to remove discounts: " + msg);
+    }
   };
 
   if (isLoading) return <div className="space-y-4"><Skeleton className="h-8 w-64" /><Skeleton className="h-96" /></div>;
@@ -130,7 +131,7 @@ export default function CampaignPerformance() {
                     <TableCell className="text-xs">{c.created_at ? formatUAEDate(c.created_at) : '-'}</TableCell>
                     <TableCell className="text-xs">{c.started_at ? formatUAEDate(c.started_at) : '-'}</TableCell>
                     <TableCell className="text-xs">{c.ended_at ? formatUAEDate(c.ended_at) : '-'}</TableCell>
-                    <TableCell className="text-right font-mono">{c.discount_percent ? `${c.discount_percent}%` : c.fixed_price ? `£${c.fixed_price}` : '-'}</TableCell>
+                    <TableCell className="text-right font-mono">{c.discount_percent ? `${c.discount_percent}%` : c.fixed_price ? `${symbol}${c.fixed_price}` : '-'}</TableCell>
                     <TableCell className="text-right font-mono">{c.pre_campaign_inventory?.toLocaleString() || '-'}</TableCell>
                     <TableCell className="text-right font-mono">{c.post_campaign_inventory?.toLocaleString() || '-'}</TableCell>
                     <TableCell className="text-right font-mono">{c.inventory_reduction?.toLocaleString() || '-'}</TableCell>

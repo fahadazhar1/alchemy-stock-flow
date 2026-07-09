@@ -1,0 +1,40 @@
+import { useQuery } from "@tanstack/react-query";
+import { supabase } from "@/integrations/supabase/client";
+
+export interface SonicTrackingData {
+  courier:                "sonic" | "mandp" | null;
+  courier_status:         string | null;
+  courier_payment_status: string | null;
+  shipping_charges:       number | null; // weight charges (base freight)
+  fuel_surcharge:         number | null;
+  gst:                    number | null; // actual billed GST from payments
+  cod_amount:             number | null;
+  wht:                    number | null; // withholding tax (2%)
+  cod_sst:                number | null; // COD sales service tax (2%)
+  remittance_date:        string | null;
+}
+
+export function useSonicTracking(trackingNumbers: (string | null | undefined)[]) {
+  const valid = trackingNumbers.filter((tn): tn is string => !!tn);
+  const key = valid.slice().sort().join(",");
+
+  return useQuery<Record<string, SonicTrackingData | null>>({
+    queryKey: ["sonic-tracking", key],
+    enabled: valid.length > 0,
+    staleTime: 5 * 60 * 1000, // matches cron frequency
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("sonic_cache")
+        .select("tracking_number,courier,courier_status,courier_payment_status,shipping_charges,fuel_surcharge,gst,cod_amount,wht,cod_sst,remittance_date")
+        .in("tracking_number", valid);
+      if (error) throw error;
+      const map: Record<string, SonicTrackingData | null> = {};
+      for (const row of data ?? []) {
+        const { tracking_number, ...rest } = row;
+        map[tracking_number] = rest as SonicTrackingData;
+      }
+      for (const tn of valid) if (!(tn in map)) map[tn] = null;
+      return map;
+    },
+  });
+}

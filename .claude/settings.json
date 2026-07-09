@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node \"c:/Users/Hp/Inventory-Dashboard/extract_pdf.js\")",
+      "Bash(node \"c:/Users/Hp/Inventory-Dashboard/extract_pdf.cjs\")",
+      "Bash(node \"c:/Users/Hp/Inventory-Dashboard/extract_pdf2.cjs\")",
+      "Bash(node \"c:/Users/Hp/Inventory-Dashboard/extract_pdf3.cjs\")",
+      "Bash(supabase status *)",
+      "PowerShell(Get-Command npx -ErrorAction SilentlyContinue)",
+      "Bash(curl -s -X POST https://gbvbvopeieqghvettmkj.supabase.co/functions/v1/shopify-sync -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdidmJ2b3BlaWVxZ2h2ZXR0bWtqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc3MDMzNDksImV4cCI6MjA5MzI3OTM0OX0.bezMzljmBaqGo0kuThNO5tIuLDeWXaVnbAn8O2ZD5dM' -H 'Content-Type: application/json' -d '{\"action\":\"force_resync\",\"connection_id\":\"10050071-c0d3-4127-81c1-035fa805a089\"}')",
+      "Bash(curl -s -X POST https://gbvbvopeieqghvettmkj.supabase.co/functions/v1/shopify-sync -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdidmJ2b3BlaWVxZ2h2ZXR0bWtqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc3MDMzNDksImV4cCI6MjA5MzI3OTM0OX0.bezMzljmBaqGo0kuThNO5tIuLDeWXaVnbAn8O2ZD5dM' -H 'Content-Type: application/json' -d '{\"action\":\"force_resync\",\"connection_id\":\"f55f3f47-8e28-4071-9b6b-628fb86ee1f9\"}')",
+      "Bash(curl -s -X POST https://gbvbvopeieqghvettmkj.supabase.co/functions/v1/shopify-sync -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdidmJ2b3BlaWVxZ2h2ZXR0bWtqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc3MDMzNDksImV4cCI6MjA5MzI3OTM0OX0.bezMzljmBaqGo0kuThNO5tIuLDeWXaVnbAn8O2ZD5dM' -H 'Content-Type: application/json' -d '{\"action\":\"continue_sync\",\"connection_id\":\"10050071-c0d3-4127-81c1-035fa805a089\"}')",
+      "Bash(curl -s -X POST https://gbvbvopeieqghvettmkj.supabase.co/functions/v1/shopify-sync -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdidmJ2b3BlaWVxZ2h2ZXR0bWtqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc3MDMzNDksImV4cCI6MjA5MzI3OTM0OX0.bezMzljmBaqGo0kuThNO5tIuLDeWXaVnbAn8O2ZD5dM' -H 'Content-Type: application/json' -d '{\"action\":\"continue_sync\",\"connection_id\":\"f55f3f47-8e28-4071-9b6b-628fb86ee1f9\"}')",
+      "Bash(curl -s -X POST \"https://gbvbvopeieqghvettmkj.supabase.co/functions/v1/shopify-sync\" -H \"Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdidmJ2b3BlaWVxZ2h2ZXR0bWtqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc3MDMzNDksImV4cCI6MjA5MzI3OTM0OX0.bezMzljmBaqGo0kuThNO5tIuLDeWXaVnbAn8O2ZD5dM\" -H \"Content-Type: application/json\" -d \"{\\\\\"action\\\\\":\\\\\"continue_sync\\\\\",\\\\\"connection_id\\\\\":\\\\\"f55f3f47-8e28-4071-9b6b-628fb86ee1f9\\\\\"}\")",
+      "Bash(curl -s -X POST \"https://gbvbvopeieqghvettmkj.supabase.co/functions/v1/shopify-sync\" -H \"Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdidmJ2b3BlaWVxZ2h2ZXR0bWtqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc3MDMzNDksImV4cCI6MjA5MzI3OTM0OX0.bezMzljmBaqGo0kuThNO5tIuLDeWXaVnbAn8O2ZD5dM\" -H \"Content-Type: application/json\" -d \"{\\\\\"action\\\\\":\\\\\"continue_sync\\\\\",\\\\\"connection_id\\\\\":\\\\\"10050071-c0d3-4127-81c1-035fa805a089\\\\\"}\")",
+      "Bash(curl -s -X POST \"https://gbvbvopeieqghvettmkj.supabase.co/functions/v1/shopify-sync\" -H \"Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdidmJ2b3BlaWVxZ2h2ZXR0bWtqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc3MDMzNDksImV4cCI6MjA5MzI3OTM0OX0.bezMzljmBaqGo0kuThNO5tIuLDeWXaVnbAn8O2ZD5dM\" -H \"Content-Type: application/json\" -d \"{\\\\\"action\\\\\":\\\\\"force_resync\\\\\",\\\\\"connection_id\\\\\":\\\\\"f55f3f47-8e28-4071-9b6b-628fb86ee1f9\\\\\"}\")",
+      "Bash(curl -s -X POST \"https://gbvbvopeieqghvettmkj.supabase.co/functions/v1/shopify-sync\" -H \"Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdidmJ2b3BlaWVxZ2h2ZXR0bWtqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc3MDMzNDksImV4cCI6MjA5MzI3OTM0OX0.bezMzljmBaqGo0kuThNO5tIuLDeWXaVnbAn8O2ZD5dM\" -H \"Content-Type: application/json\" -d \"{\\\\\"action\\\\\":\\\\\"force_resync\\\\\",\\\\\"connection_id\\\\\":\\\\\"10050071-c0d3-4127-81c1-035fa805a089\\\\\"}\")",
+      "Bash(wait)",
+      "PowerShell(supabase --version)",
+      "PowerShell(npm list -g supabase 2>&1)",
+      "mcp__claude_ai_Shopify__list-orders",
+      "Bash(supabase functions *)",
+      "PowerShell(Get-Command supabase -ErrorAction SilentlyContinue)",
+      "Read(//c/Users/Hp/scoop/**)"
+    ]
+  }
+}
