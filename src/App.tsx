@@ -30,6 +30,7 @@ import DraftPO from "@/pages/DraftPO";
 import DiscountPerformance from "@/pages/DiscountPerformance";
 import DeadStock from "@/pages/DeadStock";
 import BundleOpportunity from "@/pages/BundleOpportunity";
+import BundleBuilder from "@/pages/BundleBuilder";
 import SEOAudit from "@/pages/SEOAudit";
 import StorePerformanceDashboard from "@/pages/StorePerformanceDashboard";
 import Login from "@/pages/Login";
@@ -99,6 +100,7 @@ function AppRoutes() {
           <Route path="/discount-performance" element={<DiscountPerformance />} />
           <Route path="/dead-stock" element={<DeadStock />} />
           <Route path="/bundle-finder" element={<BundleOpportunity />} />
+          <Route path="/bundle-builder" element={<BundleBuilder />} />
           <Route path="/seo-audit" element={<SEOAudit />} />
           <Route path="/store-performance" element={<StorePerformanceDashboard />} />
         </Route>
