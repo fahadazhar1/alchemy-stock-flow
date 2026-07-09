@@ -18,8 +18,9 @@ import { exportToCSV } from "@/lib/export";
 import { toast } from "sonner";
 import {
   Search, Download, AlertCircle, CheckCircle2, Filter, RefreshCw,
-  Pencil, Sparkles, Tag, Copy, X, Loader2,
+  Pencil, Sparkles, Tag, Copy, X, Loader2, ExternalLink,
 } from "lucide-react";
+import { useStore } from "@/contexts/StoreContext";
 import { useStoreFilter } from "@/hooks/useStoreFilter";
 import { useSEOSync } from "@/hooks/useSEOSync";
 import { useSEOActions, type AIResult, type SEOFieldUpdate } from "@/hooks/useSEOActions";
@@ -41,7 +42,22 @@ type ProductRow = {
   image_alt_text: string | null;
   barcode: string | null;
   description_word_count: number | null;
+  shopify_product_id: string | null;
 };
+
+// ─── Shopify admin link ────────────────────────────────────────────────────────
+
+function normalizeStoreUrl(storeUrl: string): string {
+  const withProto = /^https?:\/\//i.test(storeUrl) ? storeUrl : `https://${storeUrl}`;
+  return withProto.replace(/\/+$/, "");
+}
+
+function getShopifyAdminUrl(row: { store_id: string; shopify_product_id: string | null }, storeUrlById: Map<string, string>): string | null {
+  if (!row.shopify_product_id) return null;
+  const storeUrl = storeUrlById.get(row.store_id);
+  if (!storeUrl) return null;
+  return `${normalizeStoreUrl(storeUrl)}/admin/products/${row.shopify_product_id}`;
+}
 
 type IssueKey =
   | "no_collection" | "no_type" | "no_vendor"
@@ -374,6 +390,11 @@ function AIPreviewDialog({
 
 export default function SEOAudit() {
   const { storeId } = useStoreFilter();
+  const { stores } = useStore();
+  const storeUrlById = useMemo(
+    () => new Map(stores.filter(s => s.store_url).map(s => [s.id, s.store_url as string])),
+    [stores]
+  );
 
   // Filters
   const [issueFilter, setIssueFilter] = useState<IssueKey | "all">("all");
@@ -410,7 +431,7 @@ export default function SEOAudit() {
       while (true) {
         let q = (supabase as any)
           .from("v_seo_audit")
-          .select("product_id, product_name, sku, collection_name, product_type, vendor_name, total_inventory, store_id, meta_title, meta_description, image_alt_text, barcode, description_word_count")
+          .select("product_id, product_name, sku, collection_name, product_type, vendor_name, total_inventory, store_id, meta_title, meta_description, image_alt_text, barcode, description_word_count, shopify_product_id")
           .order("product_name", { ascending: true })
           .range(from, from + PAGE - 1);
         if (storeId) q = q.eq("store_id", storeId);
@@ -609,6 +630,7 @@ export default function SEOAudit() {
               "Desc Words": r.description_word_count ?? "",
               "Name Length": r.product_name.length,
               Issues: (r as any).issues?.map((i: IssueKey) => ISSUE_LABELS[i]).join("; ") ?? "",
+              "Shopify Link": getShopifyAdminUrl(r, storeUrlById) ?? "",
             })),
             "seo-audit"
           )}>
@@ -814,9 +836,25 @@ export default function SEOAudit() {
                     />
                   </TableCell>
                   <TableCell className="font-medium max-w-[180px]">
-                    <span className="truncate block" title={r.product_name}>
-                      {r.product_name}
-                    </span>
+                    {(() => {
+                      const shopifyUrl = getShopifyAdminUrl(r, storeUrlById);
+                      return shopifyUrl ? (
+                        <a
+                          href={shopifyUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="truncate flex items-center gap-1 hover:underline"
+                          title={`Open in Shopify admin — ${r.product_name}`}
+                        >
+                          <span className="truncate">{r.product_name}</span>
+                          <ExternalLink className="h-3 w-3 text-muted-foreground shrink-0" />
+                        </a>
+                      ) : (
+                        <span className="truncate block" title={r.product_name}>
+                          {r.product_name}
+                        </span>
+                      );
+                    })()}
                     {r.issues.includes("short_name") && (
                       <span className="text-[9px] text-blue-500 font-mono">{r.product_name.length} chars</span>
                     )}
