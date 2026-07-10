@@ -78,7 +78,8 @@ export default function BundleBuilder() {
       .select("id, name, sku")
       .eq("store_id", storeId)
       .or(`name.ilike.%${q}%,sku.ilike.%${q}%`)
-      .limit(8);
+      .order("name")
+      .limit(50);
     if (!products?.length) {
       setBookResults([]);
       return;
