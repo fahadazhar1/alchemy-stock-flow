@@ -146,8 +146,10 @@ export function getCustomDateBounds(from: Date, to: Date, timezone = "Asia/Karac
 
   const days = Math.max(1, Math.round((endDay.getTime() - startDay.getTime()) / DAY) + 1);
 
-  const prevEnd   = new Date(startDay.getTime() - 1);
-  const prevStart = new Date(startDay.getTime() - days * DAY);
+  // Shift back by whole weeks so the comparison period lands on the same weekdays.
+  const shiftMs   = Math.ceil(days / 7) * 7 * DAY;
+  const prevStart = tzMidnight(new Date(from.getTime() - shiftMs), timezone);
+  const prevEnd   = tzEndOfDay(new Date(to.getTime() - shiftMs + 43_200_000), timezone);
 
   const startKey = startDay.toLocaleDateString("sv-SE", { timeZone: timezone });
   const endKey   = endDay.toLocaleDateString("sv-SE", { timeZone: timezone });
