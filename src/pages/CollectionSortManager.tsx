@@ -213,6 +213,68 @@ function SortHistorySection({
   );
 }
 
+// ── NDJSON streaming helper (shared by all 4 sort runners) ────────────────────
+// Guards against a stalled/killed edge-function connection: without this, a
+// dropped stream just leaves reader.read() pending forever and the UI shows
+// "processing" indefinitely with no error.
+const STREAM_IDLE_TIMEOUT_MS = 45_000;
+
+async function readNdjsonStream(
+  response: Response,
+  onLine: (data: Record<string, unknown>) => void,
+): Promise<void> {
+  if (!response.body) throw new Error("Response has no body");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    while (true) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const idleTimeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`Stream stalled — no data received for ${STREAM_IDLE_TIMEOUT_MS / 1000}s`)),
+          STREAM_IDLE_TIMEOUT_MS,
+        );
+      });
+      let result: ReadableStreamReadResult<Uint8Array>;
+      try {
+        result = await Promise.race([reader.read(), idleTimeout]);
+      } finally {
+        clearTimeout(timer);
+      }
+      if (result.done) break;
+
+      buffer += decoder.decode(result.value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const data = JSON.parse(line);
+          if (data.type === "heartbeat") continue; // keep-alive only, no progress to apply
+          onLine(data);
+        } catch {
+          // Ignore malformed lines
+        }
+      }
+    }
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+}
+
+// If a run throws (including a stream stall), whatever collection was still
+// "processing" would otherwise be stuck in that state forever in the UI.
+function failStalledProgress(
+  setProgress: (updater: (prev: CollectionProgress[]) => CollectionProgress[]) => void,
+  message: string,
+) {
+  setProgress((prev) =>
+    prev.map((p) => (p.status === "processing" ? { ...p, status: "failed", error: message } : p)),
+  );
+}
+
 // ── Main page component ───────────────────────────────────────────────────────
 
 export default function CollectionSortManager() {
@@ -754,65 +816,46 @@ export default function CollectionSortManager() {
         throw new Error(`Edge function returned ${response.status}`);
       }
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
       let processedCount = 0;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const data = JSON.parse(line);
-
-            if (data.type === "summary") {
-              const summary: RunSummary = {
-                collectionsTotal: data.collectionsTotal,
-                collectionsSorted: data.collectionsSorted,
-                totalProductsReordered: data.totalProductsReordered,
-                errors: data.errors ?? [],
-                runAt: data.runAt,
-              };
-              setRunSummary(summary);
-              queryClient.invalidateQueries({ queryKey: ["collection-sort-all-runs"] });
-              continue;
-            }
-
-            // Per-collection progress line
-            processedCount++;
-            const nextIndex = processedCount; // 0-indexed next collection to process
-
-            setCollectionProgress((prev) =>
-              prev.map((p, idx) => {
-                if (p.id === data.collectionId) {
-                  return {
-                    ...p,
-                    status: data.status,
-                    productsReordered: data.productsReordered,
-                    error: data.error,
-                  };
-                }
-                if (idx === nextIndex && p.status === "pending") {
-                  return { ...p, status: "processing" };
-                }
-                return p;
-              }),
-            );
-          } catch {
-            // Ignore malformed lines
-          }
+      await readNdjsonStream(response, (data) => {
+        if (data.type === "summary") {
+          const summary: RunSummary = {
+            collectionsTotal: data.collectionsTotal as number,
+            collectionsSorted: data.collectionsSorted as number,
+            totalProductsReordered: data.totalProductsReordered as number,
+            errors: (data.errors as RunSummary["errors"]) ?? [],
+            runAt: data.runAt as string,
+          };
+          setRunSummary(summary);
+          queryClient.invalidateQueries({ queryKey: ["collection-sort-all-runs"] });
+          return;
         }
-      }
+
+        // Per-collection progress line
+        processedCount++;
+        const nextIndex = processedCount; // 0-indexed next collection to process
+
+        setCollectionProgress((prev) =>
+          prev.map((p, idx) => {
+            if (p.id === data.collectionId) {
+              return {
+                ...p,
+                status: data.status as CollectionProgress["status"],
+                productsReordered: data.productsReordered as number | undefined,
+                error: data.error as string | undefined,
+              };
+            }
+            if (idx === nextIndex && p.status === "pending") {
+              return { ...p, status: "processing" };
+            }
+            return p;
+          }),
+        );
+      });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       toast.error(`Sort run failed: ${msg}`);
+      failStalledProgress(setCollectionProgress, msg);
     } finally {
       setRunning(false);
     }
@@ -861,40 +904,27 @@ export default function CollectionSortManager() {
       });
       if (!response.ok || !response.body) throw new Error(`Edge function returned ${response.status}`);
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
       let processedCount = 0;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const data = JSON.parse(line);
-            if (data.type === "summary") {
-              setSpRunSummary({ collectionsTotal: data.collectionsTotal, collectionsSorted: data.collectionsSorted, totalProductsReordered: data.totalProductsReordered, errors: data.errors ?? [], runAt: data.runAt });
-              queryClient.invalidateQueries({ queryKey: ["collection-sort-all-runs"] });
-              continue;
-            }
-            processedCount++;
-            const nextIndex = processedCount;
-            setSpCollectionProgress((prev) =>
-              prev.map((p, idx) => {
-                if (p.id === data.collectionId) return { ...p, status: data.status, productsReordered: data.productsReordered, error: data.error };
-                if (idx === nextIndex && p.status === "pending") return { ...p, status: "processing" };
-                return p;
-              }),
-            );
-          } catch { /* ignore malformed lines */ }
+      await readNdjsonStream(response, (data) => {
+        if (data.type === "summary") {
+          setSpRunSummary({ collectionsTotal: data.collectionsTotal as number, collectionsSorted: data.collectionsSorted as number, totalProductsReordered: data.totalProductsReordered as number, errors: (data.errors as RunSummary["errors"]) ?? [], runAt: data.runAt as string });
+          queryClient.invalidateQueries({ queryKey: ["collection-sort-all-runs"] });
+          return;
         }
-      }
+        processedCount++;
+        const nextIndex = processedCount;
+        setSpCollectionProgress((prev) =>
+          prev.map((p, idx) => {
+            if (p.id === data.collectionId) return { ...p, status: data.status as CollectionProgress["status"], productsReordered: data.productsReordered as number | undefined, error: data.error as string | undefined };
+            if (idx === nextIndex && p.status === "pending") return { ...p, status: "processing" };
+            return p;
+          }),
+        );
+      });
     } catch (e: unknown) {
-      toast.error(`Sales sort failed: ${e instanceof Error ? e.message : String(e)}`);
+      const msg = e instanceof Error ? e.message : String(e);
+      toast.error(`Sales sort failed: ${msg}`);
+      failStalledProgress(setSpCollectionProgress, msg);
     } finally {
       setSpRunning(false);
     }
@@ -935,40 +965,27 @@ export default function CollectionSortManager() {
       });
       if (!response.ok || !response.body) throw new Error(`Edge function returned ${response.status}`);
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
       let processedCount = 0;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const data = JSON.parse(line);
-            if (data.type === "summary") {
-              setDcRunSummary({ collectionsTotal: data.collectionsTotal, collectionsSorted: data.collectionsSorted, totalProductsReordered: data.totalProductsReordered, errors: data.errors ?? [], runAt: data.runAt });
-              queryClient.invalidateQueries({ queryKey: ["collection-sort-all-runs"] });
-              continue;
-            }
-            processedCount++;
-            const nextIndex = processedCount;
-            setDcCollectionProgress((prev) =>
-              prev.map((p, idx) => {
-                if (p.id === data.collectionId) return { ...p, status: data.status, productsReordered: data.productsReordered, error: data.error };
-                if (idx === nextIndex && p.status === "pending") return { ...p, status: "processing" };
-                return p;
-              }),
-            );
-          } catch { /* ignore malformed lines */ }
+      await readNdjsonStream(response, (data) => {
+        if (data.type === "summary") {
+          setDcRunSummary({ collectionsTotal: data.collectionsTotal as number, collectionsSorted: data.collectionsSorted as number, totalProductsReordered: data.totalProductsReordered as number, errors: (data.errors as RunSummary["errors"]) ?? [], runAt: data.runAt as string });
+          queryClient.invalidateQueries({ queryKey: ["collection-sort-all-runs"] });
+          return;
         }
-      }
+        processedCount++;
+        const nextIndex = processedCount;
+        setDcCollectionProgress((prev) =>
+          prev.map((p, idx) => {
+            if (p.id === data.collectionId) return { ...p, status: data.status as CollectionProgress["status"], productsReordered: data.productsReordered as number | undefined, error: data.error as string | undefined };
+            if (idx === nextIndex && p.status === "pending") return { ...p, status: "processing" };
+            return p;
+          }),
+        );
+      });
     } catch (e: unknown) {
-      toast.error(`Discount sort failed: ${e instanceof Error ? e.message : String(e)}`);
+      const msg = e instanceof Error ? e.message : String(e);
+      toast.error(`Discount sort failed: ${msg}`);
+      failStalledProgress(setDcCollectionProgress, msg);
     } finally {
       setDcRunning(false);
     }
@@ -1011,40 +1028,27 @@ export default function CollectionSortManager() {
       });
       if (!response.ok || !response.body) throw new Error(`Edge function returned ${response.status}`);
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
       let processedCount = 0;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const data = JSON.parse(line);
-            if (data.type === "summary") {
-              setInvRunSummary({ collectionsTotal: data.collectionsTotal, collectionsSorted: data.collectionsSorted, totalProductsReordered: data.totalProductsReordered, errors: data.errors ?? [], runAt: data.runAt });
-              queryClient.invalidateQueries({ queryKey: ["collection-sort-all-runs"] });
-              continue;
-            }
-            processedCount++;
-            const nextIndex = processedCount;
-            setInvCollectionProgress((prev) =>
-              prev.map((p, idx) => {
-                if (p.id === data.collectionId) return { ...p, status: data.status, productsReordered: data.productsReordered, error: data.error };
-                if (idx === nextIndex && p.status === "pending") return { ...p, status: "processing" };
-                return p;
-              }),
-            );
-          } catch { /* ignore malformed lines */ }
+      await readNdjsonStream(response, (data) => {
+        if (data.type === "summary") {
+          setInvRunSummary({ collectionsTotal: data.collectionsTotal as number, collectionsSorted: data.collectionsSorted as number, totalProductsReordered: data.totalProductsReordered as number, errors: (data.errors as RunSummary["errors"]) ?? [], runAt: data.runAt as string });
+          queryClient.invalidateQueries({ queryKey: ["collection-sort-all-runs"] });
+          return;
         }
-      }
+        processedCount++;
+        const nextIndex = processedCount;
+        setInvCollectionProgress((prev) =>
+          prev.map((p, idx) => {
+            if (p.id === data.collectionId) return { ...p, status: data.status as CollectionProgress["status"], productsReordered: data.productsReordered as number | undefined, error: data.error as string | undefined };
+            if (idx === nextIndex && p.status === "pending") return { ...p, status: "processing" };
+            return p;
+          }),
+        );
+      });
     } catch (e: unknown) {
-      toast.error(`Inventory sort failed: ${e instanceof Error ? e.message : String(e)}`);
+      const msg = e instanceof Error ? e.message : String(e);
+      toast.error(`Inventory sort failed: ${msg}`);
+      failStalledProgress(setInvCollectionProgress, msg);
     } finally {
       setInvRunning(false);
     }

@@ -9,6 +9,11 @@ const corsHeaders = {
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
+// Safety caps so one oversized collection can't stall or blow up a run.
+const COLLECTION_MAX_PAGES = 40; // 40 * 250 = 10,000 products per collection
+const COLLECTION_TIMEOUT_MS = 90_000; // per-collection watchdog
+const HEARTBEAT_INTERVAL_MS = 10_000; // keep the stream alive so the UI can tell "slow" from "hung"
+
 function normalizeDomain(d: string): string {
   return d.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/+$/, "");
 }
@@ -218,6 +223,7 @@ async function fetchCollectionProducts(
   const products: CollectionProduct[] = [];
   let cursor: string | null = null;
   let collectionTitle = collectionId;
+  let pagesFetched = 0;
 
   const query = `
     query GetCollectionProducts($id: ID!, $first: Int!, $after: String) {
@@ -263,7 +269,8 @@ async function fetchCollectionProducts(
     }
 
     cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
-  } while (cursor);
+    pagesFetched++;
+  } while (cursor && pagesFetched < COLLECTION_MAX_PAGES);
 
   return { products, title: collectionTitle };
 }
@@ -404,6 +411,7 @@ async function fetchCollectionProductsWithPricing(
   const products: CollectionProductWithPricing[] = [];
   let cursor: string | null = null;
   let collectionTitle = collectionId;
+  let pagesFetched = 0;
 
   const query = `
     query GetCollectionProductsPricing($id: ID!, $first: Int!, $after: String) {
@@ -439,7 +447,8 @@ async function fetchCollectionProductsWithPricing(
       });
     }
     cursor = collection.products.pageInfo.hasNextPage ? collection.products.pageInfo.endCursor : null;
-  } while (cursor);
+    pagesFetched++;
+  } while (cursor && pagesFetched < COLLECTION_MAX_PAGES);
 
   return { products, title: collectionTitle };
 }
@@ -461,6 +470,7 @@ async function fetchCollectionProductsWithInventory(
   const products: CollectionProductWithInventory[] = [];
   let cursor: string | null = null;
   let collectionTitle = collectionId;
+  let pagesFetched = 0;
 
   const query = `
     query GetCollectionProductsInventory($id: ID!, $first: Int!, $after: String) {
@@ -492,7 +502,8 @@ async function fetchCollectionProductsWithInventory(
       products.push({ id: p.id, title: p.title, inventoryQuantity: totalQty, availableForSale });
     }
     cursor = collection.products.pageInfo.hasNextPage ? collection.products.pageInfo.endCursor : null;
-  } while (cursor);
+    pagesFetched++;
+  } while (cursor && pagesFetched < COLLECTION_MAX_PAGES);
 
   return { products, title: collectionTitle };
 }
@@ -611,7 +622,7 @@ async function runStreamingSort<T extends AnyProduct>(
   token: string,
   fetchFn: (domain: string, token: string, id: string) => Promise<{ products: T[]; title: string }>,
   sortFn: (products: T[]) => T[],
-  sortMeta: Record<string, unknown>,
+  sortMetaEntries: unknown[],
 ): Promise<Response> {
   const encoder = new TextEncoder();
   const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
@@ -624,20 +635,35 @@ async function runStreamingSort<T extends AnyProduct>(
 
     for (const collectionId of collections) {
       let collectionTitle = collectionId;
+      const heartbeat = setInterval(() => {
+        writer.write(encoder.encode(JSON.stringify({ type: "heartbeat", collectionId }) + "\n")).catch(() => {});
+      }, HEARTBEAT_INTERVAL_MS);
+
       try {
-        const { products, title } = await fetchFn(domain, token, collectionId);
-        collectionTitle = title;
-        const sorted = sortFn(products);
-        const productIds = sorted.map((p) => p.id);
-        await setCollectionManual(domain, token, collectionId);
-        await reorderCollectionProducts(domain, token, collectionId, productIds);
+        // Watchdog: a single stalled/rate-limited collection must not block the whole run.
+        const products = await Promise.race([
+          (async () => {
+            const { products, title } = await fetchFn(domain, token, collectionId);
+            collectionTitle = title;
+            const sorted = sortFn(products);
+            const productIds = sorted.map((p) => p.id);
+            await setCollectionManual(domain, token, collectionId);
+            await reorderCollectionProducts(domain, token, collectionId, productIds);
+            return products;
+          })(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`Timed out after ${COLLECTION_TIMEOUT_MS / 1000}s`)), COLLECTION_TIMEOUT_MS)
+          ),
+        ]);
         totalProductsReordered += products.length;
         collectionsSorted++;
-        await writer.write(encoder.encode(JSON.stringify({ collectionId, title, status: "done", productsReordered: products.length }) + "\n"));
+        await writer.write(encoder.encode(JSON.stringify({ collectionId, title: collectionTitle, status: "done", productsReordered: products.length }) + "\n"));
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
         errors.push({ collectionId, title: collectionTitle, error: msg });
         await writer.write(encoder.encode(JSON.stringify({ collectionId, title: collectionTitle, status: "failed", error: msg }) + "\n"));
+      } finally {
+        clearInterval(heartbeat);
       }
       await sleep(500);
     }
@@ -649,7 +675,7 @@ async function runStreamingSort<T extends AnyProduct>(
         collections_sorted: collectionsSorted,
         products_reordered: totalProductsReordered,
         errors,
-        sort_rules: [sortMeta],
+        sort_rules: sortMetaEntries,
         collection_scope: collections,
       });
     } catch (e) {
@@ -776,100 +802,12 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    const encoder = new TextEncoder();
-    const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
-    const writer = writable.getWriter();
-
-    (async () => {
-      let totalProductsReordered = 0;
-      let collectionsSorted = 0;
-      const errors: Array<{ collectionId: string; title: string; error: string }> = [];
-
-      for (const collectionId of collections) {
-        let collectionTitle = collectionId;
-        try {
-          const { products, title } = await fetchCollectionProducts(domain, conn.access_token, collectionId);
-          collectionTitle = title;
-
-          const sorted = sortProducts(products, sortRules);
-          const productIds = sorted.map((p) => p.id);
-
-          await setCollectionManual(domain, conn.access_token, collectionId);
-          await reorderCollectionProducts(domain, conn.access_token, collectionId, productIds);
-
-          totalProductsReordered += products.length;
-          collectionsSorted++;
-
-          await writer.write(
-            encoder.encode(
-              JSON.stringify({
-                collectionId,
-                title,
-                status: "done",
-                productsReordered: products.length,
-              }) + "\n",
-            ),
-          );
-        } catch (e: unknown) {
-          const msg = e instanceof Error ? e.message : String(e);
-          errors.push({ collectionId, title: collectionTitle, error: msg });
-
-          await writer.write(
-            encoder.encode(
-              JSON.stringify({
-                collectionId,
-                title: collectionTitle,
-                status: "failed",
-                error: msg,
-              }) + "\n",
-            ),
-          );
-        }
-
-        // Respect Shopify rate limits between collections
-        await sleep(500);
-      }
-
-      // Persist run log
-      try {
-        await supabase.from("collection_sort_runs").insert({
-          store_id: storeId,
-          run_at: new Date().toISOString(),
-          collections_sorted: collectionsSorted,
-          products_reordered: totalProductsReordered,
-          errors,
-          sort_rules: sortRules,
-          collection_scope: collections,
-        });
-      } catch (e) {
-        console.error("Failed to save run log:", e);
-      }
-
-      // Final summary line
-      await writer.write(
-        encoder.encode(
-          JSON.stringify({
-            type: "summary",
-            collectionsTotal: collections.length,
-            collectionsSorted,
-            totalProductsReordered,
-            errors,
-            runAt: new Date().toISOString(),
-          }) + "\n",
-        ),
-      );
-
-      await writer.close();
-    })();
-
-    return new Response(readable, {
-      headers: {
-        ...corsHeaders,
-        "Content-Type": "application/x-ndjson",
-        "Transfer-Encoding": "chunked",
-        "X-Content-Type-Options": "nosniff",
-      },
-    });
+    return runStreamingSort(
+      supabase, storeId, collections, domain, conn.access_token,
+      fetchCollectionProducts,
+      (products) => sortProducts(products, sortRules),
+      sortRules,
+    );
   }
 
   // ── RUN SALES SORT ──────────────────────────────────────────────────────────
@@ -884,15 +822,19 @@ Deno.serve(async (req: Request) => {
     const since = new Date(Date.now() - windowDays * 86_400_000).toISOString();
 
     // Pre-fetch all product GIDs across every selected collection so we can
-    // build the sales data map before the streaming sort loop begins.
+    // build the sales data map before the streaming sort loop begins. Cache the
+    // fetched products so the streaming loop below reuses them instead of
+    // hitting Shopify a second time per collection.
+    const productCache = new Map<string, { products: CollectionProduct[]; title: string }>();
     const allProductGids: string[] = [];
     for (const collectionId of collections) {
       try {
-        const { products } = await fetchCollectionProducts(domain, conn.access_token, collectionId);
-        allProductGids.push(...products.map((p) => p.id));
+        const result = await fetchCollectionProducts(domain, conn.access_token, collectionId);
+        productCache.set(collectionId, result);
+        allProductGids.push(...result.products.map((p) => p.id));
       } catch {
-        // If one collection fails here we still proceed; it will fail again
-        // (and be recorded) inside runStreamingSort.
+        // If one collection fails here we still proceed; the streaming loop's
+        // own fetch (cache miss) will retry it, and any failure is recorded there.
       }
     }
     const salesData = await fetchSalesData(supabase, storeId, allProductGids, since);
@@ -906,10 +848,11 @@ Deno.serve(async (req: Request) => {
     const stockFirst = inStockFirst !== false; // default true
     return runStreamingSort(
       supabase, storeId, collections, domain, conn.access_token,
-      (d, t, id) => fetchCollectionProducts(d, t, id).then(({ products, title }) => ({
-        products: products as CollectionProduct[],
-        title,
-      })),
+      (d, t, id) => {
+        const cached = productCache.get(id);
+        if (cached) return Promise.resolve(cached);
+        return fetchCollectionProducts(d, t, id); // cache miss — pre-fetch failed, retry here
+      },
       (products) => {
         const sorted = [...products].sort((a, b) => {
           // Stock tier first
@@ -933,7 +876,7 @@ Deno.serve(async (req: Request) => {
         ));
         return sorted;
       },
-      { type: rule, salesWindowDays: windowDays, inStockFirst: stockFirst },
+      [{ type: rule, salesWindowDays: windowDays, inStockFirst: stockFirst }],
     );
   }
 
@@ -950,7 +893,7 @@ Deno.serve(async (req: Request) => {
       supabase, storeId, collections, domain, conn.access_token,
       fetchCollectionProductsWithPricing,
       (products) => sortProductsByDiscount(products, rule, inStockFirst !== false),
-      { type: rule, inStockFirst: inStockFirst !== false },
+      [{ type: rule, inStockFirst: inStockFirst !== false }],
     );
   }
 
@@ -969,7 +912,7 @@ Deno.serve(async (req: Request) => {
       supabase, storeId, collections, domain, conn.access_token,
       fetchCollectionProductsWithInventory,
       (products) => sortProductsByInventory(products, rule, lowThreshold, highThreshold, inStockFirst !== false),
-      { type: rule, lowStockThreshold: lowThreshold, overstockThreshold: highThreshold, inStockFirst: inStockFirst !== false },
+      [{ type: rule, lowStockThreshold: lowThreshold, overstockThreshold: highThreshold, inStockFirst: inStockFirst !== false }],
     );
   }
 
