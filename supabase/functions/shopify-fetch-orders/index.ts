@@ -40,6 +40,7 @@ async function findOrdersByTracking(
               fulfillmentStatus
               sourceName
               totalPriceSet { shopMoney { amount } }
+              currentTotalPriceSet { shopMoney { amount } }
               totalDiscountsSet { shopMoney { amount } }
               referringSite
               landingSiteBaseUrl
@@ -109,6 +110,9 @@ function mapOrder(node: Record<string, unknown>, storeId: string): Record<string
     customer_first_order_at: customer?.createdAt ?? null,
     total_price:          node.totalPriceSet
       ? Number((node.totalPriceSet as Record<string, Record<string, string>>).shopMoney.amount)
+      : null,
+    current_total_price: node.currentTotalPriceSet
+      ? Number((node.currentTotalPriceSet as Record<string, Record<string, string>>).shopMoney.amount)
       : null,
     total_discounts:      node.totalDiscountsSet
       ? Number((node.totalDiscountsSet as Record<string, Record<string, string>>).shopMoney.amount)

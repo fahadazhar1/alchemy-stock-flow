@@ -74,7 +74,9 @@ export function useStoreSalesPulse(bounds: DateBounds, excludeShipping: boolean 
           channels.set(key, { cur: { orders: 0, revenue: 0 }, prev: { orders: 0, revenue: 0 } });
         }
         const c = channels.get(key)!;
-        let netRevenue = Number(r.revenue ?? 0) - Number(r.refunded_revenue ?? 0);
+        // revenue is already current_total_price — live, post-refund/post-edit —
+        // so refunded_revenue is NOT subtracted here (that would double-count).
+        let netRevenue = Number(r.revenue ?? 0);
         if (excludeShipping) netRevenue -= Number(r.shipping_revenue ?? 0);
         const bucket = r.bucket === "cur" ? c.cur : c.prev;
         bucket.orders  += Number(r.orders ?? 0);

@@ -680,9 +680,13 @@ async function processSingleOrder(supabase: any, conn: any, o: any): Promise<voi
     source_name: o.source_name || null,
     shopify_created_at: o.created_at || null,
     total_price: o.total_price ? Number(o.total_price) : null,
-    total_shipping_price: o.total_shipping_price_set?.shop_money?.amount
-      ? Number(o.total_shipping_price_set.shop_money.amount)
-      : null,
+    current_total_price: o.current_total_price != null ? Number(o.current_total_price) : null,
+    // total_shipping_price_set is frozen at creation and does NOT reflect shipping
+    // discounts/edits applied afterward — shipping_lines[].discounted_price is the
+    // live, post-discount value (REST has no order-level "current shipping" field).
+    total_shipping_price: (o.shipping_lines ?? []).reduce(
+      (sum: number, line: any) => sum + Number(line.discounted_price ?? line.price ?? 0), 0,
+    ),
     shopify_order_id: String(o.id),
     store_id: conn.store_id,
     customer_email: o.email || o.customer?.email || null,
