@@ -39,9 +39,9 @@ interface ChannelAgg {
   prev: { orders: number; revenue: number };
 }
 
-export function useStoreSalesPulse(bounds: DateBounds) {
+export function useStoreSalesPulse(bounds: DateBounds, excludeShipping: boolean = false) {
   return useQuery<StoreSalesPulse[]>({
-    queryKey: ["store-sales-pulse", bounds.cacheKey],
+    queryKey: ["store-sales-pulse", bounds.cacheKey, excludeShipping],
     staleTime: 3 * 60_000,
     refetchInterval: 3 * 60_000,
     queryFn: async (): Promise<StoreSalesPulse[]> => {
@@ -74,7 +74,8 @@ export function useStoreSalesPulse(bounds: DateBounds) {
           channels.set(key, { cur: { orders: 0, revenue: 0 }, prev: { orders: 0, revenue: 0 } });
         }
         const c = channels.get(key)!;
-        const netRevenue = Number(r.revenue ?? 0) - Number(r.refunded_revenue ?? 0);
+        let netRevenue = Number(r.revenue ?? 0) - Number(r.refunded_revenue ?? 0);
+        if (excludeShipping) netRevenue -= Number(r.shipping_revenue ?? 0);
         const bucket = r.bucket === "cur" ? c.cur : c.prev;
         bucket.orders  += Number(r.orders ?? 0);
         bucket.revenue += netRevenue;

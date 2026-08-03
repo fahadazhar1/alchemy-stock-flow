@@ -680,6 +680,9 @@ async function processSingleOrder(supabase: any, conn: any, o: any): Promise<voi
     source_name: o.source_name || null,
     shopify_created_at: o.created_at || null,
     total_price: o.total_price ? Number(o.total_price) : null,
+    total_shipping_price: o.total_shipping_price_set?.shop_money?.amount
+      ? Number(o.total_shipping_price_set.shop_money.amount)
+      : null,
     shopify_order_id: String(o.id),
     store_id: conn.store_id,
     customer_email: o.email || o.customer?.email || null,

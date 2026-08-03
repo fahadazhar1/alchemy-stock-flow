@@ -14,7 +14,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  DropdownMenu, DropdownMenuTrigger, DropdownMenuContent,
+  DropdownMenuCheckboxItem, DropdownMenuItem, DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Calendar } from "@/components/ui/calendar";
 import { cn } from "@/lib/utils";
@@ -626,23 +631,25 @@ function delta(cur: number, prev: number): number | null {
   return Math.round(((cur - prev) / prev) * 100);
 }
 
-// Collapse a store's per-channel breakdown down to a single selected channel,
+// Collapse a store's per-channel breakdown down to the selected channel(s),
 // keeping the same shape so SalesPulseCard doesn't need to branch on filter state.
-function applyChannelFilter(p: StoreSalesPulse, channelKey: string | "all"): StoreSalesPulse {
-  if (channelKey === "all") return p;
-  const c = p.channels.find(ch => ch.key === channelKey);
-  if (!c) {
+// Empty set = no filter = every channel.
+function applyChannelFilter(p: StoreSalesPulse, selectedKeys: Set<string>): StoreSalesPulse {
+  if (selectedKeys.size === 0) return p;
+  const matched = p.channels.filter(ch => selectedKeys.has(ch.key));
+  if (!matched.length) {
     return { ...p, revenue: 0, orders: 0, prevRevenue: 0, prevOrders: 0, revenueDelta: null, ordersDelta: null, channels: [] };
   }
+  const revenue     = matched.reduce((s, c) => s + c.revenue, 0);
+  const orders      = matched.reduce((s, c) => s + c.orders, 0);
+  const prevRevenue = matched.reduce((s, c) => s + c.prevRevenue, 0);
+  const prevOrders  = matched.reduce((s, c) => s + c.prevOrders, 0);
   return {
     ...p,
-    revenue: c.revenue,
-    orders: c.orders,
-    prevRevenue: c.prevRevenue,
-    prevOrders: c.prevOrders,
-    revenueDelta: c.revenueDelta,
-    ordersDelta: delta(c.orders, c.prevOrders),
-    channels: [c],
+    revenue, orders, prevRevenue, prevOrders,
+    revenueDelta: delta(revenue, prevRevenue),
+    ordersDelta: delta(orders, prevOrders),
+    channels: matched,
   };
 }
 
@@ -703,13 +710,62 @@ function SalesPulseCard({ p, idx, channelFiltered }: { p: StoreSalesPulse; idx: 
   );
 }
 
-function SalesPulseSection({ pulse, loading, bounds, range }: {
+function ChannelMultiSelect({ options, selected, onChange }: {
+  options: { key: string; name: string }[];
+  selected: Set<string>;
+  onChange: (next: Set<string>) => void;
+}) {
+  const toggle = (key: string) => {
+    const next = new Set(selected);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    onChange(next);
+  };
+  const label = selected.size === 0
+    ? "All channels"
+    : selected.size === 1
+      ? options.find(o => selected.has(o.key))?.name ?? "1 channel"
+      : `${selected.size} channels`;
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="sm" className="h-7 text-xs w-[150px] justify-between font-normal">
+          {label}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-[180px]">
+        <DropdownMenuItem
+          className="text-xs"
+          onSelect={(e) => { e.preventDefault(); onChange(new Set()); }}
+        >
+          All channels
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        {options.map(c => (
+          <DropdownMenuCheckboxItem
+            key={c.key}
+            className="text-xs"
+            checked={selected.has(c.key)}
+            onSelect={(e) => e.preventDefault()}
+            onCheckedChange={() => toggle(c.key)}
+          >
+            {c.name}
+          </DropdownMenuCheckboxItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function SalesPulseSection({ pulse, loading, bounds, range, excludeShipping, onExcludeShippingChange }: {
   pulse: StoreSalesPulse[];
   loading: boolean;
   bounds: DateBounds;
   range: DateRangeKey;
+  excludeShipping: boolean;
+  onExcludeShippingChange: (value: boolean) => void;
 }) {
-  const [channelFilter, setChannelFilter] = useState<string>("all");
+  const [channelFilter, setChannelFilter] = useState<Set<string>>(new Set());
 
   const channelOptions = useMemo(() => {
     const map = new Map<string, { key: string; name: string }>();
@@ -738,16 +794,19 @@ function SalesPulseSection({ pulse, loading, bounds, range }: {
         </span>
         <h2 className="text-base font-semibold">Sales Pulse</h2>
         <span className="text-xs text-muted-foreground">Net sales &amp; full channel mix · {bounds.label} {comparePeriodLabel(range)}</span>
-        <div className="ml-auto">
-          <Select value={channelFilter} onValueChange={setChannelFilter}>
-            <SelectTrigger className="h-7 text-xs w-[150px]"><SelectValue placeholder="All channels" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All channels</SelectItem>
-              {channelOptions.map(c => (
-                <SelectItem key={c.key} value={c.key}>{c.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        <div className="ml-auto flex items-center gap-3">
+          <div className="flex items-center gap-1.5">
+            <Switch
+              id="exclude-shipping"
+              checked={excludeShipping}
+              onCheckedChange={onExcludeShippingChange}
+              className="h-4 w-7 [&>span]:h-3 [&>span]:w-3"
+            />
+            <Label htmlFor="exclude-shipping" className="text-xs text-muted-foreground cursor-pointer">
+              Exclude shipping
+            </Label>
+          </div>
+          <ChannelMultiSelect options={channelOptions} selected={channelFilter} onChange={setChannelFilter} />
         </div>
       </div>
       {loading ? (
@@ -766,7 +825,7 @@ function SalesPulseSection({ pulse, loading, bounds, range }: {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
           {filteredPulse.map((p, i) => (
-            <SalesPulseCard key={p.storeId} p={p} idx={i} channelFiltered={channelFilter !== "all"} />
+            <SalesPulseCard key={p.storeId} p={p} idx={i} channelFiltered={channelFilter.size > 0} />
           ))}
         </div>
       )}
@@ -1446,6 +1505,7 @@ export default function StorePerformanceDashboard() {
   const [range, setRange] = useState<DateRangeKey>("MTD");
   const [customFrom, setCustomFrom] = useState<Date | null>(null);
   const [customTo,   setCustomTo]   = useState<Date | null>(null);
+  const [excludeShipping, setExcludeShipping] = useState(false);
 
   const bounds = useMemo<DateBounds>(() => {
     if (range === "Custom" && customFrom && customTo) {
@@ -1457,7 +1517,7 @@ export default function StorePerformanceDashboard() {
   const { data, isLoading, isFetching, refetch } = useStorePerformance(bounds);
   const {
     data: pulseData, isLoading: pulseLoading, isFetching: pulseFetching, refetch: refetchPulse,
-  } = useStoreSalesPulse(bounds);
+  } = useStoreSalesPulse(bounds, excludeShipping);
   const queryClient = useQueryClient();
 
   const metrics    = data?.storeMetrics     ?? [];
@@ -1505,7 +1565,14 @@ export default function StorePerformanceDashboard() {
 
       {/* ── Sales Pulse: net sales + full channel mix, follows the date filter ── */}
       <section>
-        <SalesPulseSection pulse={pulseData ?? []} loading={pulseLoading} bounds={bounds} range={range} />
+        <SalesPulseSection
+          pulse={pulseData ?? []}
+          loading={pulseLoading}
+          bounds={bounds}
+          range={range}
+          excludeShipping={excludeShipping}
+          onExcludeShippingChange={setExcludeShipping}
+        />
       </section>
 
       {/* ── Store performance cards (top) ────────────────────────────────────── */}
