@@ -146,8 +146,13 @@ export function getCustomDateBounds(from: Date, to: Date, timezone = "Asia/Karac
 
   const days = Math.max(1, Math.round((endDay.getTime() - startDay.getTime()) / DAY) + 1);
 
-  // Shift back by whole weeks so the comparison period lands on the same weekdays.
-  const shiftMs   = Math.ceil(days / 7) * 7 * DAY;
+  // Multi-day ranges shift back by whole weeks so the comparison lands on the same
+  // weekdays. A single-day pick should just compare to the immediately preceding
+  // day ("yesterday"), not jump a full week back — Math.ceil(1/7) would otherwise
+  // still round up to 7 days, silently comparing e.g. "3 Aug" to "27 Jul" instead
+  // of "2 Aug". Found 2026-08-04 when the dashboard's single-day "vs prev period"
+  // didn't match the daily Shopify-sourced report.
+  const shiftMs   = days === 1 ? DAY : Math.ceil(days / 7) * 7 * DAY;
   const prevStart = tzMidnight(new Date(from.getTime() - shiftMs), timezone);
   const prevEnd   = tzEndOfDay(new Date(to.getTime() - shiftMs + 43_200_000), timezone);
 
