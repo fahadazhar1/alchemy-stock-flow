@@ -217,7 +217,7 @@ export default function PnLDashboard() {
   const bounds = useMemo(() => getMonthBounds(year, month), [year, month]);
   const { data: salesPulse = [], isLoading: revenueLoading } = useStoreSalesPulse(bounds, true);
   const { data: entries = [], isLoading: entriesLoading } = useAllCostEntries(monthKey);
-  const { data: fxData, isError: fxError } = useEnsureFxRates(monthKey);
+  const { data: fxData, isError: fxError, refetch: refetchFxRates } = useEnsureFxRates(monthKey);
   const fxRates = fxData?.rates ?? {};
 
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -294,6 +294,9 @@ export default function PnLDashboard() {
                   {fxError
                     ? `Auto-fetching the exchange rate for ${monthKey} failed — some stores excluded from the SAR total below.`
                     : `Fetching this month's exchange rate…`}
+                  {fxError && (
+                    <Button size="sm" variant="outline" className="h-6 ml-2" onClick={() => refetchFxRates()}>Retry</Button>
+                  )}
                 </div>
                 {fxError && isAdmin && <FxRateEditor monthKey={monthKey} fxRates={fxRates} />}
               </CardContent>

@@ -165,9 +165,14 @@ export function useEnsureFxRates(monthKey: string) {
   return useQuery<{ rates: Record<string, number>; fetched: boolean }>({
     queryKey: ["ensure-fx-rates", monthKey],
     staleTime: 60 * 60_000,
+    retry: 2,
+    refetchOnMount: "always", // never trust a stale/empty result from before a fix — always re-check
     queryFn: async () => {
       const { data, error } = await supabase.functions.invoke("fetch-fx-rate", { body: { monthKey } });
-      if (error) throw error;
+      if (error) {
+        console.error("fetch-fx-rate failed:", error);
+        throw error;
+      }
       return data;
     },
   });
