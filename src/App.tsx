@@ -33,6 +33,8 @@ import BundleOpportunity from "@/pages/BundleOpportunity";
 import BundleBuilder from "@/pages/BundleBuilder";
 import SEOAudit from "@/pages/SEOAudit";
 import StorePerformanceDashboard from "@/pages/StorePerformanceDashboard";
+import PnLDashboard from "@/pages/PnLDashboard";
+import FbtBundleSettings from "@/pages/FbtBundleSettings";
 import Login from "@/pages/Login";
 import NotFound from "@/pages/NotFound";
 import { Loader2 } from "lucide-react";
@@ -101,8 +103,10 @@ function AppRoutes() {
           <Route path="/dead-stock" element={<DeadStock />} />
           <Route path="/bundle-finder" element={<BundleOpportunity />} />
           <Route path="/bundle-builder" element={<BundleBuilder />} />
+          <Route path="/fbt-bundle-discount" element={<FbtBundleSettings />} />
           <Route path="/seo-audit" element={<SEOAudit />} />
           <Route path="/store-performance" element={<StorePerformanceDashboard />} />
+          <Route path="/pnl" element={<PnLDashboard />} />
         </Route>
       </Route>
       <Route path="*" element={<NotFound />} />

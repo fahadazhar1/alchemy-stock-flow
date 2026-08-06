@@ -23,7 +23,7 @@ export interface DateBounds {
  * Strategy: get YYYY-MM-DD in `tz`, then back-solve what UTC time is 00:00:00
  * on that date in `tz`.
  */
-function tzMidnight(date: Date, tz: string): Date {
+export function tzMidnight(date: Date, tz: string): Date {
   const ymd      = date.toLocaleDateString("sv-SE", { timeZone: tz }); // "YYYY-MM-DD"
   const rough    = new Date(ymd + "T00:00:00Z");
   const roughYmd = rough.toLocaleDateString("sv-SE", { timeZone: tz });
@@ -36,12 +36,12 @@ function tzMidnight(date: Date, tz: string): Date {
 }
 
 /** Returns 23:59:59.999 for the day containing `date` in `tz`. */
-function tzEndOfDay(date: Date, tz: string): Date {
+export function tzEndOfDay(date: Date, tz: string): Date {
   return new Date(tzMidnight(date, tz).getTime() + 86_400_000 - 1);
 }
 
 /** UTC-safe noon for a calendar date — avoids day-boundary DST issues. */
-function utcNoon(year: number, month: number, day: number): Date {
+export function utcNoon(year: number, month: number, day: number): Date {
   return new Date(Date.UTC(year, month - 1, day, 12));
 }
 

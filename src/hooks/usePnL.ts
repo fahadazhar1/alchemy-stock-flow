@@ -1,0 +1,185 @@
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { supabase } from "@/integrations/supabase/client";
+import { tzMidnight, tzEndOfDay, utcNoon, type DateBounds } from "@/lib/dateRanges";
+
+// SAR and AED are both fixed USD pegs — no lookup needed, ever.
+const USD_TO_SAR = 3.75;
+const USD_TO_AED = 3.6725;
+const AED_TO_SAR = USD_TO_SAR / USD_TO_AED; // ~1.0211
+
+/** Full-calendar-month bounds (not rolling MTD), in the given timezone — Asia/Karachi
+ *  matches what get_store_period_channel_sales expects (it shifts KSA internally). */
+export function getMonthBounds(year: number, month: number, timezone = "Asia/Karachi"): DateBounds {
+  const start = tzMidnight(utcNoon(year, month, 1), timezone);
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const end = tzEndOfDay(utcNoon(year, month, lastDay), timezone);
+  const prevMonth = month === 1 ? 12 : month - 1;
+  const prevYear = month === 1 ? year - 1 : year;
+  const prevStart = tzMidnight(utcNoon(prevYear, prevMonth, 1), timezone);
+  const prevLastDay = new Date(Date.UTC(prevYear, prevMonth, 0)).getUTCDate();
+  const prevEnd = tzEndOfDay(utcNoon(prevYear, prevMonth, prevLastDay), timezone);
+  const monthKey = `${year}-${String(month).padStart(2, "0")}`;
+  return {
+    startISO: start.toISOString(),
+    endISO: end.toISOString(),
+    days: lastDay,
+    label: monthKey,
+    prevStartISO: prevStart.toISOString(),
+    prevEndISO: prevEnd.toISOString(),
+    cacheKey: `Month|${monthKey}`,
+  };
+}
+
+export function monthKeyToDate(monthKey: string) {
+  return `${monthKey}-01`;
+}
+
+export const COST_CATEGORIES = [
+  { value: "ad_spend", label: "Ad Spend" },
+  { value: "shopify_plan", label: "Shopify Plan" },
+  { value: "shopify_apps", label: "Shopify Apps" },
+  { value: "marketplace_fee", label: "Marketplace Fee" },
+  { value: "other", label: "Other" },
+] as const;
+
+export const AD_PLATFORMS = [
+  { value: "google", label: "Google Ads" },
+  { value: "meta", label: "Meta Ads" },
+  { value: "tiktok", label: "TikTok Ads" },
+  { value: "other", label: "Other" },
+] as const;
+
+export const MARKETPLACE_PLATFORMS = [
+  { value: "amazon", label: "Amazon" },
+  { value: "ebay", label: "eBay" },
+  { value: "other", label: "Other" },
+] as const;
+
+export interface CostEntry {
+  id: string;
+  store_id: string;
+  category: "ad_spend" | "shopify_plan" | "shopify_apps" | "marketplace_fee" | "other";
+  platform: "google" | "meta" | "tiktok" | "amazon" | "ebay" | "other" | null;
+  month: string; // yyyy-mm-dd, first of month
+  amount: number;
+  currency: string;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export function useAllCostEntries(monthKey: string) {
+  return useQuery<CostEntry[]>({
+    queryKey: ["cost-entries-all", monthKey],
+    staleTime: 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("cost_entries")
+        .select("*")
+        .eq("month", monthKeyToDate(monthKey))
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      return (data ?? []) as CostEntry[];
+    },
+  });
+}
+
+export interface CostEntryInput {
+  store_id: string;
+  category: CostEntry["category"];
+  platform?: CostEntry["platform"];
+  month: string; // "yyyy-MM"
+  amount: number;
+  currency: string;
+  notes?: string;
+}
+
+export function useCostEntryMutations() {
+  const queryClient = useQueryClient();
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["cost-entries-all"] });
+
+  const create = useMutation({
+    mutationFn: async (input: CostEntryInput) => {
+      const { data: userData } = await supabase.auth.getUser();
+      const { data, error } = await (supabase as any).from("cost_entries").insert({
+        store_id: input.store_id,
+        category: input.category,
+        platform: input.platform ?? null,
+        month: monthKeyToDate(input.month),
+        amount: input.amount,
+        currency: input.currency,
+        notes: input.notes ?? null,
+        created_by: userData.user?.id ?? null,
+      }).select().single();
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: invalidate,
+  });
+
+  const update = useMutation({
+    mutationFn: async ({ id, ...patch }: Partial<CostEntryInput> & { id: string }) => {
+      const { data: userData } = await supabase.auth.getUser();
+      const payload: Record<string, unknown> = { ...patch, updated_by: userData.user?.id ?? null, updated_at: new Date().toISOString() };
+      if (patch.month) payload.month = monthKeyToDate(patch.month);
+      const { data, error } = await (supabase as any).from("cost_entries").update(payload).eq("id", id).select().single();
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: invalidate,
+  });
+
+  const remove = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from("cost_entries").delete().eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: invalidate,
+  });
+
+  return { create, update, remove };
+}
+
+/** GBP and PKR float, so they need a monthly rate on record. SAR/AED never do. */
+export function useFxRates(monthKey: string) {
+  return useQuery<Record<string, number>>({
+    queryKey: ["fx-rates", monthKey],
+    staleTime: 60 * 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("fx_rates")
+        .select("currency, rate_to_sar")
+        .eq("month", monthKeyToDate(monthKey));
+      if (error) throw error;
+      const map: Record<string, number> = {};
+      for (const row of (data ?? []) as any[]) map[row.currency] = Number(row.rate_to_sar);
+      return map;
+    },
+  });
+}
+
+export function useUpsertFxRate() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ currency, monthKey, rate }: { currency: string; monthKey: string; rate: number }) => {
+      const { data, error } = await (supabase as any)
+        .from("fx_rates")
+        .upsert({ currency, month: monthKeyToDate(monthKey), rate_to_sar: rate }, { onConflict: "currency,month" })
+        .select()
+        .single();
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["fx-rates"] }),
+  });
+}
+
+/** Converts a native-currency amount to SAR. Returns null if a floating currency's
+ *  rate for that month hasn't been entered yet — callers should show "rate missing"
+ *  rather than silently treating it as zero. */
+export function currencyToSar(amount: number, currency: string, fxRates: Record<string, number>): number | null {
+  if (currency === "SAR") return amount;
+  if (currency === "AED") return amount * AED_TO_SAR;
+  const rate = fxRates[currency];
+  return rate ? amount * rate : null;
+}

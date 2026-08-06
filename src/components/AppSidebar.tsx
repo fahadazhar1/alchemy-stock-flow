@@ -2,7 +2,7 @@ import {
   LayoutDashboard, Package, RefreshCw, Brain, Bot, FileText,
   BarChart3, Truck, CheckSquare, FlaskConical, Clock, Settings, BookOpen, Store,
   ShoppingCart, BarChart2, ListOrdered, Activity, LogOut, ChevronRight, History,
-  PackageCheck, ClipboardList, Tag, Archive, PackageOpen, PackagePlus, Search, Globe2,
+  PackageCheck, ClipboardList, Tag, Archive, PackageOpen, PackagePlus, Search, Globe2, Gift, Wallet,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 const navItems = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
   { title: "Store Performance - WIP", url: "/store-performance", icon: Globe2 },
+  { title: "P&L", url: "/pnl", icon: Wallet },
   { title: "Orders",    url: "/orders",    icon: ShoppingCart },
   { title: "Reports",   url: "/reports",   icon: BarChart2 },
   {
@@ -45,6 +46,7 @@ const navItems = [
   { title: "Dead Stock", url: "/dead-stock", icon: Archive },
   { title: "Bundle Finder", url: "/bundle-finder", icon: PackageOpen },
   { title: "Bundle Builder", url: "/bundle-builder", icon: PackagePlus },
+  { title: "FBT Bundle Discount", url: "/fbt-bundle-discount", icon: Gift },
   { title: "SEO Audit", url: "/seo-audit", icon: Search },
   { title: "Stores", url: "/stores", icon: Store },
   { title: "Settings", url: "/settings", icon: Settings },
