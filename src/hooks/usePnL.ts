@@ -158,6 +158,21 @@ export function useFxRates(monthKey: string) {
   });
 }
 
+/** Auto-fetches + locks GBP/PKR rates for a month via the fetch-fx-rate edge function.
+ *  Idempotent server-side (never overwrites an existing rate), so calling this on every
+ *  page load is safe and cheap — the function does one fast DB read once rates exist. */
+export function useEnsureFxRates(monthKey: string) {
+  return useQuery<{ rates: Record<string, number>; fetched: boolean }>({
+    queryKey: ["ensure-fx-rates", monthKey],
+    staleTime: 60 * 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase.functions.invoke("fetch-fx-rate", { body: { monthKey } });
+      if (error) throw error;
+      return data;
+    },
+  });
+}
+
 export function useUpsertFxRate() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -170,7 +185,10 @@ export function useUpsertFxRate() {
       if (error) throw error;
       return data;
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["fx-rates"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["fx-rates"] });
+      queryClient.invalidateQueries({ queryKey: ["ensure-fx-rates"] });
+    },
   });
 }
 

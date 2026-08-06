@@ -17,7 +17,7 @@ import { useStore } from "@/contexts/StoreContext";
 import { useRole } from "@/hooks/useRole";
 import { useStoreSalesPulse } from "@/hooks/useStoreSalesPulse";
 import {
-  getMonthBounds, useAllCostEntries, useCostEntryMutations, useFxRates, useUpsertFxRate,
+  getMonthBounds, useAllCostEntries, useCostEntryMutations, useEnsureFxRates, useUpsertFxRate,
   currencyToSar, COST_CATEGORIES, AD_PLATFORMS, MARKETPLACE_PLATFORMS,
   type CostEntry, type CostEntryInput,
 } from "@/hooks/usePnL";
@@ -217,7 +217,8 @@ export default function PnLDashboard() {
   const bounds = useMemo(() => getMonthBounds(year, month), [year, month]);
   const { data: salesPulse = [], isLoading: revenueLoading } = useStoreSalesPulse(bounds, true);
   const { data: entries = [], isLoading: entriesLoading } = useAllCostEntries(monthKey);
-  const { data: fxRates = {} } = useFxRates(monthKey);
+  const { data: fxData, isError: fxError } = useEnsureFxRates(monthKey);
+  const fxRates = fxData?.rates ?? {};
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<CostEntry | null>(null);
@@ -289,9 +290,12 @@ export default function PnLDashboard() {
             <Card className="border-amber-400/50 bg-amber-50 dark:bg-amber-950/20">
               <CardContent className="pt-4 pb-4 space-y-3">
                 <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400 text-sm font-medium">
-                  <AlertTriangle className="h-4 w-4" /> Missing FX rate for {monthKey} — some stores excluded from the SAR total below.
+                  <AlertTriangle className="h-4 w-4" />
+                  {fxError
+                    ? `Auto-fetching the exchange rate for ${monthKey} failed — some stores excluded from the SAR total below.`
+                    : `Fetching this month's exchange rate…`}
                 </div>
-                {isAdmin && <FxRateEditor monthKey={monthKey} fxRates={fxRates} />}
+                {fxError && isAdmin && <FxRateEditor monthKey={monthKey} fxRates={fxRates} />}
               </CardContent>
             </Card>
           )}
