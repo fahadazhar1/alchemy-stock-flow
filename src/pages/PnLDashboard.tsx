@@ -505,6 +505,7 @@ export default function PnLDashboard() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<CostEntry | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [ledgerStoreFilter, setLedgerStoreFilter] = useState<string>("all"); // local to the ledger, only relevant in All Stores mode
   const { remove } = useCostEntryMutations();
 
   const activeStores = stores.filter(s => s.is_active);
@@ -568,7 +569,10 @@ export default function PnLDashboard() {
   const biggestCostLabel = categoryBreakdown.length === 0 ? "None yet" : categoryLabel(categoryBreakdown[0].category);
 
   const displayRows = isAllStores ? rows : rows.filter(r => r.store.id === selectedStoreId);
-  const displayEntries = !isAllStores && selectedStoreId ? entries.filter(e => e.store_id === selectedStoreId) : entries;
+  const displayEntries = !isAllStores && selectedStoreId
+    ? entries.filter(e => e.store_id === selectedStoreId)
+    : ledgerStoreFilter === "all" ? entries : entries.filter(e => e.store_id === ledgerStoreFilter);
+  const ledgerShowsStoreColumn = isAllStores && ledgerStoreFilter === "all";
 
   const openAdd = () => { setEditingEntry(null); setDialogOpen(true); };
   const openEdit = (e: CostEntry) => { setEditingEntry(e); setDialogOpen(true); };
@@ -683,10 +687,19 @@ export default function PnLDashboard() {
 
       {/* Cost entries */}
       <section>
-        <div className="flex items-center gap-2 mb-3">
+        <div className="flex items-center gap-2 mb-3 flex-wrap">
           <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-red-500/10 text-red-600 dark:text-red-400">Ledger</span>
           <h2 className="text-base font-semibold">Cost Entries</h2>
           <span className="text-xs text-muted-foreground">{monthKey}{isAllStores ? " · All Stores" : selectedStore ? ` · ${selectedStore.store_name}` : ""}</span>
+          {isAllStores && (
+            <Select value={ledgerStoreFilter} onValueChange={setLedgerStoreFilter}>
+              <SelectTrigger className="h-7 w-[160px] text-xs ml-auto"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Stores</SelectItem>
+                {activeStores.map(s => <SelectItem key={s.id} value={s.id}>{s.store_name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          )}
         </div>
         <Card>
           <CardContent className="p-0">
@@ -699,7 +712,7 @@ export default function PnLDashboard() {
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="border-b">
-                      {isAllStores && <th className="px-4 py-2.5 text-left font-medium text-muted-foreground">Store</th>}
+                      {ledgerShowsStoreColumn && <th className="px-4 py-2.5 text-left font-medium text-muted-foreground">Store</th>}
                       <th className="px-4 py-2.5 text-left font-medium text-muted-foreground">Category</th>
                       <th className="px-4 py-2.5 text-left font-medium text-muted-foreground">Platform</th>
                       <th className="px-4 py-2.5 text-right font-medium text-muted-foreground">Amount</th>
@@ -712,7 +725,7 @@ export default function PnLDashboard() {
                       const s = activeStores.find(st => st.id === e.store_id);
                       return (
                         <tr key={e.id} className="border-b last:border-0 hover:bg-muted/40 transition-colors">
-                          {isAllStores && <td className="px-4 py-2.5">{s?.store_name ?? "—"}</td>}
+                          {ledgerShowsStoreColumn && <td className="px-4 py-2.5">{s?.store_name ?? "—"}</td>}
                           <td className="px-4 py-2.5">{categoryLabel(e.category)}</td>
                           <td className="px-4 py-2.5 text-muted-foreground">{platformLabel(e.platform)}</td>
                           <td className="px-4 py-2.5 text-right tabular-nums font-medium text-red-600 dark:text-red-400">−{fmtC(Number(e.amount), s?.currency_symbol ?? "")}</td>
