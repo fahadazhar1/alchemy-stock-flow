@@ -314,7 +314,7 @@ function biggestCategoryFor(entries: CostEntry[]): string {
   return categoryLabel(top[0]);
 }
 
-function PnLCard({ r, idx, showCategoryBreakdown }: { r: StoreRow; idx: number; showCategoryBreakdown: boolean }) {
+function PnLCard({ r, idx }: { r: StoreRow; idx: number }) {
   const color = storeColor(idx);
   const byCategory = useMemo(() => {
     const map = new Map<string, number>();
@@ -356,26 +356,24 @@ function PnLCard({ r, idx, showCategoryBreakdown }: { r: StoreRow; idx: number; 
           </div>
         </div>
 
-        {showCategoryBreakdown && (
-          <div className="border-t pt-2 flex-1 flex flex-col min-h-0">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Costs by category</span>
-              <span className="text-[10px] text-muted-foreground">{byCategory.length} active</span>
-            </div>
-            {byCategory.length === 0 ? (
-              <p className="text-[11px] text-muted-foreground py-3 text-center">No costs entered this period.</p>
-            ) : (
-              <div className="divide-y divide-border/50">
-                {byCategory.map(([cat, amt]) => (
-                  <div key={cat} className="flex items-center gap-2.5 py-1.5">
-                    <span className="text-xs font-medium truncate flex-1 min-w-0">{categoryLabel(cat)}</span>
-                    <span className="text-xs font-semibold tabular-nums">{fmtC(amt, r.store.currency_symbol ?? "")}</span>
-                  </div>
-                ))}
-              </div>
-            )}
+        <div className="border-t pt-2 flex-1 flex flex-col min-h-0">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Costs by category</span>
+            <span className="text-[10px] text-muted-foreground">{byCategory.length} active</span>
           </div>
-        )}
+          {byCategory.length === 0 ? (
+            <p className="text-[11px] text-muted-foreground py-3 text-center">No costs entered this period.</p>
+          ) : (
+            <div className="divide-y divide-border/50">
+              {byCategory.map(([cat, amt]) => (
+                <div key={cat} className="flex items-center gap-2.5 py-1.5">
+                  <span className="text-xs font-medium truncate flex-1 min-w-0">{categoryLabel(cat)}</span>
+                  <span className="text-xs font-semibold tabular-nums">{fmtC(amt, r.store.currency_symbol ?? "")}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </CardContent>
     </Card>
   );
@@ -959,9 +957,9 @@ export default function PnLDashboard() {
         </section>
 
         {/* Cost breakdown by category — SAR-combined for All Stores, that
-            store's own native-currency split otherwise. Shown here instead of
-            inside the per-store card in single-store view (see PnLCard's
-            showCategoryBreakdown prop) to avoid showing the same numbers twice. */}
+            store's own native-currency split otherwise. The per-store cards'
+            own "Costs by category" list only renders in All Stores view (see
+            below), so there's no duplicate in single-store view. */}
         <section className="flex flex-col">
           <div className="flex items-center gap-2.5 mb-3">
             <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400">Costs</span>
@@ -988,32 +986,36 @@ export default function PnLDashboard() {
         <TrendChart mode={isAllStores ? "indexed" : "native"} series={trendSeries} loading={trendLoading} />
       </section>
 
-      {/* Per-store cards */}
-      <section>
-        <div className="flex items-center gap-2.5 mb-3">
-          <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-primary/10 text-primary">Stores</span>
-          <h2 className="text-base font-semibold">{isAllStores ? "Store P&L Cards" : selectedStore?.store_name ?? ""}</h2>
-          <span className="text-xs text-muted-foreground">{loading ? "Loading…" : `${displayRows.length} store${displayRows.length === 1 ? "" : "s"}`}</span>
-        </div>
-        {loading ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <Card key={i} className="overflow-hidden">
-                <div className="h-1.5 bg-muted animate-pulse" />
-                <CardContent className="p-4 space-y-3">
-                  <Skeleton className="h-5 w-32" />
-                  <Skeleton className="h-16 w-full" />
-                  <Skeleton className="h-20 w-full" />
-                </CardContent>
-              </Card>
-            ))}
+      {/* Per-store cards — All Stores only. In single-store view this would
+          just repeat the same Revenue/Costs/Net already shown in the KPI row
+          above, so it's redundant there. */}
+      {isAllStores && (
+        <section>
+          <div className="flex items-center gap-2.5 mb-3">
+            <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-primary/10 text-primary">Stores</span>
+            <h2 className="text-base font-semibold">Store P&L Cards</h2>
+            <span className="text-xs text-muted-foreground">{loading ? "Loading…" : `${displayRows.length} store${displayRows.length === 1 ? "" : "s"}`}</span>
           </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-            {displayRows.map((r) => <PnLCard key={r.store.id} r={r} idx={activeStores.findIndex(s => s.id === r.store.id)} showCategoryBreakdown={isAllStores} />)}
-          </div>
-        )}
-      </section>
+          {loading ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <Card key={i} className="overflow-hidden">
+                  <div className="h-1.5 bg-muted animate-pulse" />
+                  <CardContent className="p-4 space-y-3">
+                    <Skeleton className="h-5 w-32" />
+                    <Skeleton className="h-16 w-full" />
+                    <Skeleton className="h-20 w-full" />
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+              {displayRows.map((r) => <PnLCard key={r.store.id} r={r} idx={activeStores.findIndex(s => s.id === r.store.id)} />)}
+            </div>
+          )}
+        </section>
+      )}
 
       {/* Ranking — All Stores only */}
       {isAllStores && (
