@@ -1,9 +1,9 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import {
   ChevronLeft, ChevronRight, Plus, Pencil, Trash2, Wallet,
   TrendingUp, TrendingDown, Receipt, Coins, ArrowUp, ArrowDown, Percent, Tag, Share2, ShoppingCart,
-  Download, Printer, LineChart as LineChartIcon, Info,
+  Download, Printer, LineChart as LineChartIcon, Info, LayoutGrid, RotateCcw,
 } from "lucide-react";
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend,
@@ -31,6 +31,67 @@ import {
   type CostEntry, type CostEntryInput, type SalesBridgeRow, type MonthlyTrendPoint, type AbandonmentRow,
 } from "@/hooks/usePnL";
 import { Tooltip as UiTooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { usePageLayout } from "@/hooks/usePageLayout";
+
+// Reorderable page sections, saved per-account via usePageLayout("pnl", ...).
+// Keys are stable identifiers persisted to the DB — never rename a key
+// without a migration, only append new ones (unknown/missing keys are
+// handled gracefully by usePageLayout).
+const PNL_SECTIONS: { key: string; label: string }[] = [
+  { key: "kpis", label: "KPI Summary" },
+  { key: "revenue-costs", label: "Revenue & Costs" },
+  { key: "store-cards", label: "Store P&L Cards" },
+  { key: "ranking", label: "Net Sales Ranking" },
+  { key: "channels-abandonment", label: "Sales by Channel & Cart Abandonment" },
+  { key: "trend", label: "Net Sales Trend" },
+  { key: "ledger", label: "Cost Entries" },
+];
+const PNL_DEFAULT_ORDER = PNL_SECTIONS.map(s => s.key);
+
+function LayoutCustomizer({ order, onSave, onReset, onClose, saving }: {
+  order: string[]; onSave: (order: string[]) => void; onReset: () => void; onClose: () => void; saving: boolean;
+}) {
+  const [draft, setDraft] = useState(order);
+  const labelOf = (key: string) => PNL_SECTIONS.find(s => s.key === key)?.label ?? key;
+  const move = (idx: number, dir: -1 | 1) => {
+    const target = idx + dir;
+    if (target < 0 || target >= draft.length) return;
+    const next = [...draft];
+    [next[idx], next[target]] = [next[target], next[idx]];
+    setDraft(next);
+  };
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle className="text-sm">Customize Page Layout</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-1.5 py-1 max-h-[60vh] overflow-y-auto">
+          {draft.map((key, idx) => (
+            <div key={key} className="flex items-center gap-2 rounded-md border px-3 py-2">
+              <span className="flex-1 text-sm font-medium truncate">{labelOf(key)}</span>
+              <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" disabled={idx === 0} onClick={() => move(idx, -1)} aria-label="Move up">
+                <ArrowUp size={13} />
+              </Button>
+              <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" disabled={idx === draft.length - 1} onClick={() => move(idx, 1)} aria-label="Move down">
+                <ArrowDown size={13} />
+              </Button>
+            </div>
+          ))}
+        </div>
+        <DialogFooter className="flex-row items-center !justify-between sm:justify-between pt-2 border-t">
+          <Button variant="ghost" size="sm" className="text-xs text-muted-foreground gap-1.5" onClick={onReset}>
+            <RotateCcw size={12} /> Reset to default
+          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={onClose}>Cancel</Button>
+            <Button size="sm" onClick={() => onSave(draft)} disabled={saving}>{saving ? "Saving…" : "Save"}</Button>
+          </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 // Same accent palette + assignment order as Store Performance, so a store's
 // colour means the same thing on both pages.
@@ -927,6 +988,8 @@ export default function PnLDashboard() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [ledgerStoreFilter, setLedgerStoreFilter] = useState<string>("all"); // local to the ledger, only relevant in All Stores mode
   const { remove } = useCostEntryMutations();
+  const { order: sectionOrder, save: saveLayout, reset: resetLayout } = usePageLayout("pnl", PNL_DEFAULT_ORDER);
+  const [customizerOpen, setCustomizerOpen] = useState(false);
 
   const activeStores = stores.filter(s => s.is_active);
   const loading = revenueLoading || entriesLoading;
@@ -1199,49 +1262,10 @@ export default function PnLDashboard() {
     }
   };
 
-  return (
-    <div className="flex flex-col gap-5 p-4 md:p-6 max-w-[1800px] mx-auto">
-
-      {/* Page header */}
-      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <Wallet size={18} className="text-primary" />
-            <h1 className="text-xl font-bold tracking-tight">Profit &amp; Loss</h1>
-          </div>
-          <p className="text-sm text-muted-foreground">
-            Revenue live from Shopify (shipping excluded) · costs entered manually · <span className="font-medium">{monthKey}</span>
-          </p>
-        </div>
-        <div className="flex items-center gap-2 shrink-0 print:hidden">
-          <MonthPicker year={year} month={month} onChange={(y, m) => { setYear(y); setMonth(m); }} />
-          <Button size="sm" variant="outline" className="h-8 text-xs gap-1.5" onClick={() => window.print()}><Printer size={13} /> Export PDF</Button>
-          {isAdmin && <Button size="sm" className="h-8 text-xs gap-1.5" onClick={openAdd}><Plus size={13} /> Add Cost Entry</Button>}
-        </div>
-      </div>
-
-      {/* Print header — only visible on the printed page, gives the exported PDF a proper title/date */}
-      <div className="hidden print:block text-center mb-2">
-        <h1 className="text-lg font-bold">Darussalam Group — Profit &amp; Loss</h1>
-        <p className="text-xs text-muted-foreground">{isAllStores ? "All Stores (SAR)" : selectedStore?.store_name} · {monthKey}</p>
-      </div>
-
-      {missingRates && (
-        <Card className="border-amber-300/60 dark:border-amber-800/60">
-          <CardContent className="p-3.5 space-y-3">
-            <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400 text-xs font-medium">
-              {fxError
-                ? `Auto-fetching the exchange rate for ${monthKey} failed — some stores excluded from the SAR total below.`
-                : `Fetching this month's exchange rate…`}
-              {fxError && <Button size="sm" variant="outline" className="h-6 text-xs" onClick={() => refetchFxRates()}>Retry</Button>}
-            </div>
-            {fxError && isAdmin && <FxRateEditor monthKey={monthKey} fxRates={fxRates} />}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Summary KPIs — group total (SAR) for All Stores, that store's own
-          native-currency numbers otherwise */}
+  const sectionContent: Record<string, ReactNode> = {
+    kpis: (
+      // Summary KPIs — group total (SAR) for All Stores, that store's own
+      // native-currency numbers otherwise
       <SummaryCards
         totalRevenue={summary.revenue}
         totalCosts={summary.costs}
@@ -1254,9 +1278,11 @@ export default function PnLDashboard() {
         unit={summary.unit}
         loading={loading}
       />
+    ),
 
-      {/* Revenue bridge + cost breakdown, side by side on wide screens — both
-          stretch to the taller card's height (whichever has more categories) */}
+    "revenue-costs": (
+      // Revenue bridge + cost breakdown, side by side on wide screens — both
+      // stretch to the taller card's height (whichever has more categories)
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch">
         <section className="flex flex-col">
           <div className="flex items-center gap-2.5 mb-3">
@@ -1294,51 +1320,52 @@ export default function PnLDashboard() {
           </div>
         </section>
       </div>
+    ),
 
-      {/* Per-store cards — All Stores only. In single-store view this would
-          just repeat the same Revenue/Costs/Net already shown in the KPI row
-          above, so it's redundant there. */}
-      {isAllStores && (
-        <section>
-          <div className="flex items-center gap-2.5 mb-3">
-            <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-primary/10 text-primary">Stores</span>
-            <h2 className="text-base font-semibold">Store P&L Cards</h2>
-            <span className="text-xs text-muted-foreground">{loading ? "Loading…" : `${displayRows.length} store${displayRows.length === 1 ? "" : "s"}`}</span>
+    "store-cards": isAllStores ? (
+      // Per-store cards — All Stores only. In single-store view this would
+      // just repeat the same Revenue/Costs/Net already shown in the KPI row
+      // above, so it's redundant there.
+      <section>
+        <div className="flex items-center gap-2.5 mb-3">
+          <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-primary/10 text-primary">Stores</span>
+          <h2 className="text-base font-semibold">Store P&L Cards</h2>
+          <span className="text-xs text-muted-foreground">{loading ? "Loading…" : `${displayRows.length} store${displayRows.length === 1 ? "" : "s"}`}</span>
+        </div>
+        {loading ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Card key={i} className="overflow-hidden">
+                <div className="h-1.5 bg-muted animate-pulse" />
+                <CardContent className="p-4 space-y-3">
+                  <Skeleton className="h-5 w-32" />
+                  <Skeleton className="h-16 w-full" />
+                  <Skeleton className="h-20 w-full" />
+                </CardContent>
+              </Card>
+            ))}
           </div>
-          {loading ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-              {Array.from({ length: 4 }).map((_, i) => (
-                <Card key={i} className="overflow-hidden">
-                  <div className="h-1.5 bg-muted animate-pulse" />
-                  <CardContent className="p-4 space-y-3">
-                    <Skeleton className="h-5 w-32" />
-                    <Skeleton className="h-16 w-full" />
-                    <Skeleton className="h-20 w-full" />
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-              {displayRows.map((r) => <PnLCard key={r.store.id} r={r} idx={activeStores.findIndex(s => s.id === r.store.id)} />)}
-            </div>
-          )}
-        </section>
-      )}
-
-      {/* Ranking — All Stores only */}
-      {isAllStores && (
-        <section>
-          <div className="flex items-center gap-2 mb-3">
-            <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-violet-500/10 text-violet-600 dark:text-violet-400">Ranking</span>
-            <h2 className="text-base font-semibold">Net Sales Ranking</h2>
-            <span className="text-xs text-muted-foreground">By Net Sales (SAR) · cost ratio = costs ÷ revenue</span>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+            {displayRows.map((r) => <PnLCard key={r.store.id} r={r} idx={activeStores.findIndex(s => s.id === r.store.id)} />)}
           </div>
-          <RankingTable rows={rows} loading={loading} />
-        </section>
-      )}
+        )}
+      </section>
+    ) : null,
 
-      {/* Sales by channel + cart abandonment, side by side on wide screens */}
+    ranking: isAllStores ? (
+      <section>
+        <div className="flex items-center gap-2 mb-3">
+          <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-violet-500/10 text-violet-600 dark:text-violet-400">Ranking</span>
+          <h2 className="text-base font-semibold">Net Sales Ranking</h2>
+          <span className="text-xs text-muted-foreground">By Net Sales (SAR) · cost ratio = costs ÷ revenue</span>
+        </div>
+        <RankingTable rows={rows} loading={loading} />
+      </section>
+    ) : null,
+
+    "channels-abandonment": (
+      // Sales by channel + cart abandonment, side by side on wide screens
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch">
         <section className="flex flex-col">
           <div className="flex items-center gap-2.5 mb-3">
@@ -1376,8 +1403,9 @@ export default function PnLDashboard() {
           </div>
         </section>
       </div>
+    ),
 
-      {/* Net Sales trend */}
+    trend: (
       <section>
         <div className="flex items-center gap-2.5 mb-3">
           <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-sky-500/10 text-sky-600 dark:text-sky-400">Trend</span>
@@ -1385,8 +1413,9 @@ export default function PnLDashboard() {
         </div>
         <TrendChart mode={isAllStores ? "indexed" : "native"} series={trendSeries} loading={trendLoading} />
       </section>
+    ),
 
-      {/* Cost entries */}
+    ledger: (
       <section>
         <div className="flex items-center gap-2 mb-3 flex-wrap">
           <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-red-500/10 text-red-600 dark:text-red-400">Ledger</span>
@@ -1452,6 +1481,52 @@ export default function PnLDashboard() {
           </CardContent>
         </Card>
       </section>
+    ),
+  };
+
+  return (
+    <div className="flex flex-col gap-5 p-4 md:p-6 max-w-[1800px] mx-auto">
+
+      {/* Page header */}
+      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <Wallet size={18} className="text-primary" />
+            <h1 className="text-xl font-bold tracking-tight">Profit &amp; Loss</h1>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Revenue live from Shopify (shipping excluded) · costs entered manually · <span className="font-medium">{monthKey}</span>
+          </p>
+        </div>
+        <div className="flex items-center gap-2 shrink-0 print:hidden">
+          <MonthPicker year={year} month={month} onChange={(y, m) => { setYear(y); setMonth(m); }} />
+          <Button size="sm" variant="outline" className="h-8 text-xs gap-1.5" onClick={() => setCustomizerOpen(true)}><LayoutGrid size={13} /> Customize Layout</Button>
+          <Button size="sm" variant="outline" className="h-8 text-xs gap-1.5" onClick={() => window.print()}><Printer size={13} /> Export PDF</Button>
+          {isAdmin && <Button size="sm" className="h-8 text-xs gap-1.5" onClick={openAdd}><Plus size={13} /> Add Cost Entry</Button>}
+        </div>
+      </div>
+
+      {/* Print header — only visible on the printed page, gives the exported PDF a proper title/date */}
+      <div className="hidden print:block text-center mb-2">
+        <h1 className="text-lg font-bold">Darussalam Group — Profit &amp; Loss</h1>
+        <p className="text-xs text-muted-foreground">{isAllStores ? "All Stores (SAR)" : selectedStore?.store_name} · {monthKey}</p>
+      </div>
+
+      {missingRates && (
+        <Card className="border-amber-300/60 dark:border-amber-800/60">
+          <CardContent className="p-3.5 space-y-3">
+            <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400 text-xs font-medium">
+              {fxError
+                ? `Auto-fetching the exchange rate for ${monthKey} failed — some stores excluded from the SAR total below.`
+                : `Fetching this month's exchange rate…`}
+              {fxError && <Button size="sm" variant="outline" className="h-6 text-xs" onClick={() => refetchFxRates()}>Retry</Button>}
+            </div>
+            {fxError && isAdmin && <FxRateEditor monthKey={monthKey} fxRates={fxRates} />}
+          </CardContent>
+        </Card>
+      )}
+
+      {sectionOrder.map(key => <Fragment key={key}>{sectionContent[key]}</Fragment>)}
 
       {isAdmin && (
         <CostEntryDialog
@@ -1476,6 +1551,32 @@ export default function PnLDashboard() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {customizerOpen && (
+        <LayoutCustomizer
+          order={sectionOrder}
+          saving={saveLayout.isPending}
+          onClose={() => setCustomizerOpen(false)}
+          onSave={async (newOrder) => {
+            try {
+              await saveLayout.mutateAsync(newOrder);
+              toast.success("Layout saved");
+              setCustomizerOpen(false);
+            } catch (e: any) {
+              toast.error(e.message ?? "Failed to save layout");
+            }
+          }}
+          onReset={async () => {
+            try {
+              await resetLayout.mutateAsync();
+              toast.success("Layout reset to default");
+              setCustomizerOpen(false);
+            } catch (e: any) {
+              toast.error(e.message ?? "Failed to reset layout");
+            }
+          }}
+        />
+      )}
     </div>
   );
 }
