@@ -3,7 +3,7 @@ import { toast } from "sonner";
 import {
   ChevronLeft, ChevronRight, Plus, Pencil, Trash2, Wallet,
   TrendingUp, TrendingDown, Receipt, Coins, ArrowUp, ArrowDown, Percent, Tag, Share2, ShoppingCart,
-  Download, Printer, LineChart as LineChartIcon, Info, LayoutGrid, RotateCcw,
+  Download, Printer, LineChart as LineChartIcon, Info, LayoutGrid, RotateCcw, Users, Globe,
 } from "lucide-react";
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend,
@@ -32,6 +32,7 @@ import {
 } from "@/hooks/usePnL";
 import { Tooltip as UiTooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePageLayout } from "@/hooks/usePageLayout";
+import { useGa4MonthlySummary, useGa4ChannelSummary } from "@/hooks/useGa4";
 
 // Reorderable page sections, saved per-account via usePageLayout("pnl", ...).
 // Keys are stable identifiers persisted to the DB — never rename a key
@@ -43,6 +44,7 @@ const PNL_SECTIONS: { key: string; label: string }[] = [
   { key: "store-cards", label: "Store P&L Cards" },
   { key: "ranking", label: "Net Sales Ranking" },
   { key: "channels-abandonment", label: "Sales by Channel & Cart Abandonment" },
+  { key: "marketing", label: "Marketing & Traffic (GA4)" },
   { key: "trend", label: "Net Sales Trend" },
   { key: "ledger", label: "Cost Entries" },
 ];
@@ -828,6 +830,142 @@ function AbandonmentByStoreCard({ rows, loading }: { rows: StoreAbandonmentRow[]
   );
 }
 
+// ─── Marketing & Traffic (GA4) — synced daily via ga4-sync edge function ───
+// GA4's most recent 1-2 days are frequently incomplete (engaged-session
+// data settles over 24-48h), so very recent days can show an anomalously
+// high bounce rate that isn't real user behavior — disclosed via footnote
+// rather than silently excluded (excluding days would be its own source of
+// error — no reliable way to know which days are "done" processing).
+
+function MarketingTrafficCard({ sessions, bounceRate, conversionRate, hasSynced, loading }: {
+  sessions: number; bounceRate: number | null; conversionRate: number | null; hasSynced: boolean; loading: boolean;
+}) {
+  return (
+    <Card className="h-full flex flex-col">
+      <CardHeader className="pb-2 pt-4 px-4">
+        <div className="flex items-center gap-2">
+          <span className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: "#ede9fe", color: "#7c3aed" }}>
+            <Users size={12} strokeWidth={2.2} />
+          </span>
+          <h3 className="text-sm font-semibold">Marketing &amp; Traffic</h3>
+          <span className="text-xs text-muted-foreground">Google Analytics</span>
+        </div>
+      </CardHeader>
+      <CardContent className="px-4 pb-4 pt-1 flex-1 flex flex-col justify-center">
+        {loading ? (
+          <div className="space-y-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}</div>
+        ) : !hasSynced ? (
+          <p className="text-sm text-muted-foreground py-4 text-center">Not synced for this store yet.</p>
+        ) : (
+          <div className="flex items-stretch">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
+                <span className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ background: "#ede9fe", color: "#7c3aed" }}>
+                  <Users size={11} strokeWidth={2.2} />
+                </span>
+                Sessions
+              </div>
+              <div className="text-lg font-bold tabular-nums tracking-tight truncate">{fmtNum(sessions)}</div>
+            </div>
+
+            <div className="flex items-center justify-center px-1.5 text-muted-foreground/30 shrink-0">
+              <ChevronRight size={16} />
+            </div>
+
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
+                <span className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ background: "#fee2e2", color: "#dc2626" }}>
+                  <Percent size={11} strokeWidth={2.2} />
+                </span>
+                Bounce Rate
+              </div>
+              <div className="text-lg font-bold tabular-nums tracking-tight truncate">{bounceRate !== null ? `${(bounceRate * 100).toFixed(1)}%` : "—"}</div>
+            </div>
+
+            <div className="flex items-center justify-center px-1.5 text-muted-foreground/30 shrink-0">
+              <ChevronRight size={16} />
+            </div>
+
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
+                <span className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ background: "#d1fae5", color: "#059669" }}>
+                  <TrendingUp size={11} strokeWidth={2.2} />
+                </span>
+                Conversion Rate
+              </div>
+              <div className="text-lg font-bold tabular-nums tracking-tight truncate text-emerald-600 dark:text-emerald-400">{conversionRate !== null ? `${conversionRate.toFixed(1)}%` : "—"}</div>
+            </div>
+          </div>
+        )}
+        {hasSynced && !loading && (
+          <p className="text-[10px] text-muted-foreground mt-3 pt-2 border-t">
+            Synced daily from Google Analytics · the most recent 1-2 days may show an inflated bounce rate — GA4's engagement data typically takes 24-48h to fully settle.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+interface ChannelTrafficRow { key: string; sessions: number; pct: number }
+
+function TrafficByChannelCard({ channels, subtitle, loading }: {
+  channels: ChannelTrafficRow[]; subtitle: string; loading: boolean;
+}) {
+  return (
+    <Card className="h-full flex flex-col">
+      <CardHeader className="pb-2 pt-4 px-4">
+        <div className="flex items-center gap-2">
+          <span className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: "#e0e7ff", color: "#4f46e5" }}>
+            <Globe size={12} strokeWidth={2.2} />
+          </span>
+          <h3 className="text-sm font-semibold">Traffic by Channel</h3>
+          <span className="text-xs text-muted-foreground">{subtitle}</span>
+        </div>
+      </CardHeader>
+      <CardContent className="px-4 pb-4 pt-1 flex-1 flex flex-col justify-center">
+        {loading ? (
+          <div className="space-y-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}</div>
+        ) : channels.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-4 text-center">Not synced for this store yet.</p>
+        ) : (
+          <div className="space-y-4">
+            {channels.map((c, idx) => {
+              const color = storeColor(idx + 4); // offset from store colors so it reads as a distinct palette
+              return (
+                <div key={c.key} className="flex items-center gap-3">
+                  <span className="w-7 h-7 rounded-md flex items-center justify-center shrink-0" style={{ background: `${color}1a`, color }}>
+                    <Globe size={13} strokeWidth={2.2} />
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between mb-1 gap-2">
+                      <span className="flex items-center gap-1.5 text-sm font-medium truncate">
+                        {c.key}
+                        {idx === 0 && (
+                          <Badge variant="outline" className="text-[9px] px-1.5 py-0 text-indigo-700 bg-indigo-50 dark:bg-indigo-950/40 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800 shrink-0">
+                            Top
+                          </Badge>
+                        )}
+                      </span>
+                      <span className="text-sm font-bold tabular-nums shrink-0">{fmtNum(c.sessions)}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                        <div className="h-full rounded-full transition-all" style={{ width: `${Math.max(2, c.pct)}%`, background: color }} />
+                      </div>
+                      <span className="text-xs text-muted-foreground tabular-nums w-9 text-right shrink-0">{c.pct.toFixed(0)}%</span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ─── Net Sales trend, last 6 months ─────────────────────────────────────────
 // All Stores: indexed to 100 at the earliest month, so stores in different
 // currencies can share one chart without needing an FX rate for every past
@@ -967,6 +1105,12 @@ export default function PnLDashboard() {
   const prevKey = prevMonthKey(year, month);
 
   const bounds = useMemo(() => getMonthBounds(year, month), [year, month]);
+  // GA4 dates are plain calendar dates in each property's own reporting
+  // timezone — no KSA UTC-shift needed, unlike bounds above.
+  const ga4StartDate = `${year}-${String(month).padStart(2, "0")}-01`;
+  const ga4EndDate = `${year}-${String(month).padStart(2, "0")}-${String(new Date(year, month, 0).getDate()).padStart(2, "0")}`;
+  const { data: ga4Rows = [], isLoading: ga4Loading } = useGa4MonthlySummary(ga4StartDate, ga4EndDate);
+  const { data: ga4ChannelRows = [], isLoading: ga4ChannelLoading } = useGa4ChannelSummary(ga4StartDate, ga4EndDate);
   const { data: salesPulse = [], isLoading: revenueLoading } = useStoreSalesPulse(bounds, true);
   const { data: entries = [], isLoading: entriesLoading } = useAllCostEntries(monthKey);
   const { data: prevEntries = [] } = useAllCostEntries(prevKey);
@@ -1189,6 +1333,53 @@ export default function PnLDashboard() {
     };
   }), [activeStores, abandonmentRows, fxRates]);
 
+  // Marketing & Traffic (GA4). All Stores combines sessions/conversions
+  // directly (no FX needed — these are counts, not currency) and computes a
+  // session-weighted average bounce rate rather than a plain average across
+  // stores, so a low-traffic store doesn't skew the combined figure as much
+  // as the store that actually drives most of the traffic.
+  const ga4ByStore = new Map(ga4Rows.map(g => [g.storeId, g]));
+  const ga4Summary = useMemo(() => {
+    if (!isAllStores) {
+      const g = selectedStoreId ? ga4ByStore.get(selectedStoreId) : undefined;
+      const conversionRate = g && g.sessions > 0 ? (g.conversions / g.sessions) * 100 : null;
+      return {
+        sessions: g?.sessions ?? 0,
+        bounceRate: g?.hasSynced ? g!.avgBounceRate : null,
+        conversionRate,
+        hasSynced: g?.hasSynced ?? false,
+      };
+    }
+    let sessions = 0, conversions = 0, weightedBounce = 0, anySynced = false;
+    for (const s of activeStores) {
+      const g = ga4ByStore.get(s.id);
+      if (!g?.hasSynced) continue;
+      anySynced = true;
+      sessions += g.sessions;
+      conversions += g.conversions;
+      weightedBounce += g.avgBounceRate * g.sessions;
+    }
+    return {
+      sessions,
+      bounceRate: sessions > 0 ? weightedBounce / sessions : null,
+      conversionRate: sessions > 0 ? (conversions / sessions) * 100 : null,
+      hasSynced: anySynced,
+    };
+  }, [isAllStores, selectedStoreId, ga4Rows, activeStores]);
+
+  const ga4ChannelBreakdown: ChannelTrafficRow[] = useMemo(() => {
+    const targetIds = isAllStores ? activeStores.map(s => s.id) : [selectedStoreId].filter(Boolean) as string[];
+    const map = new Map<string, number>();
+    for (const row of ga4ChannelRows) {
+      if (!targetIds.includes(row.storeId)) continue;
+      map.set(row.channelGroup, (map.get(row.channelGroup) ?? 0) + row.sessions);
+    }
+    const total = [...map.values()].reduce((a, b) => a + b, 0);
+    return [...map.entries()]
+      .map(([key, sessions]) => ({ key, sessions, pct: total > 0 ? (sessions / total) * 100 : 0 }))
+      .sort((a, b) => b.sessions - a.sessions);
+  }, [isAllStores, selectedStoreId, ga4ChannelRows, activeStores]);
+
   // Net Sales trend — indexed to 100 in All Stores mode (avoids needing an FX
   // rate for every past month just to draw a line chart), native currency
   // for a single store.
@@ -1400,6 +1591,42 @@ export default function PnLDashboard() {
                 loading={loading || abandonmentLoading}
               />
             )}
+          </div>
+        </section>
+      </div>
+    ),
+
+    marketing: (
+      // Marketing & Traffic (GA4) — traffic-source side, pairs with the
+      // revenue-source "Sales by Channel" card above it.
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch">
+        <section className="flex flex-col">
+          <div className="flex items-center gap-2.5 mb-3">
+            <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-violet-500/10 text-violet-600 dark:text-violet-400">Marketing</span>
+            <h2 className="text-base font-semibold">Marketing &amp; Traffic</h2>
+          </div>
+          <div className="flex-1">
+            <MarketingTrafficCard
+              sessions={ga4Summary.sessions}
+              bounceRate={ga4Summary.bounceRate}
+              conversionRate={ga4Summary.conversionRate}
+              hasSynced={ga4Summary.hasSynced}
+              loading={ga4Loading}
+            />
+          </div>
+        </section>
+
+        <section className="flex flex-col">
+          <div className="flex items-center gap-2.5 mb-3">
+            <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-indigo-500/10 text-indigo-600 dark:text-indigo-400">Traffic</span>
+            <h2 className="text-base font-semibold">Traffic by Channel</h2>
+          </div>
+          <div className="flex-1">
+            <TrafficByChannelCard
+              channels={ga4ChannelBreakdown}
+              subtitle={isAllStores ? "All stores combined" : selectedStore?.store_name ?? ""}
+              loading={ga4ChannelLoading}
+            />
           </div>
         </section>
       </div>
