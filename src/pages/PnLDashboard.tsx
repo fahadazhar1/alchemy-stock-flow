@@ -617,6 +617,12 @@ function SalesBridgeCard({ grossSales, discounts, netSales, symbol, loading }: {
 
 // ─── Cart abandonment — live from Shopify's /checkouts.json, synced every ──
 // 15 min by the existing shopify-sync edge function. Not an approximation.
+// Single store: the 3-stat flow below. All Stores: a per-store breakdown
+// instead of one blended number — abandonment rate varies hugely by store
+// (e.g. 58% vs 23%), so a single combined figure would hide which store
+// actually needs attention.
+
+const ABANDONMENT_FOOTNOTE = "Live from Shopify's checkout data, synced every 15 minutes · online-store channel only (excludes POS & draft orders) · counts checkouts not yet recovered.";
 
 function AbandonmentCard({ abandonedCount, revenueAtRisk, abandonmentRate, symbol, hasSynced, loading }: {
   abandonedCount: number; revenueAtRisk: number; abandonmentRate: number | null;
@@ -679,9 +685,82 @@ function AbandonmentCard({ abandonedCount, revenueAtRisk, abandonmentRate, symbo
           </div>
         )}
         {hasSynced && !loading && (
-          <p className="text-[10px] text-muted-foreground mt-3 pt-2 border-t">
-            Live from Shopify's checkout data, synced every 15 minutes · online-store channel only (excludes POS &amp; draft orders) · counts checkouts not yet recovered.
-          </p>
+          <p className="text-[10px] text-muted-foreground mt-3 pt-2 border-t">{ABANDONMENT_FOOTNOTE}</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+interface StoreAbandonmentRow {
+  storeId: string; storeName: string; color: string;
+  abandonedCount: number; revenueAtRisk: number; currencySymbol: string;
+  rate: number | null; hasSynced: boolean; sarRisk: number;
+}
+
+function AbandonmentByStoreCard({ rows, loading }: { rows: StoreAbandonmentRow[]; loading: boolean }) {
+  const synced = rows.filter(r => r.hasSynced);
+  const totalSar = synced.reduce((s, r) => s + r.sarRisk, 0);
+  const sorted = [...synced].sort((a, b) => b.sarRisk - a.sarRisk);
+  const unsynced = rows.filter(r => !r.hasSynced);
+
+  return (
+    <Card className="h-full flex flex-col">
+      <CardHeader className="pb-2 pt-4 px-4">
+        <div className="flex items-center gap-2">
+          <span className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: "#ffe4e6", color: "#e11d48" }}>
+            <ShoppingCart size={12} strokeWidth={2.2} />
+          </span>
+          <h3 className="text-sm font-semibold">Cart Abandonment</h3>
+          <span className="text-xs text-muted-foreground">By store</span>
+        </div>
+      </CardHeader>
+      <CardContent className="px-4 pb-4 pt-1 flex-1 flex flex-col justify-center">
+        {loading ? (
+          <div className="space-y-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}</div>
+        ) : sorted.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-4 text-center">Not synced for any store yet.</p>
+        ) : (
+          <div className="space-y-4">
+            {sorted.map((r, idx) => {
+              const pct = totalSar > 0 ? (r.sarRisk / totalSar) * 100 : 0;
+              return (
+                <div key={r.storeId} className="flex items-center gap-3">
+                  <span className="w-7 h-7 rounded-md flex items-center justify-center shrink-0" style={{ background: `${r.color}1a`, color: r.color }}>
+                    <ShoppingCart size={13} strokeWidth={2.2} />
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between mb-1 gap-2">
+                      <span className="flex items-center gap-1.5 text-sm font-medium truncate">
+                        {r.storeName}
+                        {idx === 0 && (
+                          <Badge variant="outline" className="text-[9px] px-1.5 py-0 text-rose-700 bg-rose-50 dark:bg-rose-950/40 dark:text-rose-300 border-rose-200 dark:border-rose-800 shrink-0">
+                            Highest Risk
+                          </Badge>
+                        )}
+                      </span>
+                      <span className="text-sm font-bold tabular-nums shrink-0 text-red-600 dark:text-red-400">{fmtC(r.revenueAtRisk, r.currencySymbol)}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                        <div className="h-full rounded-full transition-all" style={{ width: `${Math.max(2, pct)}%`, background: r.color }} />
+                      </div>
+                      <span className="text-xs text-muted-foreground tabular-nums w-16 text-right shrink-0">{r.abandonedCount} abandoned</span>
+                      <span className="text-[10px] text-muted-foreground w-10 text-right shrink-0">{r.rate !== null ? `${r.rate.toFixed(0)}%` : "—"}</span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+            {unsynced.length > 0 && (
+              <p className="text-[11px] text-muted-foreground pt-1">
+                Not synced yet: {unsynced.map(r => r.storeName).join(", ")}.
+              </p>
+            )}
+          </div>
+        )}
+        {sorted.length > 0 && !loading && (
+          <p className="text-[10px] text-muted-foreground mt-3 pt-2 border-t">{ABANDONMENT_FOOTNOTE}</p>
         )}
       </CardContent>
     </Card>
@@ -1029,6 +1108,24 @@ export default function PnLDashboard() {
     };
   }, [isAllStores, selectedStoreId, selectedStore, abandonmentRows, activeStores, fxRates]);
 
+  // Per-store abandonment breakdown for All Stores view — a single blended
+  // number would hide which store actually needs attention (rates vary a
+  // lot store to store, e.g. 58% vs 23%).
+  const storeAbandonmentRows: StoreAbandonmentRow[] = useMemo(() => activeStores.map((s, idx) => {
+    const a = abandonmentByStore.get(s.id);
+    const abandoned = a?.abandonedCount ?? 0;
+    const completed = a?.completedOnlineOrders ?? 0;
+    const total = abandoned + completed;
+    const revenueAtRisk = a?.revenueAtRisk ?? 0;
+    const sarRisk = currencyToSar(revenueAtRisk, s.currency ?? "GBP", fxRates) ?? 0;
+    return {
+      storeId: s.id, storeName: s.store_name, color: storeColor(idx),
+      abandonedCount: abandoned, revenueAtRisk, currencySymbol: s.currency_symbol ?? "",
+      rate: total > 0 ? (abandoned / total) * 100 : null,
+      hasSynced: a?.hasSynced ?? false, sarRisk,
+    };
+  }), [activeStores, abandonmentRows, fxRates]);
+
   // Net Sales trend — indexed to 100 in All Stores mode (avoids needing an FX
   // rate for every past month just to draw a line chart), native currency
   // for a single store.
@@ -1218,14 +1315,18 @@ export default function PnLDashboard() {
           <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-rose-500/10 text-rose-600 dark:text-rose-400">Risk</span>
           <h2 className="text-base font-semibold">Cart Abandonment</h2>
         </div>
-        <AbandonmentCard
-          abandonedCount={abandonmentSummary.abandonedCount}
-          revenueAtRisk={abandonmentSummary.revenueAtRisk}
-          abandonmentRate={abandonmentSummary.abandonmentRate}
-          symbol={abandonmentSummary.symbol}
-          hasSynced={abandonmentSummary.hasSynced}
-          loading={loading || abandonmentLoading}
-        />
+        {isAllStores ? (
+          <AbandonmentByStoreCard rows={storeAbandonmentRows} loading={loading || abandonmentLoading} />
+        ) : (
+          <AbandonmentCard
+            abandonedCount={abandonmentSummary.abandonedCount}
+            revenueAtRisk={abandonmentSummary.revenueAtRisk}
+            abandonmentRate={abandonmentSummary.abandonmentRate}
+            symbol={abandonmentSummary.symbol}
+            hasSynced={abandonmentSummary.hasSynced}
+            loading={loading || abandonmentLoading}
+          />
+        )}
       </section>
 
       {/* Net Sales trend */}
