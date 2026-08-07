@@ -1295,6 +1295,49 @@ export default function PnLDashboard() {
         </section>
       </div>
 
+      {/* Per-store cards — All Stores only. In single-store view this would
+          just repeat the same Revenue/Costs/Net already shown in the KPI row
+          above, so it's redundant there. */}
+      {isAllStores && (
+        <section>
+          <div className="flex items-center gap-2.5 mb-3">
+            <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-primary/10 text-primary">Stores</span>
+            <h2 className="text-base font-semibold">Store P&L Cards</h2>
+            <span className="text-xs text-muted-foreground">{loading ? "Loading…" : `${displayRows.length} store${displayRows.length === 1 ? "" : "s"}`}</span>
+          </div>
+          {loading ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <Card key={i} className="overflow-hidden">
+                  <div className="h-1.5 bg-muted animate-pulse" />
+                  <CardContent className="p-4 space-y-3">
+                    <Skeleton className="h-5 w-32" />
+                    <Skeleton className="h-16 w-full" />
+                    <Skeleton className="h-20 w-full" />
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+              {displayRows.map((r) => <PnLCard key={r.store.id} r={r} idx={activeStores.findIndex(s => s.id === r.store.id)} />)}
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* Ranking — All Stores only */}
+      {isAllStores && (
+        <section>
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-violet-500/10 text-violet-600 dark:text-violet-400">Ranking</span>
+            <h2 className="text-base font-semibold">Net Sales Ranking</h2>
+            <span className="text-xs text-muted-foreground">By Net Sales (SAR) · cost ratio = costs ÷ revenue</span>
+          </div>
+          <RankingTable rows={rows} loading={loading} />
+        </section>
+      )}
+
       {/* Sales by channel + cart abandonment, side by side on wide screens */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch">
         <section className="flex flex-col">
@@ -1342,49 +1385,6 @@ export default function PnLDashboard() {
         </div>
         <TrendChart mode={isAllStores ? "indexed" : "native"} series={trendSeries} loading={trendLoading} />
       </section>
-
-      {/* Per-store cards — All Stores only. In single-store view this would
-          just repeat the same Revenue/Costs/Net already shown in the KPI row
-          above, so it's redundant there. */}
-      {isAllStores && (
-        <section>
-          <div className="flex items-center gap-2.5 mb-3">
-            <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-primary/10 text-primary">Stores</span>
-            <h2 className="text-base font-semibold">Store P&L Cards</h2>
-            <span className="text-xs text-muted-foreground">{loading ? "Loading…" : `${displayRows.length} store${displayRows.length === 1 ? "" : "s"}`}</span>
-          </div>
-          {loading ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-              {Array.from({ length: 4 }).map((_, i) => (
-                <Card key={i} className="overflow-hidden">
-                  <div className="h-1.5 bg-muted animate-pulse" />
-                  <CardContent className="p-4 space-y-3">
-                    <Skeleton className="h-5 w-32" />
-                    <Skeleton className="h-16 w-full" />
-                    <Skeleton className="h-20 w-full" />
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-              {displayRows.map((r) => <PnLCard key={r.store.id} r={r} idx={activeStores.findIndex(s => s.id === r.store.id)} />)}
-            </div>
-          )}
-        </section>
-      )}
-
-      {/* Ranking — All Stores only */}
-      {isAllStores && (
-        <section>
-          <div className="flex items-center gap-2 mb-3">
-            <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-violet-500/10 text-violet-600 dark:text-violet-400">Ranking</span>
-            <h2 className="text-base font-semibold">Net Sales Ranking</h2>
-            <span className="text-xs text-muted-foreground">By Net Sales (SAR) · cost ratio = costs ÷ revenue</span>
-          </div>
-          <RankingTable rows={rows} loading={loading} />
-        </section>
-      )}
 
       {/* Cost entries */}
       <section>
