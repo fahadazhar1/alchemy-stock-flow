@@ -745,8 +745,8 @@ function AbandonmentByStoreCard({ rows, loading }: { rows: StoreAbandonmentRow[]
                       <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
                         <div className="h-full rounded-full transition-all" style={{ width: `${Math.max(2, pct)}%`, background: r.color }} />
                       </div>
-                      <span className="text-xs text-muted-foreground tabular-nums w-16 text-right shrink-0">{r.abandonedCount} abandoned</span>
-                      <span className="text-[10px] text-muted-foreground w-10 text-right shrink-0">{r.rate !== null ? `${r.rate.toFixed(0)}%` : "—"}</span>
+                      <span className="text-xs text-muted-foreground tabular-nums w-9 text-right shrink-0">{r.rate !== null ? `${r.rate.toFixed(0)}%` : "—"}</span>
+                      <span className="text-[10px] text-muted-foreground shrink-0 whitespace-nowrap">{r.abandonedCount} abandoned</span>
                     </div>
                   </div>
                 </div>
