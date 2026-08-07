@@ -31,6 +31,15 @@ import {
 const STORE_COLORS = ["#6366f1", "#f59e0b", "#06b6d4", "#10b981", "#f43f5e", "#a855f7", "#3b82f6", "#84cc16"];
 function storeColor(idx: number): string { return STORE_COLORS[idx % STORE_COLORS.length]; }
 
+const CATEGORY_COLORS: Record<string, string> = {
+  ad_spend: "#6366f1",
+  shopify_plan: "#06b6d4",
+  shopify_apps: "#10b981",
+  marketplace_fee: "#f59e0b",
+  other: "#94a3b8",
+};
+function categoryColor(cat: string): string { return CATEGORY_COLORS[cat] ?? "#94a3b8"; }
+
 function fmtC(value: number, sym: string): string {
   const sign = value < 0 ? "-" : "";
   return `${sign}${sym}${Math.abs(value).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -350,6 +359,62 @@ function PnLCard({ r, idx }: { r: StoreRow; idx: number }) {
   );
 }
 
+// ─── Cost breakdown by category — combined across every store, one card ────
+
+function CategoryBreakdownCard({ breakdown, loading }: {
+  breakdown: { category: string; amount: number; pct: number }[];
+  loading: boolean;
+}) {
+  return (
+    <Card>
+      <CardHeader className="pb-2 pt-4 px-4">
+        <div className="flex items-center gap-2">
+          <Receipt size={14} className="text-muted-foreground" />
+          <h3 className="text-sm font-semibold">Cost Breakdown by Category</h3>
+          <span className="text-xs text-muted-foreground">All stores combined, converted to SAR</span>
+        </div>
+      </CardHeader>
+      <CardContent className="px-4 pb-4 pt-1">
+        {loading ? (
+          <div className="space-y-3">
+            {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}
+          </div>
+        ) : breakdown.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-4 text-center">No costs entered this period.</p>
+        ) : (
+          <div className="space-y-3">
+            {breakdown.map((b, idx) => {
+              const color = categoryColor(b.category);
+              return (
+                <div key={b.category}>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="flex items-center gap-1.5 text-sm font-medium">
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
+                      {categoryLabel(b.category)}
+                      {idx === 0 && (
+                        <Badge variant="outline" className="text-[9px] px-1.5 py-0 text-amber-700 bg-amber-50 dark:bg-amber-950/40 dark:text-amber-300 border-amber-200 dark:border-amber-800">
+                          Biggest
+                        </Badge>
+                      )}
+                    </span>
+                    <span className="text-sm font-bold tabular-nums">SAR {fmtNum(b.amount)}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
+                      <div className="h-full rounded-full transition-all" style={{ width: `${Math.max(2, b.pct)}%`, background: color }} />
+                    </div>
+                    <span className="text-xs text-muted-foreground tabular-nums w-10 text-right">{b.pct.toFixed(0)}%</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ─── Store ranking by Net Sales (SAR) ───────────────────────────────────────
 
 function RankingTable({ rows, loading }: { rows: StoreRow[]; loading: boolean }) {
@@ -483,21 +548,24 @@ export default function PnLDashboard() {
   const costsDelta = pctDelta(grandTotal.costs, grandTotal.prevCosts);
   const netDelta = pctDelta(grandTotal.revenue - grandTotal.costs, grandTotal.prevNet);
 
-  const biggestCostLabel = useMemo(() => {
+  // Category totals, converted to SAR and combined across every store — the
+  // single source both the "Biggest Cost" KPI and the breakdown card read from.
+  const categoryBreakdown = useMemo(() => {
     const byCategory = new Map<string, number>();
     for (const r of rows) {
-      const sar = currencyToSar(r.costs, r.store.currency ?? "GBP", fxRates);
-      if (sar === null) continue;
       for (const e of r.entries) {
         const amtSar = currencyToSar(Number(e.amount), r.store.currency ?? "GBP", fxRates);
         if (amtSar === null) continue;
         byCategory.set(e.category, (byCategory.get(e.category) ?? 0) + amtSar);
       }
     }
-    if (byCategory.size === 0) return "None yet";
-    const [top] = [...byCategory.entries()].sort((a, b) => b[1] - a[1]);
-    return categoryLabel(top[0]);
+    const total = [...byCategory.values()].reduce((a, b) => a + b, 0);
+    return [...byCategory.entries()]
+      .map(([category, amount]) => ({ category, amount, pct: total > 0 ? (amount / total) * 100 : 0 }))
+      .sort((a, b) => b.amount - a.amount);
   }, [rows, fxRates]);
+
+  const biggestCostLabel = categoryBreakdown.length === 0 ? "None yet" : categoryLabel(categoryBreakdown[0].category);
 
   const displayRows = isAllStores ? rows : rows.filter(r => r.store.id === selectedStoreId);
   const displayEntries = !isAllStores && selectedStoreId ? entries.filter(e => e.store_id === selectedStoreId) : entries;
@@ -562,6 +630,17 @@ export default function PnLDashboard() {
         biggestCostLabel={biggestCostLabel}
         loading={loading}
       />
+
+      {/* Cost breakdown by category — All Stores only, this is inherently a combined view */}
+      {isAllStores && (
+        <section>
+          <div className="flex items-center gap-2.5 mb-3">
+            <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400">Costs</span>
+            <h2 className="text-base font-semibold">Where the Money Goes</h2>
+          </div>
+          <CategoryBreakdownCard breakdown={categoryBreakdown} loading={loading} />
+        </section>
+      )}
 
       {/* Per-store cards */}
       <section>
