@@ -248,15 +248,15 @@ function FxRateEditor({ monthKey, fxRates }: { monthKey: string; fxRates: Record
 
 // ─── Global summary KPI row ─────────────────────────────────────────────────
 
-function SummaryCards({ totalRevenue, totalCosts, netSales, revenueDelta, costsDelta, netDelta, biggestCostLabel, loading }: {
+function SummaryCards({ totalRevenue, totalCosts, netSales, revenueDelta, costsDelta, netDelta, biggestCostLabel, symbol, unit, loading }: {
   totalRevenue: number; totalCosts: number; netSales: number;
   revenueDelta: number | null; costsDelta: number | null; netDelta: number | null;
-  biggestCostLabel: string; loading: boolean;
+  biggestCostLabel: string; symbol: string; unit: string; loading: boolean;
 }) {
   const cards = [
-    { label: "Total Revenue (SAR)", value: `SAR ${fmtNum(totalRevenue)}`, icon: TrendingUp, color: "#6366f1", bg: "#eef2ff", delta: revenueDelta, inverse: false, sub: "vs last month" },
-    { label: "Total Costs (SAR)", value: `−SAR ${fmtNum(totalCosts)}`, icon: Receipt, color: "#dc2626", bg: "#fee2e2", delta: costsDelta, inverse: true, sub: "vs last month" },
-    { label: "Net Sales (SAR)", value: `SAR ${fmtNum(netSales)}`, icon: Coins, color: "#059669", bg: "#d1fae5", delta: netDelta, inverse: false, sub: "vs last month" },
+    { label: `Total Revenue ${unit}`.trim(), value: `${symbol}${fmtNum(totalRevenue)}`, icon: TrendingUp, color: "#6366f1", bg: "#eef2ff", delta: revenueDelta, inverse: false, sub: "vs last month" },
+    { label: `Total Costs ${unit}`.trim(), value: `−${symbol}${fmtNum(totalCosts)}`, icon: Receipt, color: "#dc2626", bg: "#fee2e2", delta: costsDelta, inverse: true, sub: "vs last month" },
+    { label: `Net Sales ${unit}`.trim(), value: `${symbol}${fmtNum(netSales)}`, icon: Coins, color: "#059669", bg: "#d1fae5", delta: netDelta, inverse: false, sub: "vs last month" },
     { label: "Biggest Cost", value: biggestCostLabel, icon: TrendingDown, color: "#d97706", bg: "#fef3c7", delta: null as number | null, inverse: false, sub: "this month" },
   ];
   return (
@@ -288,10 +288,24 @@ function SummaryCards({ totalRevenue, totalCosts, netSales, revenueDelta, costsD
 
 interface StoreRow {
   store: { id: string; store_name: string; currency: string | null; currency_symbol: string | null };
-  revenue: number; costs: number; net: number; revenueDelta: number | null;
+  revenue: number; costs: number; net: number;
+  revenueDelta: number | null; costsDelta: number | null; netDelta: number | null;
   revenueSar: number | null; costsSar: number | null; netSar: number | null;
   prevRevenueSar: number | null; prevCostsSar: number | null; prevNetSar: number | null;
   entries: CostEntry[];
+}
+
+function pctDelta(cur: number, prev: number): number | null {
+  return prev !== 0 ? Math.round(((cur - prev) / Math.abs(prev)) * 100) : null;
+}
+
+/** A store's own biggest cost category, in its native currency — no FX needed. */
+function biggestCategoryFor(entries: CostEntry[]): string {
+  const byCategory = new Map<string, number>();
+  for (const e of entries) byCategory.set(e.category, (byCategory.get(e.category) ?? 0) + Number(e.amount));
+  if (byCategory.size === 0) return "None yet";
+  const [top] = [...byCategory.entries()].sort((a, b) => b[1] - a[1]);
+  return categoryLabel(top[0]);
 }
 
 function PnLCard({ r, idx }: { r: StoreRow; idx: number }) {
@@ -361,8 +375,9 @@ function PnLCard({ r, idx }: { r: StoreRow; idx: number }) {
 
 // ─── Cost breakdown by category — combined across every store, one card ────
 
-function CategoryBreakdownCard({ breakdown, loading }: {
+function CategoryBreakdownCard({ breakdown, excludedStoreNames, loading }: {
   breakdown: { category: string; amount: number; pct: number }[];
+  excludedStoreNames: string[];
   loading: boolean;
 }) {
   return (
@@ -375,6 +390,11 @@ function CategoryBreakdownCard({ breakdown, loading }: {
         </div>
       </CardHeader>
       <CardContent className="px-4 pb-4 pt-1">
+        {!loading && excludedStoreNames.length > 0 && (
+          <p className="text-[11px] text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-md px-2.5 py-1.5 mb-3">
+            Missing exchange rate — excludes {excludedStoreNames.join(", ")}. Totals below understate the true cost.
+          </p>
+        )}
         {loading ? (
           <div className="space-y-3">
             {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}
@@ -526,10 +546,20 @@ export default function PnLDashboard() {
     const prevCostsSar = currencyToSar(prevCosts, s.currency ?? "GBP", fxRates);
     const prevNetSar = currencyToSar(prevNet, s.currency ?? "GBP", fxRates);
     const netSar = revenueSar !== null && costsSar !== null ? revenueSar - costsSar : null;
-    return { store: s, revenue, costs, net, revenueDelta: pulse?.revenueDelta ?? null, revenueSar, costsSar, prevRevenueSar, prevCostsSar, netSar, prevNetSar, entries: storeEntries };
+    // Percentage deltas computed natively (same currency on both sides) — accurate
+    // for a single store regardless of whether that month's FX rate is on record.
+    return {
+      store: s, revenue, costs, net,
+      revenueDelta: pulse?.revenueDelta ?? null,
+      costsDelta: pctDelta(costs, prevCosts),
+      netDelta: pctDelta(net, prevNet),
+      revenueSar, costsSar, prevRevenueSar, prevCostsSar, netSar, prevNetSar,
+      entries: storeEntries,
+    };
   }), [activeStores, salesPulse, entries, prevEntries, fxRates]);
 
   const missingRates = rows.some(r => r.netSar === null);
+  const excludedStoreNames = rows.filter(r => r.netSar === null).map(r => r.store.store_name);
 
   const grandTotal = rows.reduce((acc, r) => {
     if (r.revenueSar === null || r.costsSar === null) return acc;
@@ -542,12 +572,9 @@ export default function PnLDashboard() {
     };
   }, { revenue: 0, costs: 0, prevRevenue: 0, prevCosts: 0, prevNet: 0 });
 
-  const pctDelta = (cur: number, prev: number): number | null =>
-    prev !== 0 ? Math.round(((cur - prev) / Math.abs(prev)) * 100) : null;
-
-  const revenueDelta = pctDelta(grandTotal.revenue, grandTotal.prevRevenue);
-  const costsDelta = pctDelta(grandTotal.costs, grandTotal.prevCosts);
-  const netDelta = pctDelta(grandTotal.revenue - grandTotal.costs, grandTotal.prevNet);
+  const groupRevenueDelta = pctDelta(grandTotal.revenue, grandTotal.prevRevenue);
+  const groupCostsDelta = pctDelta(grandTotal.costs, grandTotal.prevCosts);
+  const groupNetDelta = pctDelta(grandTotal.revenue - grandTotal.costs, grandTotal.prevNet);
 
   // Category totals, converted to SAR and combined across every store — the
   // single source both the "Biggest Cost" KPI and the breakdown card read from.
@@ -566,9 +593,25 @@ export default function PnLDashboard() {
       .sort((a, b) => b.amount - a.amount);
   }, [rows, fxRates]);
 
-  const biggestCostLabel = categoryBreakdown.length === 0 ? "None yet" : categoryLabel(categoryBreakdown[0].category);
+  const groupBiggestCostLabel = categoryBreakdown.length === 0 ? "None yet" : categoryLabel(categoryBreakdown[0].category);
 
   const displayRows = isAllStores ? rows : rows.filter(r => r.store.id === selectedStoreId);
+
+  // KPI row reflects whatever scope is selected: the group total in SAR for All
+  // Stores, or that one store's own native-currency numbers — not the group
+  // total again, which is what was showing regardless of the store picker before.
+  const summary = isAllStores
+    ? {
+        revenue: grandTotal.revenue, costs: grandTotal.costs, net: grandTotal.revenue - grandTotal.costs,
+        revenueDelta: groupRevenueDelta, costsDelta: groupCostsDelta, netDelta: groupNetDelta,
+        symbol: "SAR ", unit: "(SAR)", biggestCostLabel: groupBiggestCostLabel,
+      }
+    : {
+        revenue: displayRows[0]?.revenue ?? 0, costs: displayRows[0]?.costs ?? 0, net: displayRows[0]?.net ?? 0,
+        revenueDelta: displayRows[0]?.revenueDelta ?? null, costsDelta: displayRows[0]?.costsDelta ?? null, netDelta: displayRows[0]?.netDelta ?? null,
+        symbol: selectedStore?.currency_symbol ?? "", unit: "",
+        biggestCostLabel: biggestCategoryFor(displayRows[0]?.entries ?? []),
+      };
   const displayEntries = !isAllStores && selectedStoreId
     ? entries.filter(e => e.store_id === selectedStoreId)
     : ledgerStoreFilter === "all" ? entries : entries.filter(e => e.store_id === ledgerStoreFilter);
@@ -623,15 +666,18 @@ export default function PnLDashboard() {
         </Card>
       )}
 
-      {/* Summary KPIs */}
+      {/* Summary KPIs — group total (SAR) for All Stores, that store's own
+          native-currency numbers otherwise */}
       <SummaryCards
-        totalRevenue={grandTotal.revenue}
-        totalCosts={grandTotal.costs}
-        netSales={grandTotal.revenue - grandTotal.costs}
-        revenueDelta={revenueDelta}
-        costsDelta={costsDelta}
-        netDelta={netDelta}
-        biggestCostLabel={biggestCostLabel}
+        totalRevenue={summary.revenue}
+        totalCosts={summary.costs}
+        netSales={summary.net}
+        revenueDelta={summary.revenueDelta}
+        costsDelta={summary.costsDelta}
+        netDelta={summary.netDelta}
+        biggestCostLabel={summary.biggestCostLabel}
+        symbol={summary.symbol}
+        unit={summary.unit}
         loading={loading}
       />
 
@@ -642,7 +688,7 @@ export default function PnLDashboard() {
             <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400">Costs</span>
             <h2 className="text-base font-semibold">Where the Money Goes</h2>
           </div>
-          <CategoryBreakdownCard breakdown={categoryBreakdown} loading={loading} />
+          <CategoryBreakdownCard breakdown={categoryBreakdown} excludedStoreNames={excludedStoreNames} loading={loading} />
         </section>
       )}
 
