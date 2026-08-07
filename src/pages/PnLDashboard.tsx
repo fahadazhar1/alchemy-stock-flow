@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   ChevronLeft, ChevronRight, Plus, Pencil, Trash2, Wallet,
-  TrendingUp, TrendingDown, Receipt, Coins, ArrowUp, ArrowDown, Percent, Tag,
+  TrendingUp, TrendingDown, Receipt, Coins, ArrowUp, ArrowDown, Percent, Tag, Share2,
   Download, Printer, LineChart as LineChartIcon, Info,
 } from "lucide-react";
 import {
@@ -23,7 +23,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useStore } from "@/contexts/StoreContext";
 import { useRole } from "@/hooks/useRole";
-import { useStoreSalesPulse } from "@/hooks/useStoreSalesPulse";
+import { useStoreSalesPulse, type ChannelSalesStat } from "@/hooks/useStoreSalesPulse";
 import {
   getMonthBounds, useAllCostEntries, useCostEntryMutations, useEnsureFxRates, useUpsertFxRate,
   useSalesBridge, useMonthlyNetSalesTrend, currencyToSar,
@@ -316,6 +316,7 @@ interface StoreRow {
   revenueSar: number | null; costsSar: number | null; netSar: number | null;
   prevRevenueSar: number | null; prevCostsSar: number | null; prevNetSar: number | null;
   entries: CostEntry[];
+  channels: ChannelSalesStat[];
 }
 
 function pctDelta(cur: number, prev: number): number | null {
@@ -459,6 +460,73 @@ function CategoryBreakdownCard({ breakdown, excludedStoreNames, symbol, subtitle
                 </div>
               );
             })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─── Sales by channel — combined across every store when All Stores selected ──
+// Reuses the same per-store `channels` breakdown already computed by
+// useStoreSalesPulse for the Revenue KPI (current_total_price, KSA-shifted,
+// current vs previous period) — no new RPC or fetch needed.
+
+interface ChannelRow { key: string; name: string; color: string; amount: number; orders: number; pct: number }
+
+function ChannelBreakdownCard({ channels, symbol, subtitle, loading }: {
+  channels: ChannelRow[];
+  symbol: string;
+  subtitle: string;
+  loading: boolean;
+}) {
+  return (
+    <Card className="h-full flex flex-col">
+      <CardHeader className="pb-2 pt-4 px-4">
+        <div className="flex items-center gap-2">
+          <span className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: "#e0f2fe", color: "#0284c7" }}>
+            <Share2 size={12} strokeWidth={2.2} />
+          </span>
+          <h3 className="text-sm font-semibold">Sales by Channel</h3>
+          <span className="text-xs text-muted-foreground">{subtitle}</span>
+        </div>
+      </CardHeader>
+      <CardContent className="px-4 pb-4 pt-1 flex-1 flex flex-col justify-center">
+        {loading ? (
+          <div className="space-y-3">
+            {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}
+          </div>
+        ) : channels.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-4 text-center">No sales this period.</p>
+        ) : (
+          <div className="space-y-4">
+            {channels.map((c, idx) => (
+              <div key={c.key} className="flex items-center gap-3">
+                <span className="w-7 h-7 rounded-md flex items-center justify-center shrink-0" style={{ background: `${c.color}1a`, color: c.color }}>
+                  <Share2 size={13} strokeWidth={2.2} />
+                </span>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between mb-1 gap-2">
+                    <span className="flex items-center gap-1.5 text-sm font-medium truncate">
+                      {c.name}
+                      {idx === 0 && (
+                        <Badge variant="outline" className="text-[9px] px-1.5 py-0 text-sky-700 bg-sky-50 dark:bg-sky-950/40 dark:text-sky-300 border-sky-200 dark:border-sky-800 shrink-0">
+                          Top
+                        </Badge>
+                      )}
+                    </span>
+                    <span className="text-sm font-bold tabular-nums shrink-0">{symbol}{fmtNum(c.amount)}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                      <div className="h-full rounded-full transition-all" style={{ width: `${Math.max(2, c.pct)}%`, background: c.color }} />
+                    </div>
+                    <span className="text-xs text-muted-foreground tabular-nums w-9 text-right shrink-0">{c.pct.toFixed(0)}%</span>
+                    <span className="text-[10px] text-muted-foreground w-16 text-right shrink-0">{c.orders} order{c.orders === 1 ? "" : "s"}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </CardContent>
@@ -734,6 +802,7 @@ export default function PnLDashboard() {
       netDelta: pctDelta(net, prevNet),
       revenueSar, costsSar, prevRevenueSar, prevCostsSar, netSar, prevNetSar,
       entries: storeEntries,
+      channels: pulse?.channels ?? [],
     };
   }), [activeStores, salesPulse, entries, prevEntries, fxRates]);
 
@@ -805,6 +874,28 @@ export default function PnLDashboard() {
       .map(([category, amount]) => ({ category, amount, pct: total > 0 ? (amount / total) * 100 : 0 }))
       .sort((a, b) => b.amount - a.amount);
   }, [isAllStores, categoryBreakdown, displayRows]);
+
+  // Sales by channel: SAR-combined across every store's channels for All
+  // Stores (converted per store, same missing-rate rule as everything else
+  // on this page), that one store's own native-currency channels otherwise.
+  const displayChannelBreakdown = useMemo(() => {
+    const targetRows = isAllStores ? rows : displayRows;
+    const map = new Map<string, { name: string; color: string; amount: number; orders: number }>();
+    for (const r of targetRows) {
+      for (const c of r.channels) {
+        const amt = isAllStores ? currencyToSar(c.revenue, r.store.currency ?? "GBP", fxRates) : c.revenue;
+        if (amt === null) continue;
+        if (!map.has(c.key)) map.set(c.key, { name: c.name, color: c.color, amount: 0, orders: 0 });
+        const entry = map.get(c.key)!;
+        entry.amount += amt;
+        entry.orders += c.orders;
+      }
+    }
+    const total = [...map.values()].reduce((a, b) => a + b.amount, 0);
+    return [...map.entries()]
+      .map(([key, v]) => ({ key, name: v.name, color: v.color, amount: v.amount, orders: v.orders, pct: total > 0 ? (v.amount / total) * 100 : 0 }))
+      .sort((a, b) => b.amount - a.amount);
+  }, [isAllStores, rows, displayRows, fxRates]);
 
   // Sales bridge summary, same scope rule as the KPI row above.
   const bridgeByStore = new Map(bridgeRows.map(b => [b.storeId, b]));
@@ -993,6 +1084,20 @@ export default function PnLDashboard() {
           </div>
         </section>
       </div>
+
+      {/* Sales by channel */}
+      <section>
+        <div className="flex items-center gap-2.5 mb-3">
+          <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-cyan-500/10 text-cyan-600 dark:text-cyan-400">Channels</span>
+          <h2 className="text-base font-semibold">Sales by Channel</h2>
+        </div>
+        <ChannelBreakdownCard
+          channels={displayChannelBreakdown}
+          symbol={isAllStores ? "SAR " : selectedStore?.currency_symbol ?? ""}
+          subtitle={isAllStores ? "All stores combined, converted to SAR" : selectedStore?.store_name ?? ""}
+          loading={loading}
+        />
+      </section>
 
       {/* Net Sales trend */}
       <section>
