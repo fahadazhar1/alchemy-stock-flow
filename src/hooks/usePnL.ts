@@ -206,3 +206,54 @@ export function currencyToSar(amount: number, currency: string, fxRates: Record<
   const rate = fxRates[currency];
   return rate ? amount * rate : null;
 }
+
+// ─── Sales bridge (Gross -> Discounts -> Net) ──────────────────────────────
+// Gross Sales is DERIVED as net_sales + discounts (not summed independently)
+// so it always reconciles exactly to the same Net Sales figure shown
+// everywhere else on the page. Returns is not included — the orders table has
+// no refund/return field synced (see the migration comment); only the
+// standalone monthly PDF report scripts have that, pulled live from Shopify.
+export interface SalesBridgeRow { storeId: string; netSales: number; discounts: number; grossSales: number }
+
+export function useSalesBridge(bounds: DateBounds) {
+  return useQuery<SalesBridgeRow[]>({
+    queryKey: ["sales-bridge", bounds.cacheKey],
+    staleTime: 3 * 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("get_store_sales_bridge" as any, {
+        p_start_iso: bounds.startISO,
+        p_end_iso: bounds.endISO,
+      } as any);
+      if (error) throw error;
+      return ((data ?? []) as any[]).map(r => ({
+        storeId: r.store_id,
+        netSales: Number(r.net_sales),
+        discounts: Number(r.discounts),
+        grossSales: Number(r.net_sales) + Number(r.discounts),
+      }));
+    },
+  });
+}
+
+// ─── Monthly Net Sales trend ────────────────────────────────────────────────
+
+export interface MonthlyTrendPoint { storeId: string; monthStart: string; netSales: number }
+
+export function useMonthlyNetSalesTrend(startISO: string, endISO: string) {
+  return useQuery<MonthlyTrendPoint[]>({
+    queryKey: ["monthly-net-sales-trend", startISO, endISO],
+    staleTime: 10 * 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("get_monthly_net_sales_trend" as any, {
+        p_start_iso: startISO,
+        p_end_iso: endISO,
+      } as any);
+      if (error) throw error;
+      return ((data ?? []) as any[]).map(r => ({
+        storeId: r.store_id,
+        monthStart: r.month_start,
+        netSales: Number(r.net_sales),
+      }));
+    },
+  });
+}

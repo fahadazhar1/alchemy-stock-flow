@@ -3,7 +3,11 @@ import { toast } from "sonner";
 import {
   ChevronLeft, ChevronRight, Plus, Pencil, Trash2, Wallet,
   TrendingUp, TrendingDown, Receipt, Coins, ArrowUp, ArrowDown,
+  Download, Printer, LineChart as LineChartIcon, Info,
 } from "lucide-react";
+import {
+  ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend,
+} from "recharts";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,9 +26,11 @@ import { useRole } from "@/hooks/useRole";
 import { useStoreSalesPulse } from "@/hooks/useStoreSalesPulse";
 import {
   getMonthBounds, useAllCostEntries, useCostEntryMutations, useEnsureFxRates, useUpsertFxRate,
-  currencyToSar, COST_CATEGORIES, AD_PLATFORMS, MARKETPLACE_PLATFORMS,
-  type CostEntry, type CostEntryInput,
+  useSalesBridge, useMonthlyNetSalesTrend, currencyToSar,
+  COST_CATEGORIES, AD_PLATFORMS, MARKETPLACE_PLATFORMS,
+  type CostEntry, type CostEntryInput, type SalesBridgeRow, type MonthlyTrendPoint,
 } from "@/hooks/usePnL";
+import { Tooltip as UiTooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 // Same accent palette + assignment order as Store Performance, so a store's
 // colour means the same thing on both pages.
@@ -435,6 +441,120 @@ function CategoryBreakdownCard({ breakdown, excludedStoreNames, loading }: {
   );
 }
 
+// ─── Sales bridge: Gross -> Discounts -> Net (Returns not tracked, disclosed) ──
+
+function SalesBridgeCard({ grossSales, discounts, netSales, symbol, loading }: {
+  grossSales: number; discounts: number; netSales: number; symbol: string; loading: boolean;
+}) {
+  const discountPct = grossSales > 0 ? (discounts / grossSales) * 100 : 0;
+  return (
+    <Card>
+      <CardHeader className="pb-2 pt-4 px-4">
+        <div className="flex items-center gap-2">
+          <TrendingUp size={14} className="text-muted-foreground" />
+          <h3 className="text-sm font-semibold">Gross → Discounts → Net</h3>
+          <TooltipProvider delayDuration={100}>
+            <UiTooltip>
+              <TooltipTrigger asChild>
+                <button className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-muted text-muted-foreground hover:bg-primary/15 hover:text-primary shrink-0" aria-label="Methodology">
+                  <Info size={9} />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="max-w-[240px] p-2.5 text-left">
+                <p className="text-[10px] text-muted-foreground leading-snug">
+                  Gross Sales is derived as Net Sales + Discounts, so it always matches the Net Sales figure shown elsewhere on this page. <b className="text-foreground">Returns/refunds are not included</b> — this dashboard doesn't sync that field from Shopify yet. For verified return figures, check the monthly PDF performance report for this store.
+                </p>
+              </TooltipContent>
+            </UiTooltip>
+          </TooltipProvider>
+        </div>
+      </CardHeader>
+      <CardContent className="px-4 pb-4 pt-1">
+        {loading ? (
+          <div className="space-y-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}</div>
+        ) : (
+          <div className="grid grid-cols-3 gap-3 text-center">
+            <div>
+              <div className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Gross Sales</div>
+              <div className="text-lg font-bold tabular-nums">{fmtC(grossSales, symbol)}</div>
+            </div>
+            <div>
+              <div className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Discounts</div>
+              <div className="text-lg font-bold tabular-nums text-red-600 dark:text-red-400">−{fmtC(discounts, symbol)}</div>
+              <div className="text-[10px] text-muted-foreground mt-0.5">{discountPct.toFixed(1)}% of gross</div>
+            </div>
+            <div>
+              <div className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Net Sales</div>
+              <div className="text-lg font-bold tabular-nums text-emerald-600 dark:text-emerald-400">{fmtC(netSales, symbol)}</div>
+            </div>
+          </div>
+        )}
+        <p className="text-[10px] text-muted-foreground mt-3 pt-2 border-t">
+          Returns not included — not synced to this dashboard yet. See the monthly PDF report for verified figures.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─── Net Sales trend, last 6 months ─────────────────────────────────────────
+// All Stores: indexed to 100 at the earliest month, so stores in different
+// currencies can share one chart without needing an FX rate for every past
+// month (a real risk — the FX table only fills in for months someone has
+// actually opened). Single store: absolute Net Sales in its own currency.
+
+function TrendChart({ mode, series, loading }: {
+  mode: "indexed" | "native";
+  series: { key: string; name: string; color: string; symbol?: string; points: { month: string; value: number }[] }[];
+  loading: boolean;
+}) {
+  const months = series[0]?.points.map(p => p.month) ?? [];
+  const chartData = months.map((month, i) => {
+    const row: Record<string, number | string> = { month };
+    for (const s of series) row[s.key] = s.points[i]?.value ?? 0;
+    return row;
+  });
+
+  return (
+    <Card>
+      <CardHeader className="pb-2 pt-4 px-4">
+        <div className="flex items-center gap-2">
+          <LineChartIcon size={14} className="text-muted-foreground" />
+          <h3 className="text-sm font-semibold">Net Sales Trend</h3>
+          <span className="text-xs text-muted-foreground">{mode === "indexed" ? "Indexed to 100 at the earliest month — compares growth, not scale" : "Last 6 months"}</span>
+        </div>
+      </CardHeader>
+      <CardContent className="px-2 pb-4 pt-1">
+        {loading ? (
+          <Skeleton className="h-56 w-full" />
+        ) : chartData.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-10 text-center">Not enough history yet.</p>
+        ) : (
+          <ResponsiveContainer width="100%" height={240}>
+            <LineChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+              <XAxis dataKey="month" tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
+              <YAxis tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" width={mode === "indexed" ? 36 : 56} />
+              <RechartsTooltip
+                contentStyle={{ background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", borderRadius: 8, fontSize: 12 }}
+                formatter={(value: number, name: string) => {
+                  const s = series.find(x => x.key === name);
+                  if (mode === "indexed") return [value.toFixed(0), s?.name ?? name];
+                  return [fmtC(value, s?.symbol ?? ""), s?.name ?? name];
+                }}
+              />
+              {series.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} formatter={(value) => series.find(s => s.key === value)?.name ?? value} />}
+              {series.map(s => (
+                <Line key={s.key} type="monotone" dataKey={s.key} name={s.key} stroke={s.color} strokeWidth={2} dot={{ r: 3 }} isAnimationActive={false} />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ─── Store ranking by Net Sales (SAR) ───────────────────────────────────────
 
 function RankingTable({ rows, loading }: { rows: StoreRow[]; loading: boolean }) {
@@ -521,6 +641,15 @@ export default function PnLDashboard() {
   const { data: prevEntries = [] } = useAllCostEntries(prevKey);
   const { data: fxData, isError: fxError, refetch: refetchFxRates } = useEnsureFxRates(monthKey);
   const fxRates = fxData?.rates ?? {};
+  const { data: bridgeRows = [], isLoading: bridgeLoading } = useSalesBridge(bounds);
+
+  // Last 6 full calendar months, ending with the month currently in view.
+  const trendBounds = useMemo(() => {
+    const startMonth = month - 5 <= 0 ? month - 5 + 12 : month - 5;
+    const startYear = month - 5 <= 0 ? year - 1 : year;
+    return { startISO: getMonthBounds(startYear, startMonth).startISO, endISO: bounds.endISO };
+  }, [year, month, bounds.endISO]);
+  const { data: trendData = [], isLoading: trendLoading } = useMonthlyNetSalesTrend(trendBounds.startISO, trendBounds.endISO);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<CostEntry | null>(null);
@@ -612,6 +741,57 @@ export default function PnLDashboard() {
         symbol: selectedStore?.currency_symbol ?? "", unit: "",
         biggestCostLabel: biggestCategoryFor(displayRows[0]?.entries ?? []),
       };
+
+  // Sales bridge summary, same scope rule as the KPI row above.
+  const bridgeByStore = new Map(bridgeRows.map(b => [b.storeId, b]));
+  const bridgeSummary = useMemo(() => {
+    if (!isAllStores) {
+      const b = selectedStoreId ? bridgeByStore.get(selectedStoreId) : undefined;
+      return { grossSales: b?.grossSales ?? 0, discounts: b?.discounts ?? 0, netSales: b?.netSales ?? 0, symbol: selectedStore?.currency_symbol ?? "" };
+    }
+    let gross = 0, disc = 0, net = 0;
+    for (const s of activeStores) {
+      const b = bridgeByStore.get(s.id);
+      if (!b) continue;
+      const netSar = currencyToSar(b.netSales, s.currency ?? "GBP", fxRates);
+      const discSar = currencyToSar(b.discounts, s.currency ?? "GBP", fxRates);
+      if (netSar === null || discSar === null) continue;
+      net += netSar; disc += discSar; gross += netSar + discSar;
+    }
+    return { grossSales: gross, discounts: disc, netSales: net, symbol: "SAR " };
+  }, [isAllStores, selectedStoreId, selectedStore, bridgeRows, activeStores, fxRates]);
+
+  // Net Sales trend — indexed to 100 in All Stores mode (avoids needing an FX
+  // rate for every past month just to draw a line chart), native currency
+  // for a single store.
+  const trendSeries = useMemo(() => {
+    const monthKeys: string[] = [];
+    for (let i = 5; i >= 0; i--) {
+      let m = month - i, y = year;
+      while (m <= 0) { m += 12; y -= 1; }
+      monthKeys.push(`${y}-${String(m).padStart(2, "0")}`);
+    }
+    const monthLabels = monthKeys.map(k => {
+      const [y, m] = k.split("-").map(Number);
+      return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString("en-GB", { month: "short" });
+    });
+
+    const targetStores = isAllStores ? activeStores : activeStores.filter(s => s.id === selectedStoreId);
+    return targetStores.map((s, idx) => {
+      const byMonth = new Map(trendData.filter(t => t.storeId === s.id).map(t => [t.monthStart.slice(0, 7), t.netSales]));
+      const raw = monthKeys.map(k => byMonth.get(k) ?? 0);
+      const base = raw.find(v => v !== 0) ?? 0;
+      const values = isAllStores && base !== 0 ? raw.map(v => (v / base) * 100) : raw;
+      return {
+        key: s.id,
+        name: s.store_name,
+        color: storeColor(activeStores.findIndex(a => a.id === s.id)),
+        symbol: s.currency_symbol ?? "",
+        points: monthLabels.map((month, i) => ({ month, value: values[i] })),
+      };
+    });
+  }, [trendData, activeStores, isAllStores, selectedStoreId, month, year]);
+
   const displayEntries = !isAllStores && selectedStoreId
     ? entries.filter(e => e.store_id === selectedStoreId)
     : ledgerStoreFilter === "all" ? entries : entries.filter(e => e.store_id === ledgerStoreFilter);
@@ -619,6 +799,28 @@ export default function PnLDashboard() {
 
   const openAdd = () => { setEditingEntry(null); setDialogOpen(true); };
   const openEdit = (e: CostEntry) => { setEditingEntry(e); setDialogOpen(true); };
+
+  const handleExportCsv = () => {
+    const q = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const lines = [
+      ["Store", "Category", "Platform", "Amount", "Currency", "Notes"].join(","),
+      ...displayEntries.map(e => {
+        const s = activeStores.find(st => st.id === e.store_id);
+        return [q(s?.store_name ?? ""), q(categoryLabel(e.category)), q(platformLabel(e.platform)), q(Number(e.amount).toFixed(2)), q(e.currency), q(e.notes ?? "")].join(",");
+      }),
+      "",
+      ["", "Total Revenue", "", summary.revenue.toFixed(2), summary.symbol.trim(), ""].join(","),
+      ["", "Total Costs", "", summary.costs.toFixed(2), summary.symbol.trim(), ""].join(","),
+      ["", "Net Sales", "", summary.net.toFixed(2), summary.symbol.trim(), ""].join(","),
+    ];
+    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `PnL_${isAllStores ? "AllStores" : selectedStore?.store_name.replace(/\s+/g, "_") ?? "Store"}_${monthKey}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   const confirmDelete = async () => {
     if (!deletingId) return;
@@ -646,10 +848,17 @@ export default function PnLDashboard() {
             Revenue live from Shopify (shipping excluded) · costs entered manually · <span className="font-medium">{monthKey}</span>
           </p>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-2 shrink-0 print:hidden">
           <MonthPicker year={year} month={month} onChange={(y, m) => { setYear(y); setMonth(m); }} />
+          <Button size="sm" variant="outline" className="h-8 text-xs gap-1.5" onClick={() => window.print()}><Printer size={13} /> Export PDF</Button>
           {isAdmin && <Button size="sm" className="h-8 text-xs gap-1.5" onClick={openAdd}><Plus size={13} /> Add Cost Entry</Button>}
         </div>
+      </div>
+
+      {/* Print header — only visible on the printed page, gives the exported PDF a proper title/date */}
+      <div className="hidden print:block text-center mb-2">
+        <h1 className="text-lg font-bold">Darussalam Group — Profit &amp; Loss</h1>
+        <p className="text-xs text-muted-foreground">{isAllStores ? "All Stores (SAR)" : selectedStore?.store_name} · {monthKey}</p>
       </div>
 
       {missingRates && (
@@ -681,16 +890,42 @@ export default function PnLDashboard() {
         loading={loading}
       />
 
-      {/* Cost breakdown by category — All Stores only, this is inherently a combined view */}
-      {isAllStores && (
+      {/* Revenue bridge + cost breakdown, side by side on wide screens */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <section>
           <div className="flex items-center gap-2.5 mb-3">
-            <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400">Costs</span>
-            <h2 className="text-base font-semibold">Where the Money Goes</h2>
+            <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">Revenue</span>
+            <h2 className="text-base font-semibold">Where the Money Comes From</h2>
           </div>
-          <CategoryBreakdownCard breakdown={categoryBreakdown} excludedStoreNames={excludedStoreNames} loading={loading} />
+          <SalesBridgeCard
+            grossSales={bridgeSummary.grossSales}
+            discounts={bridgeSummary.discounts}
+            netSales={bridgeSummary.netSales}
+            symbol={bridgeSummary.symbol}
+            loading={loading}
+          />
         </section>
-      )}
+
+        {/* Cost breakdown by category — All Stores only, this is inherently a combined view */}
+        {isAllStores && (
+          <section>
+            <div className="flex items-center gap-2.5 mb-3">
+              <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400">Costs</span>
+              <h2 className="text-base font-semibold">Where the Money Goes</h2>
+            </div>
+            <CategoryBreakdownCard breakdown={categoryBreakdown} excludedStoreNames={excludedStoreNames} loading={loading} />
+          </section>
+        )}
+      </div>
+
+      {/* Net Sales trend */}
+      <section>
+        <div className="flex items-center gap-2.5 mb-3">
+          <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-sky-500/10 text-sky-600 dark:text-sky-400">Trend</span>
+          <h2 className="text-base font-semibold">Net Sales Trend</h2>
+        </div>
+        <TrendChart mode={isAllStores ? "indexed" : "native"} series={trendSeries} loading={trendLoading} />
+      </section>
 
       {/* Per-store cards */}
       <section>
@@ -737,15 +972,20 @@ export default function PnLDashboard() {
           <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-red-500/10 text-red-600 dark:text-red-400">Ledger</span>
           <h2 className="text-base font-semibold">Cost Entries</h2>
           <span className="text-xs text-muted-foreground">{monthKey}{isAllStores ? " · All Stores" : selectedStore ? ` · ${selectedStore.store_name}` : ""}</span>
-          {isAllStores && (
-            <Select value={ledgerStoreFilter} onValueChange={setLedgerStoreFilter}>
-              <SelectTrigger className="h-7 w-[160px] text-xs ml-auto"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Stores</SelectItem>
-                {activeStores.map(s => <SelectItem key={s.id} value={s.id}>{s.store_name}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          )}
+          <div className="flex items-center gap-2 ml-auto print:hidden">
+            {isAllStores && (
+              <Select value={ledgerStoreFilter} onValueChange={setLedgerStoreFilter}>
+                <SelectTrigger className="h-7 w-[160px] text-xs"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Stores</SelectItem>
+                  {activeStores.map(s => <SelectItem key={s.id} value={s.id}>{s.store_name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            )}
+            <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" onClick={handleExportCsv} disabled={displayEntries.length === 0}>
+              <Download size={12} /> Export CSV
+            </Button>
+          </div>
         </div>
         <Card>
           <CardContent className="p-0">
@@ -763,7 +1003,7 @@ export default function PnLDashboard() {
                       <th className="px-4 py-2.5 text-left font-medium text-muted-foreground">Platform</th>
                       <th className="px-4 py-2.5 text-right font-medium text-muted-foreground">Amount</th>
                       <th className="px-4 py-2.5 text-left font-medium text-muted-foreground">Notes</th>
-                      {isAdmin && <th className="px-4 py-2.5 text-right font-medium text-muted-foreground">Actions</th>}
+                      {isAdmin && <th className="px-4 py-2.5 text-right font-medium text-muted-foreground print:hidden">Actions</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -777,7 +1017,7 @@ export default function PnLDashboard() {
                           <td className="px-4 py-2.5 text-right tabular-nums font-medium text-red-600 dark:text-red-400">−{fmtC(Number(e.amount), s?.currency_symbol ?? "")}</td>
                           <td className="px-4 py-2.5 text-muted-foreground">{e.notes ?? "—"}</td>
                           {isAdmin && (
-                            <td className="px-4 py-2.5 text-right">
+                            <td className="px-4 py-2.5 text-right print:hidden">
                               <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(e)}><Pencil size={13} /></Button>
                               <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setDeletingId(e.id)}><Trash2 size={13} className="text-red-500" /></Button>
                             </td>
