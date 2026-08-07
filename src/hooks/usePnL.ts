@@ -213,7 +213,7 @@ export function currencyToSar(amount: number, currency: string, fxRates: Record<
 // everywhere else on the page. Returns is not included — the orders table has
 // no refund/return field synced (see the migration comment); only the
 // standalone monthly PDF report scripts have that, pulled live from Shopify.
-export interface SalesBridgeRow { storeId: string; netSales: number; discounts: number; grossSales: number }
+export interface SalesBridgeRow { storeId: string; netSales: number; discounts: number; grossSales: number; orderCount: number }
 
 export function useSalesBridge(bounds: DateBounds) {
   return useQuery<SalesBridgeRow[]>({
@@ -230,6 +230,36 @@ export function useSalesBridge(bounds: DateBounds) {
         netSales: Number(r.net_sales),
         discounts: Number(r.discounts),
         grossSales: Number(r.net_sales) + Number(r.discounts),
+        orderCount: Number(r.order_count),
+      }));
+    },
+  });
+}
+
+// ─── Traffic source (paid / organic / direct) ──────────────────────────────
+// Classifies each online-store order using its landing_site query string.
+// "Paid" requires an actual ad-click ID (gclid/fbclid/ttclid/gbraid/wbraid)
+// — NOT just utm_source=google, since Shopify's free Google Shopping
+// listing sync also stamps utm_source=google on completely free traffic
+// (confirmed on real order data before this was built).
+
+export interface TrafficSourceRow { storeId: string; source: "paid" | "organic" | "direct"; orders: number; revenue: number }
+
+export function useTrafficSource(bounds: DateBounds) {
+  return useQuery<TrafficSourceRow[]>({
+    queryKey: ["traffic-source", bounds.cacheKey],
+    staleTime: 3 * 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("get_store_traffic_source" as any, {
+        p_start_iso: bounds.startISO,
+        p_end_iso: bounds.endISO,
+      } as any);
+      if (error) throw error;
+      return ((data ?? []) as any[]).map(r => ({
+        storeId: r.store_id,
+        source: r.source,
+        orders: Number(r.orders),
+        revenue: Number(r.revenue),
       }));
     },
   });

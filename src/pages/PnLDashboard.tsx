@@ -3,7 +3,7 @@ import { toast } from "sonner";
 import {
   ChevronLeft, ChevronRight, Plus, Pencil, Trash2, Wallet,
   TrendingUp, TrendingDown, Receipt, Coins, ArrowUp, ArrowDown, Percent, Tag, Share2, ShoppingCart,
-  Download, Printer, LineChart as LineChartIcon, Info, LayoutGrid, RotateCcw, Users, Globe,
+  Download, Printer, LineChart as LineChartIcon, Info, LayoutGrid, RotateCcw, Globe,
 } from "lucide-react";
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend,
@@ -26,13 +26,13 @@ import { useRole } from "@/hooks/useRole";
 import { useStoreSalesPulse, type ChannelSalesStat } from "@/hooks/useStoreSalesPulse";
 import {
   getMonthBounds, useAllCostEntries, useCostEntryMutations, useEnsureFxRates, useUpsertFxRate,
-  useSalesBridge, useMonthlyNetSalesTrend, useCheckoutAbandonment, currencyToSar,
+  useSalesBridge, useMonthlyNetSalesTrend, useCheckoutAbandonment, useTrafficSource, currencyToSar,
   COST_CATEGORIES, AD_PLATFORMS, MARKETPLACE_PLATFORMS,
-  type CostEntry, type CostEntryInput, type SalesBridgeRow, type MonthlyTrendPoint, type AbandonmentRow,
+  type CostEntry, type CostEntryInput, type SalesBridgeRow, type MonthlyTrendPoint, type AbandonmentRow, type TrafficSourceRow,
 } from "@/hooks/usePnL";
 import { Tooltip as UiTooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePageLayout } from "@/hooks/usePageLayout";
-import { useGa4MonthlySummary, useGa4ChannelSummary } from "@/hooks/useGa4";
+import { useGa4ChannelSummary } from "@/hooks/useGa4";
 
 // Reorderable page sections, saved per-account via usePageLayout("pnl", ...).
 // Keys are stable identifiers persisted to the DB — never rename a key
@@ -837,70 +837,181 @@ function AbandonmentByStoreCard({ rows, loading }: { rows: StoreAbandonmentRow[]
 // rather than silently excluded (excluding days would be its own source of
 // error — no reliable way to know which days are "done" processing).
 
-function MarketingTrafficCard({ sessions, bounceRate, conversionRate, hasSynced, loading }: {
-  sessions: number; bounceRate: number | null; conversionRate: number | null; hasSynced: boolean; loading: boolean;
+// "Is Marketing Paying Off?" — a blended Cost-per-Sale vs Revenue-per-Sale
+// verdict, not per-sale ad attribution (spreads total ad spend across ALL
+// sales that month, including ones that cost nothing to win). Simpler than
+// true attribution, and still shows the thing that matters: is spend
+// growing faster than sales, or slower.
+function MarketingRoiCard({ costPerSale, revenuePerSale, costPerSaleDelta, symbol, hasData, loading }: {
+  costPerSale: number | null; revenuePerSale: number | null; costPerSaleDelta: number | null;
+  symbol: string; hasData: boolean; loading: boolean;
 }) {
+  const ratio = costPerSale && costPerSale > 0 && revenuePerSale !== null ? revenuePerSale / costPerSale : null;
+  const verdict = ratio === null ? null : ratio >= 2 ? "profitable" : ratio >= 1 ? "even" : "losing";
+  const verdictMeta = {
+    profitable: { label: "✓ PROFITABLE", bg: "#d1fae5", fg: "#047857" },
+    even: { label: "⚠ BREAKING EVEN", bg: "#fef3c7", fg: "#b45309" },
+    losing: { label: "✕ LOSING MONEY", bg: "#fee2e2", fg: "#b91c1c" },
+  } as const;
+
   return (
     <Card className="h-full flex flex-col">
       <CardHeader className="pb-2 pt-4 px-4">
         <div className="flex items-center gap-2">
           <span className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: "#ede9fe", color: "#7c3aed" }}>
-            <Users size={12} strokeWidth={2.2} />
+            <TrendingUp size={12} strokeWidth={2.2} />
           </span>
-          <h3 className="text-sm font-semibold">Marketing &amp; Traffic</h3>
-          <span className="text-xs text-muted-foreground">Google Analytics</span>
+          <h3 className="text-sm font-semibold">Is Marketing Paying Off?</h3>
+          <span className="text-xs text-muted-foreground">This month</span>
+        </div>
+      </CardHeader>
+      <CardContent className="px-4 pb-4 pt-1 flex-1 flex flex-col justify-center items-center text-center">
+        {loading ? (
+          <div className="space-y-3 w-full">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}</div>
+        ) : !hasData || verdict === null || costPerSale === null || revenuePerSale === null ? (
+          <p className="text-sm text-muted-foreground py-4">No ad spend recorded this month yet.</p>
+        ) : (
+          <>
+            <span className="inline-flex items-center gap-1 text-xs font-bold px-3 py-1 rounded-full mb-3" style={{ background: verdictMeta[verdict].bg, color: verdictMeta[verdict].fg }}>
+              {verdictMeta[verdict].label}
+            </span>
+            <p className="text-lg font-extrabold leading-snug mb-1">
+              You spend <span style={{ color: "#dc2626" }}>{fmtC(costPerSale, symbol)}</span> to win a sale worth <span style={{ color: "#059669" }}>{fmtC(revenuePerSale, symbol)}</span>
+            </p>
+            <p className="text-xs text-muted-foreground mb-5">
+              {ratio !== null ? `That's a ${ratio.toFixed(1)}× return on every advertising ${symbol.trim() || "unit"} spent` : ""}
+            </p>
+            <div className="flex items-end justify-center gap-8 mb-2">
+              <div className="flex flex-col items-center">
+                <div className="w-12 rounded-t-lg" style={{ height: 34, background: "linear-gradient(180deg,#fca5a5,#ef4444)" }} />
+                <div className="text-[11px] text-muted-foreground mt-2">Cost per Sale</div>
+                <div className="text-base font-extrabold text-red-600 dark:text-red-400">{fmtC(costPerSale, symbol)}</div>
+              </div>
+              <div className="flex flex-col items-center">
+                <div className="w-12 rounded-t-lg" style={{ height: Math.min(88, Math.max(34, 34 * (ratio ?? 1))), background: "linear-gradient(180deg,#6ee7b7,#059669)" }} />
+                <div className="text-[11px] text-muted-foreground mt-2">Revenue per Sale</div>
+                <div className="text-base font-extrabold text-emerald-600 dark:text-emerald-400">{fmtC(revenuePerSale, symbol)}</div>
+              </div>
+            </div>
+            {costPerSaleDelta !== null && (
+              <span className={cn(
+                "inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full mt-2",
+                costPerSaleDelta <= 0 ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400" : "bg-red-50 text-red-600 dark:bg-red-950/40 dark:text-red-400",
+              )}>
+                {costPerSaleDelta <= 0 ? <ArrowDown size={10} /> : <ArrowUp size={10} />}
+                {Math.abs(costPerSaleDelta)}% {costPerSaleDelta <= 0 ? "cheaper" : "more expensive"} per sale vs last month
+              </span>
+            )}
+          </>
+        )}
+        <p className="text-[10px] text-muted-foreground mt-4 pt-2 border-t w-full">
+          Blended across all sales this month, not just ad-attributed ones — see "Where Your Sales Really Come From" for the paid vs. free split.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+// "Where Your Sales Really Come From" — classifies each online-store order
+// as paid/organic/direct using its landing_site. "Paid" requires a real
+// ad-click ID (gclid/fbclid/ttclid/gbraid/wbraid), not just utm_source=
+// google — Shopify's free Google Shopping listing sync also stamps
+// utm_source=google on completely free traffic (confirmed on real order
+// data before this was built).
+export interface TrafficSourceCardRow { source: "paid" | "organic" | "direct"; orders: number; revenue: number }
+
+const TRAFFIC_SOURCE_META = {
+  paid: { label: "Paid Ads", desc: "Came from a Google/Meta/TikTok ad click", color: "#6366f1" },
+  organic: { label: "Free/Organic", desc: "Search, free listings, social — no ad spend", color: "#10b981" },
+  direct: { label: "Direct", desc: "Typed the URL, bookmarks, no trace", color: "#94a3b8" },
+} as const;
+
+function TrafficSourceCard({ rows, symbol, loading }: { rows: TrafficSourceCardRow[]; symbol: string; loading: boolean }) {
+  const total = rows.reduce((sum, r) => sum + r.orders, 0);
+  return (
+    <Card className="h-full flex flex-col">
+      <CardHeader className="pb-2 pt-4 px-4">
+        <div className="flex items-center gap-2">
+          <span className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: "#fef3c7", color: "#d97706" }}>
+            <Globe size={12} strokeWidth={2.2} />
+          </span>
+          <h3 className="text-sm font-semibold">Where Your Sales Really Come From</h3>
         </div>
       </CardHeader>
       <CardContent className="px-4 pb-4 pt-1 flex-1 flex flex-col justify-center">
         {loading ? (
           <div className="space-y-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}</div>
-        ) : !hasSynced ? (
-          <p className="text-sm text-muted-foreground py-4 text-center">Not synced for this store yet.</p>
+        ) : total === 0 ? (
+          <p className="text-sm text-muted-foreground py-4 text-center">No online-store sales this period.</p>
         ) : (
-          <div className="flex items-stretch">
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
-                <span className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ background: "#ede9fe", color: "#7c3aed" }}>
-                  <Users size={11} strokeWidth={2.2} />
-                </span>
-                Sessions
-              </div>
-              <div className="text-lg font-bold tabular-nums tracking-tight truncate">{fmtNum(sessions)}</div>
+          <>
+            <div className="flex h-4 rounded-lg overflow-hidden mb-4">
+              {rows.map(r => total > 0 && r.orders > 0 && (
+                <div key={r.source} style={{ width: `${(r.orders / total) * 100}%`, background: TRAFFIC_SOURCE_META[r.source].color }} />
+              ))}
             </div>
-
-            <div className="flex items-center justify-center px-1.5 text-muted-foreground/30 shrink-0">
-              <ChevronRight size={16} />
+            <div className="space-y-1">
+              {rows.map(r => {
+                const meta = TRAFFIC_SOURCE_META[r.source];
+                return (
+                  <div key={r.source} className="flex items-center gap-3 py-2 border-b last:border-0 border-border/50">
+                    <span className="w-3 h-3 rounded-full shrink-0" style={{ background: meta.color }} />
+                    <span className="text-sm font-semibold w-28 shrink-0">{meta.label}</span>
+                    <span className="text-xs text-muted-foreground flex-1 truncate hidden sm:block">{meta.desc}</span>
+                    <span className="text-xs text-muted-foreground w-20 text-right shrink-0">{fmtNum(r.orders)} orders</span>
+                    <span className="text-sm font-bold tabular-nums w-24 text-right shrink-0">{fmtC(r.revenue, symbol)}</span>
+                  </div>
+                );
+              })}
             </div>
-
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
-                <span className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ background: "#fee2e2", color: "#dc2626" }}>
-                  <Percent size={11} strokeWidth={2.2} />
-                </span>
-                Bounce Rate
-              </div>
-              <div className="text-lg font-bold tabular-nums tracking-tight truncate">{bounceRate !== null ? `${(bounceRate * 100).toFixed(1)}%` : "—"}</div>
-            </div>
-
-            <div className="flex items-center justify-center px-1.5 text-muted-foreground/30 shrink-0">
-              <ChevronRight size={16} />
-            </div>
-
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
-                <span className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ background: "#d1fae5", color: "#059669" }}>
-                  <TrendingUp size={11} strokeWidth={2.2} />
-                </span>
-                Conversion Rate
-              </div>
-              <div className="text-lg font-bold tabular-nums tracking-tight truncate text-emerald-600 dark:text-emerald-400">{conversionRate !== null ? `${conversionRate.toFixed(1)}%` : "—"}</div>
-            </div>
-          </div>
+          </>
         )}
-        {hasSynced && !loading && (
-          <p className="text-[10px] text-muted-foreground mt-3 pt-2 border-t">
-            Synced daily from Google Analytics · the most recent 1-2 days may show an inflated bounce rate — GA4's engagement data typically takes 24-48h to fully settle.
-          </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+// "Marketing Spend vs. Sales" — ad spend as a % of revenue, overall and per
+// platform. Pure arithmetic on data already on this page (Cost Entries +
+// the Sales Bridge's Net Sales) — no new data source.
+function MarketingSpendCard({ totalPct, platforms, loading }: {
+  totalPct: number; platforms: { platform: string; pct: number }[]; loading: boolean;
+}) {
+  const platformColor: Record<string, string> = { google: "#4285F4", meta: "#1877F2", tiktok: "#69C9D0", other: "#94a3b8" };
+  return (
+    <Card className="h-full flex flex-col">
+      <CardHeader className="pb-2 pt-4 px-4">
+        <div className="flex items-center gap-2">
+          <span className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: "#ede9fe", color: "#7c3aed" }}>
+            <Percent size={12} strokeWidth={2.2} />
+          </span>
+          <h3 className="text-sm font-semibold">Marketing Spend vs. Sales</h3>
+          <span className="text-xs text-muted-foreground">This month</span>
+        </div>
+      </CardHeader>
+      <CardContent className="px-4 pb-4 pt-1 flex-1 flex flex-col justify-center">
+        {loading ? (
+          <div className="space-y-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}</div>
+        ) : platforms.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-4 text-center">No ad spend recorded this month.</p>
+        ) : (
+          <>
+            <div className="text-center pb-4 mb-1">
+              <div className="text-4xl font-black" style={{ color: "#7c3aed" }}>{totalPct.toFixed(0)}%</div>
+              <div className="text-xs text-muted-foreground mt-1.5">of every sale went back into ads</div>
+            </div>
+            <div className="space-y-2.5">
+              {platforms.map(p => (
+                <div key={p.platform} className="flex items-center gap-3">
+                  <span className="text-xs font-semibold w-16 shrink-0 capitalize">{p.platform}</span>
+                  <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
+                    <div className="h-full rounded-full" style={{ width: `${Math.max(2, (p.pct / Math.max(totalPct, 1)) * 100)}%`, background: platformColor[p.platform] ?? "#94a3b8" }} />
+                  </div>
+                  <span className="text-xs font-bold w-12 text-right shrink-0">{p.pct.toFixed(1)}%</span>
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </CardContent>
     </Card>
@@ -1109,7 +1220,6 @@ export default function PnLDashboard() {
   // timezone — no KSA UTC-shift needed, unlike bounds above.
   const ga4StartDate = `${year}-${String(month).padStart(2, "0")}-01`;
   const ga4EndDate = `${year}-${String(month).padStart(2, "0")}-${String(new Date(year, month, 0).getDate()).padStart(2, "0")}`;
-  const { data: ga4Rows = [], isLoading: ga4Loading } = useGa4MonthlySummary(ga4StartDate, ga4EndDate);
   const { data: ga4ChannelRows = [], isLoading: ga4ChannelLoading } = useGa4ChannelSummary(ga4StartDate, ga4EndDate);
   const { data: salesPulse = [], isLoading: revenueLoading } = useStoreSalesPulse(bounds, true);
   const { data: entries = [], isLoading: entriesLoading } = useAllCostEntries(monthKey);
@@ -1117,6 +1227,13 @@ export default function PnLDashboard() {
   const { data: fxData, isError: fxError, refetch: refetchFxRates } = useEnsureFxRates(monthKey);
   const fxRates = fxData?.rates ?? {};
   const { data: bridgeRows = [], isLoading: bridgeLoading } = useSalesBridge(bounds);
+  const prevBounds = useMemo(() => {
+    const prevMonth = month === 1 ? 12 : month - 1;
+    const prevYear = month === 1 ? year - 1 : year;
+    return getMonthBounds(prevYear, prevMonth);
+  }, [year, month]);
+  const { data: prevBridgeRows = [] } = useSalesBridge(prevBounds);
+  const { data: trafficSourceRows = [], isLoading: trafficSourceLoading } = useTrafficSource(bounds);
   const { data: abandonmentRows = [], isLoading: abandonmentLoading } = useCheckoutAbandonment(bounds);
 
   // Last 6 full calendar months, ending with the month currently in view.
@@ -1333,40 +1450,9 @@ export default function PnLDashboard() {
     };
   }), [activeStores, abandonmentRows, fxRates]);
 
-  // Marketing & Traffic (GA4). All Stores combines sessions/conversions
-  // directly (no FX needed — these are counts, not currency) and computes a
-  // session-weighted average bounce rate rather than a plain average across
-  // stores, so a low-traffic store doesn't skew the combined figure as much
-  // as the store that actually drives most of the traffic.
-  const ga4ByStore = new Map(ga4Rows.map(g => [g.storeId, g]));
-  const ga4Summary = useMemo(() => {
-    if (!isAllStores) {
-      const g = selectedStoreId ? ga4ByStore.get(selectedStoreId) : undefined;
-      const conversionRate = g && g.sessions > 0 ? (g.conversions / g.sessions) * 100 : null;
-      return {
-        sessions: g?.sessions ?? 0,
-        bounceRate: g?.hasSynced ? g!.avgBounceRate : null,
-        conversionRate,
-        hasSynced: g?.hasSynced ?? false,
-      };
-    }
-    let sessions = 0, conversions = 0, weightedBounce = 0, anySynced = false;
-    for (const s of activeStores) {
-      const g = ga4ByStore.get(s.id);
-      if (!g?.hasSynced) continue;
-      anySynced = true;
-      sessions += g.sessions;
-      conversions += g.conversions;
-      weightedBounce += g.avgBounceRate * g.sessions;
-    }
-    return {
-      sessions,
-      bounceRate: sessions > 0 ? weightedBounce / sessions : null,
-      conversionRate: sessions > 0 ? (conversions / sessions) * 100 : null,
-      hasSynced: anySynced,
-    };
-  }, [isAllStores, selectedStoreId, ga4Rows, activeStores]);
-
+  // Collapsed to top 3 + "Other" — a CEO-glance view, not a full GA4
+  // taxonomy dump (Direct/Organic/Paid Search/Paid Social/Referral/Email/
+  // Cross-network/Unassigned/AI Assistant/... is 10+ rows nobody skims).
   const ga4ChannelBreakdown: ChannelTrafficRow[] = useMemo(() => {
     const targetIds = isAllStores ? activeStores.map(s => s.id) : [selectedStoreId].filter(Boolean) as string[];
     const map = new Map<string, number>();
@@ -1375,10 +1461,115 @@ export default function PnLDashboard() {
       map.set(row.channelGroup, (map.get(row.channelGroup) ?? 0) + row.sessions);
     }
     const total = [...map.values()].reduce((a, b) => a + b, 0);
-    return [...map.entries()]
+    const sorted = [...map.entries()]
       .map(([key, sessions]) => ({ key, sessions, pct: total > 0 ? (sessions / total) * 100 : 0 }))
       .sort((a, b) => b.sessions - a.sessions);
+    if (sorted.length <= 4) return sorted;
+    const top3 = sorted.slice(0, 3);
+    const rest = sorted.slice(3);
+    const otherSessions = rest.reduce((sum, r) => sum + r.sessions, 0);
+    return [...top3, { key: `Everything else (${rest.length} sources)`, sessions: otherSessions, pct: total > 0 ? (otherSessions / total) * 100 : 0 }];
   }, [isAllStores, selectedStoreId, ga4ChannelRows, activeStores]);
+
+  // "Is Marketing Paying Off?" — spreads total ad spend across ALL sales
+  // this month (not just ad-attributed ones), so it's a blended efficiency
+  // signal, not per-sale attribution. Same currency-scope rule as the rest
+  // of the page: native for a single store, SAR-combined for All Stores.
+  const bridgeByStoreForRoi = new Map(bridgeRows.map(b => [b.storeId, b]));
+  const prevBridgeByStore = new Map(prevBridgeRows.map(b => [b.storeId, b]));
+  const marketingRoi = useMemo(() => {
+    const sumAdSpend = (rows: CostEntry[], toSar: boolean, onlyStoreId: string | null) => {
+      let total = 0;
+      for (const e of rows) {
+        if (e.category !== "ad_spend") continue;
+        if (onlyStoreId && e.store_id !== onlyStoreId) continue;
+        const store = activeStores.find(s => s.id === e.store_id);
+        if (!store) continue;
+        if (toSar) {
+          const sar = currencyToSar(Number(e.amount), store.currency ?? "GBP", fxRates);
+          if (sar !== null) total += sar;
+        } else {
+          total += Number(e.amount);
+        }
+      }
+      return total;
+    };
+
+    if (!isAllStores) {
+      const adSpend = sumAdSpend(entries, false, selectedStoreId);
+      const prevAdSpend = sumAdSpend(prevEntries, false, selectedStoreId);
+      const orderCount = selectedStoreId ? bridgeByStoreForRoi.get(selectedStoreId)?.orderCount ?? 0 : 0;
+      const prevOrderCount = selectedStoreId ? prevBridgeByStore.get(selectedStoreId)?.orderCount ?? 0 : 0;
+      const costPerSale = orderCount > 0 ? adSpend / orderCount : null;
+      const prevCostPerSale = prevOrderCount > 0 ? prevAdSpend / prevOrderCount : null;
+      const revenuePerSale = orderCount > 0 ? bridgeSummary.netSales / orderCount : null;
+      return {
+        costPerSale, revenuePerSale,
+        costPerSaleDelta: costPerSale !== null && prevCostPerSale !== null ? pctDelta(costPerSale, prevCostPerSale) : null,
+        symbol: selectedStore?.currency_symbol ?? "",
+        hasData: adSpend > 0 && orderCount > 0,
+      };
+    }
+
+    const adSpend = sumAdSpend(entries, true, null);
+    const prevAdSpend = sumAdSpend(prevEntries, true, null);
+    const orderCount = activeStores.reduce((sum, s) => sum + (bridgeByStoreForRoi.get(s.id)?.orderCount ?? 0), 0);
+    const prevOrderCount = activeStores.reduce((sum, s) => sum + (prevBridgeByStore.get(s.id)?.orderCount ?? 0), 0);
+    const costPerSale = orderCount > 0 ? adSpend / orderCount : null;
+    const prevCostPerSale = prevOrderCount > 0 ? prevAdSpend / prevOrderCount : null;
+    const revenuePerSale = orderCount > 0 ? bridgeSummary.netSales / orderCount : null;
+    return {
+      costPerSale, revenuePerSale,
+      costPerSaleDelta: costPerSale !== null && prevCostPerSale !== null ? pctDelta(costPerSale, prevCostPerSale) : null,
+      symbol: "SAR ",
+      hasData: adSpend > 0 && orderCount > 0,
+    };
+  }, [isAllStores, selectedStoreId, selectedStore, entries, prevEntries, bridgeRows, prevBridgeRows, activeStores, fxRates, bridgeSummary.netSales]);
+
+  // "Where Your Sales Really Come From" — paid/organic/direct, orders + revenue.
+  const trafficSourceSummary: TrafficSourceCardRow[] = useMemo(() => {
+    const targetRows = isAllStores ? trafficSourceRows : trafficSourceRows.filter(r => r.storeId === selectedStoreId);
+    const map = new Map<string, { orders: number; revenueSar: number; revenueNative: number }>();
+    for (const row of targetRows) {
+      const store = activeStores.find(s => s.id === row.storeId);
+      if (!store) continue;
+      if (!map.has(row.source)) map.set(row.source, { orders: 0, revenueSar: 0, revenueNative: 0 });
+      const entry = map.get(row.source)!;
+      entry.orders += row.orders;
+      entry.revenueNative += row.revenue;
+      if (isAllStores) {
+        const sar = currencyToSar(row.revenue, store.currency ?? "GBP", fxRates);
+        if (sar !== null) entry.revenueSar += sar;
+      }
+    }
+    const order = ["paid", "organic", "direct"] as const;
+    return order.map(source => {
+      const entry = map.get(source) ?? { orders: 0, revenueSar: 0, revenueNative: 0 };
+      return { source, orders: entry.orders, revenue: isAllStores ? entry.revenueSar : entry.revenueNative };
+    });
+  }, [isAllStores, selectedStoreId, trafficSourceRows, activeStores, fxRates]);
+
+  // "Marketing Spend vs. Sales" — ad spend as a % of revenue, overall and
+  // per platform. Uses the same Net Sales figure as the Sales Bridge card.
+  const marketingSpendBreakdown = useMemo(() => {
+    const byPlatform = new Map<string, number>();
+    for (const e of entries) {
+      if (e.category !== "ad_spend") continue;
+      if (!isAllStores && e.store_id !== selectedStoreId) continue;
+      const store = activeStores.find(s => s.id === e.store_id);
+      if (!store) continue;
+      const amt = isAllStores ? currencyToSar(Number(e.amount), store.currency ?? "GBP", fxRates) : Number(e.amount);
+      if (amt === null) continue;
+      const platform = e.platform ?? "other";
+      byPlatform.set(platform, (byPlatform.get(platform) ?? 0) + amt);
+    }
+    const netSales = bridgeSummary.netSales;
+    const platforms = [...byPlatform.entries()]
+      .map(([platform, amount]) => ({ platform, pct: netSales > 0 ? (amount / netSales) * 100 : 0 }))
+      .sort((a, b) => b.pct - a.pct);
+    const totalPct = platforms.reduce((sum, p) => sum + p.pct, 0);
+    return { totalPct, platforms };
+  }, [isAllStores, selectedStoreId, entries, activeStores, fxRates, bridgeSummary.netSales]);
 
   // Net Sales trend — indexed to 100 in All Stores mode (avoids needing an FX
   // rate for every past month just to draw a line chart), native currency
@@ -1597,38 +1788,66 @@ export default function PnLDashboard() {
     ),
 
     marketing: (
-      // Marketing & Traffic (GA4) — traffic-source side, pairs with the
-      // revenue-source "Sales by Channel" card above it.
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch">
-        <section className="flex flex-col">
-          <div className="flex items-center gap-2.5 mb-3">
-            <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-violet-500/10 text-violet-600 dark:text-violet-400">Marketing</span>
-            <h2 className="text-base font-semibold">Marketing &amp; Traffic</h2>
-          </div>
-          <div className="flex-1">
-            <MarketingTrafficCard
-              sessions={ga4Summary.sessions}
-              bounceRate={ga4Summary.bounceRate}
-              conversionRate={ga4Summary.conversionRate}
-              hasSynced={ga4Summary.hasSynced}
-              loading={ga4Loading}
-            />
-          </div>
-        </section>
+      // CEO-glance marketing view: one profitability verdict, real
+      // paid-vs-organic order attribution, simplified traffic sources, and
+      // spend-as-%-of-sales — replaces the earlier raw Sessions/Bounce Rate/
+      // Conversion Rate trio, which tested as "basic" and disconnected from
+      // money. See project_pnl_dashboard memory for the full design history.
+      <div className="space-y-4">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch">
+          <section className="flex flex-col">
+            <div className="flex items-center gap-2.5 mb-3">
+              <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-violet-500/10 text-violet-600 dark:text-violet-400">Marketing</span>
+              <h2 className="text-base font-semibold">Is Marketing Paying Off?</h2>
+            </div>
+            <div className="flex-1">
+              <MarketingRoiCard
+                costPerSale={marketingRoi.costPerSale}
+                revenuePerSale={marketingRoi.revenuePerSale}
+                costPerSaleDelta={marketingRoi.costPerSaleDelta}
+                symbol={marketingRoi.symbol}
+                hasData={marketingRoi.hasData}
+                loading={loading || bridgeLoading}
+              />
+            </div>
+          </section>
 
-        <section className="flex flex-col">
-          <div className="flex items-center gap-2.5 mb-3">
-            <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-indigo-500/10 text-indigo-600 dark:text-indigo-400">Traffic</span>
-            <h2 className="text-base font-semibold">Traffic by Channel</h2>
-          </div>
-          <div className="flex-1">
-            <TrafficByChannelCard
-              channels={ga4ChannelBreakdown}
-              subtitle={isAllStores ? "All stores combined" : selectedStore?.store_name ?? ""}
-              loading={ga4ChannelLoading}
-            />
-          </div>
-        </section>
+          <section className="flex flex-col">
+            <div className="flex items-center gap-2.5 mb-3">
+              <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-indigo-500/10 text-indigo-600 dark:text-indigo-400">Traffic</span>
+              <h2 className="text-base font-semibold">Where Customers Come From</h2>
+            </div>
+            <div className="flex-1">
+              <TrafficByChannelCard
+                channels={ga4ChannelBreakdown}
+                subtitle={isAllStores ? "All stores combined" : selectedStore?.store_name ?? ""}
+                loading={ga4ChannelLoading}
+              />
+            </div>
+          </section>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch">
+          <section className="flex flex-col">
+            <div className="flex-1">
+              <TrafficSourceCard
+                rows={trafficSourceSummary}
+                symbol={isAllStores ? "SAR " : selectedStore?.currency_symbol ?? ""}
+                loading={trafficSourceLoading}
+              />
+            </div>
+          </section>
+
+          <section className="flex flex-col">
+            <div className="flex-1">
+              <MarketingSpendCard
+                totalPct={marketingSpendBreakdown.totalPct}
+                platforms={marketingSpendBreakdown.platforms}
+                loading={loading}
+              />
+            </div>
+          </section>
+        </div>
       </div>
     ),
 
