@@ -257,3 +257,36 @@ export function useMonthlyNetSalesTrend(startISO: string, endISO: string) {
     },
   });
 }
+
+// ─── Cart abandonment ───────────────────────────────────────────────────────
+// abandoned_checkouts is already synced live from Shopify every 15 min
+// (shopify-sync edge function) — this just aggregates it per store/period.
+
+export interface AbandonmentRow {
+  storeId: string;
+  abandonedCount: number;
+  revenueAtRisk: number;
+  completedOnlineOrders: number;
+  hasSynced: boolean;
+}
+
+export function useCheckoutAbandonment(bounds: DateBounds) {
+  return useQuery<AbandonmentRow[]>({
+    queryKey: ["checkout-abandonment-pnl", bounds.cacheKey],
+    staleTime: 5 * 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("get_store_checkout_abandonment" as any, {
+        p_start_iso: bounds.startISO,
+        p_end_iso: bounds.endISO,
+      } as any);
+      if (error) throw error;
+      return ((data ?? []) as any[]).map(r => ({
+        storeId: r.store_id,
+        abandonedCount: Number(r.abandoned_count),
+        revenueAtRisk: Number(r.revenue_at_risk),
+        completedOnlineOrders: Number(r.completed_online_orders),
+        hasSynced: Boolean(r.has_synced),
+      }));
+    },
+  });
+}

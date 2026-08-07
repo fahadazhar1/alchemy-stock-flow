@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   ChevronLeft, ChevronRight, Plus, Pencil, Trash2, Wallet,
-  TrendingUp, TrendingDown, Receipt, Coins, ArrowUp, ArrowDown, Percent, Tag, Share2,
+  TrendingUp, TrendingDown, Receipt, Coins, ArrowUp, ArrowDown, Percent, Tag, Share2, ShoppingCart,
   Download, Printer, LineChart as LineChartIcon, Info,
 } from "lucide-react";
 import {
@@ -26,9 +26,9 @@ import { useRole } from "@/hooks/useRole";
 import { useStoreSalesPulse, type ChannelSalesStat } from "@/hooks/useStoreSalesPulse";
 import {
   getMonthBounds, useAllCostEntries, useCostEntryMutations, useEnsureFxRates, useUpsertFxRate,
-  useSalesBridge, useMonthlyNetSalesTrend, currencyToSar,
+  useSalesBridge, useMonthlyNetSalesTrend, useCheckoutAbandonment, currencyToSar,
   COST_CATEGORIES, AD_PLATFORMS, MARKETPLACE_PLATFORMS,
-  type CostEntry, type CostEntryInput, type SalesBridgeRow, type MonthlyTrendPoint,
+  type CostEntry, type CostEntryInput, type SalesBridgeRow, type MonthlyTrendPoint, type AbandonmentRow,
 } from "@/hooks/usePnL";
 import { Tooltip as UiTooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
@@ -615,6 +615,79 @@ function SalesBridgeCard({ grossSales, discounts, netSales, symbol, loading }: {
   );
 }
 
+// ─── Cart abandonment — live from Shopify's /checkouts.json, synced every ──
+// 15 min by the existing shopify-sync edge function. Not an approximation.
+
+function AbandonmentCard({ abandonedCount, revenueAtRisk, abandonmentRate, symbol, hasSynced, loading }: {
+  abandonedCount: number; revenueAtRisk: number; abandonmentRate: number | null;
+  symbol: string; hasSynced: boolean; loading: boolean;
+}) {
+  return (
+    <Card className="h-full flex flex-col">
+      <CardHeader className="pb-2 pt-4 px-4">
+        <div className="flex items-center gap-2">
+          <span className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: "#ffe4e6", color: "#e11d48" }}>
+            <ShoppingCart size={12} strokeWidth={2.2} />
+          </span>
+          <h3 className="text-sm font-semibold">Cart Abandonment</h3>
+        </div>
+      </CardHeader>
+      <CardContent className="px-4 pb-4 pt-1 flex-1 flex flex-col justify-center">
+        {loading ? (
+          <div className="space-y-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}</div>
+        ) : !hasSynced ? (
+          <p className="text-sm text-muted-foreground py-4 text-center">Not synced for this store yet.</p>
+        ) : (
+          <div className="flex items-stretch">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
+                <span className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ background: "#ffe4e6", color: "#e11d48" }}>
+                  <ShoppingCart size={11} strokeWidth={2.2} />
+                </span>
+                Abandoned Checkouts
+              </div>
+              <div className="text-lg font-bold tabular-nums tracking-tight truncate">{fmtNum(abandonedCount)}</div>
+            </div>
+
+            <div className="flex items-center justify-center px-1.5 text-muted-foreground/30 shrink-0">
+              <ChevronRight size={16} />
+            </div>
+
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
+                <span className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ background: "#fee2e2", color: "#dc2626" }}>
+                  <Coins size={11} strokeWidth={2.2} />
+                </span>
+                Revenue at Risk
+              </div>
+              <div className="text-lg font-bold tabular-nums tracking-tight truncate text-red-600 dark:text-red-400">{fmtC(revenueAtRisk, symbol)}</div>
+            </div>
+
+            <div className="flex items-center justify-center px-1.5 text-muted-foreground/30 shrink-0">
+              <ChevronRight size={16} />
+            </div>
+
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
+                <span className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ background: "#fef3c7", color: "#d97706" }}>
+                  <Percent size={11} strokeWidth={2.2} />
+                </span>
+                Abandonment Rate
+              </div>
+              <div className="text-lg font-bold tabular-nums tracking-tight truncate">{abandonmentRate !== null ? `${abandonmentRate.toFixed(1)}%` : "—"}</div>
+            </div>
+          </div>
+        )}
+        {hasSynced && !loading && (
+          <p className="text-[10px] text-muted-foreground mt-3 pt-2 border-t">
+            Live from Shopify's checkout data, synced every 15 minutes · online-store channel only (excludes POS &amp; draft orders) · counts checkouts not yet recovered.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ─── Net Sales trend, last 6 months ─────────────────────────────────────────
 // All Stores: indexed to 100 at the earliest month, so stores in different
 // currencies can share one chart without needing an FX rate for every past
@@ -760,6 +833,7 @@ export default function PnLDashboard() {
   const { data: fxData, isError: fxError, refetch: refetchFxRates } = useEnsureFxRates(monthKey);
   const fxRates = fxData?.rates ?? {};
   const { data: bridgeRows = [], isLoading: bridgeLoading } = useSalesBridge(bounds);
+  const { data: abandonmentRows = [], isLoading: abandonmentLoading } = useCheckoutAbandonment(bounds);
 
   // Last 6 full calendar months, ending with the month currently in view.
   const trendBounds = useMemo(() => {
@@ -915,6 +989,45 @@ export default function PnLDashboard() {
     }
     return { grossSales: gross, discounts: disc, netSales: net, symbol: "SAR " };
   }, [isAllStores, selectedStoreId, selectedStore, bridgeRows, activeStores, fxRates]);
+
+  // Cart abandonment summary, same scope rule as the KPI row above. Counts
+  // (abandoned/completed) never need FX; only revenueAtRisk does for the
+  // All Stores SAR total. A store that's never synced is excluded from the
+  // combined total rather than silently counted as zero.
+  const abandonmentByStore = new Map(abandonmentRows.map(a => [a.storeId, a]));
+  const abandonmentSummary = useMemo(() => {
+    if (!isAllStores) {
+      const a = selectedStoreId ? abandonmentByStore.get(selectedStoreId) : undefined;
+      const abandoned = a?.abandonedCount ?? 0;
+      const completed = a?.completedOnlineOrders ?? 0;
+      const total = abandoned + completed;
+      return {
+        abandonedCount: abandoned,
+        revenueAtRisk: a?.revenueAtRisk ?? 0,
+        abandonmentRate: total > 0 ? (abandoned / total) * 100 : null,
+        symbol: selectedStore?.currency_symbol ?? "",
+        hasSynced: a?.hasSynced ?? false,
+      };
+    }
+    let abandoned = 0, completed = 0, revenueSar = 0, anySynced = false;
+    for (const s of activeStores) {
+      const a = abandonmentByStore.get(s.id);
+      if (!a?.hasSynced) continue;
+      anySynced = true;
+      abandoned += a.abandonedCount;
+      completed += a.completedOnlineOrders;
+      const riskSar = currencyToSar(a.revenueAtRisk, s.currency ?? "GBP", fxRates);
+      if (riskSar !== null) revenueSar += riskSar;
+    }
+    const total = abandoned + completed;
+    return {
+      abandonedCount: abandoned,
+      revenueAtRisk: revenueSar,
+      abandonmentRate: total > 0 ? (abandoned / total) * 100 : null,
+      symbol: "SAR ",
+      hasSynced: anySynced,
+    };
+  }, [isAllStores, selectedStoreId, selectedStore, abandonmentRows, activeStores, fxRates]);
 
   // Net Sales trend — indexed to 100 in All Stores mode (avoids needing an FX
   // rate for every past month just to draw a line chart), native currency
@@ -1096,6 +1209,22 @@ export default function PnLDashboard() {
           symbol={isAllStores ? "SAR " : selectedStore?.currency_symbol ?? ""}
           subtitle={isAllStores ? "All stores combined, converted to SAR" : selectedStore?.store_name ?? ""}
           loading={loading}
+        />
+      </section>
+
+      {/* Cart abandonment */}
+      <section>
+        <div className="flex items-center gap-2.5 mb-3">
+          <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-rose-500/10 text-rose-600 dark:text-rose-400">Risk</span>
+          <h2 className="text-base font-semibold">Cart Abandonment</h2>
+        </div>
+        <AbandonmentCard
+          abandonedCount={abandonmentSummary.abandonedCount}
+          revenueAtRisk={abandonmentSummary.revenueAtRisk}
+          abandonmentRate={abandonmentSummary.abandonmentRate}
+          symbol={abandonmentSummary.symbol}
+          hasSynced={abandonmentSummary.hasSynced}
+          loading={loading || abandonmentLoading}
         />
       </section>
 
