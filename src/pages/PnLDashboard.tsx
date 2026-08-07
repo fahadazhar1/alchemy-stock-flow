@@ -268,25 +268,42 @@ function SummaryCards({ totalRevenue, totalCosts, netSales, revenueDelta, costsD
   return (
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
       {cards.map(c => (
-        <Card key={c.label}>
+        <Card key={c.label} className="overflow-hidden transition-shadow hover:shadow-md">
+          <div className="h-1.5 w-full" style={{ background: c.color }} />
           <CardContent className="p-4">
-            <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
-              <span className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ background: c.bg, color: c.color }}>
-                <c.icon size={11} strokeWidth={2.2} />
+            <div className="flex items-start justify-between mb-3">
+              <span className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: c.bg, color: c.color }}>
+                <c.icon size={17} strokeWidth={2.2} />
               </span>
-              {c.label}
+              {c.delta !== null && !loading && <KpiDeltaPill value={c.delta} inverse={c.inverse} />}
             </div>
-            {loading ? <Skeleton className="h-7 w-24 mb-1.5" /> : (
-              <div className={cn("font-bold tracking-tight leading-none", c.label === "Biggest Cost" ? "text-sm" : "text-[22px] tabular-nums")}>{c.value}</div>
+            <div className="text-[11px] text-muted-foreground font-medium mb-1">{c.label}</div>
+            {loading ? <Skeleton className="h-8 w-28" /> : (
+              <div className={cn("font-bold tracking-tight leading-none", c.label === "Biggest Cost" ? "text-base" : "text-[26px] tabular-nums")}>{c.value}</div>
             )}
-            <div className="flex items-center gap-1.5 mt-1.5 text-xs min-h-[16px]">
-              {c.delta !== null && !loading && <DeltaBadge value={c.delta} inverse={c.inverse} />}
-              <span className="text-muted-foreground truncate text-[11px]">{c.sub}</span>
-            </div>
+            <div className="text-[11px] text-muted-foreground mt-1.5">{c.sub}</div>
           </CardContent>
         </Card>
       ))}
     </div>
+  );
+}
+
+/** Pill-style delta for the top KPI row — distinct from the plain-text
+ *  DeltaBadge used inline elsewhere on this page (per-store cards, ranking
+ *  table), where a filled pill would feel too heavy in that denser layout. */
+function KpiDeltaPill({ value, inverse = false }: { value: number; inverse?: boolean }) {
+  const positive = inverse ? value <= 0 : value >= 0;
+  return (
+    <span className={cn(
+      "inline-flex items-center gap-0.5 text-[11px] font-semibold px-1.5 py-0.5 rounded-full shrink-0",
+      positive
+        ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-400"
+        : "bg-red-50 text-red-600 dark:bg-red-950/50 dark:text-red-400",
+    )}>
+      {positive ? <ArrowUp size={9} strokeWidth={2.8} /> : <ArrowDown size={9} strokeWidth={2.8} />}
+      {Math.abs(value)}%
+    </span>
   );
 }
 
