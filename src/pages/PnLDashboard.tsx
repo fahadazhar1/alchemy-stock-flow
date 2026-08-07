@@ -239,15 +239,16 @@ function FxRateEditor({ monthKey, fxRates }: { monthKey: string; fxRates: Record
 
 // ─── Global summary KPI row ─────────────────────────────────────────────────
 
-function SummaryCards({ totalRevenue, totalCosts, netSales, netDelta, biggestCostLabel, loading }: {
-  totalRevenue: number; totalCosts: number; netSales: number; netDelta: number | null;
+function SummaryCards({ totalRevenue, totalCosts, netSales, revenueDelta, costsDelta, netDelta, biggestCostLabel, loading }: {
+  totalRevenue: number; totalCosts: number; netSales: number;
+  revenueDelta: number | null; costsDelta: number | null; netDelta: number | null;
   biggestCostLabel: string; loading: boolean;
 }) {
   const cards = [
-    { label: "Total Revenue (SAR)", value: `SAR ${fmtNum(totalRevenue)}`, icon: TrendingUp, color: "#6366f1", bg: "#eef2ff", delta: null as number | null, sub: "shipping excluded" },
-    { label: "Total Costs (SAR)", value: `−SAR ${fmtNum(totalCosts)}`, icon: Receipt, color: "#dc2626", bg: "#fee2e2", delta: null as number | null, sub: "this month" },
-    { label: "Net Sales (SAR)", value: `SAR ${fmtNum(netSales)}`, icon: Coins, color: "#059669", bg: "#d1fae5", delta: netDelta, sub: "vs last month" },
-    { label: "Biggest Cost", value: biggestCostLabel, icon: TrendingDown, color: "#d97706", bg: "#fef3c7", delta: null as number | null, sub: "this month" },
+    { label: "Total Revenue (SAR)", value: `SAR ${fmtNum(totalRevenue)}`, icon: TrendingUp, color: "#6366f1", bg: "#eef2ff", delta: revenueDelta, inverse: false, sub: "vs last month" },
+    { label: "Total Costs (SAR)", value: `−SAR ${fmtNum(totalCosts)}`, icon: Receipt, color: "#dc2626", bg: "#fee2e2", delta: costsDelta, inverse: true, sub: "vs last month" },
+    { label: "Net Sales (SAR)", value: `SAR ${fmtNum(netSales)}`, icon: Coins, color: "#059669", bg: "#d1fae5", delta: netDelta, inverse: false, sub: "vs last month" },
+    { label: "Biggest Cost", value: biggestCostLabel, icon: TrendingDown, color: "#d97706", bg: "#fef3c7", delta: null as number | null, inverse: false, sub: "this month" },
   ];
   return (
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -264,7 +265,7 @@ function SummaryCards({ totalRevenue, totalCosts, netSales, netDelta, biggestCos
               <div className={cn("font-bold tracking-tight leading-none", c.label === "Biggest Cost" ? "text-sm" : "text-[22px] tabular-nums")}>{c.value}</div>
             )}
             <div className="flex items-center gap-1.5 mt-1.5 text-xs min-h-[16px]">
-              {c.delta !== null && !loading && <DeltaBadge value={c.delta} />}
+              {c.delta !== null && !loading && <DeltaBadge value={c.delta} inverse={c.inverse} />}
               <span className="text-muted-foreground truncate text-[11px]">{c.sub}</span>
             </div>
           </CardContent>
@@ -280,6 +281,7 @@ interface StoreRow {
   store: { id: string; store_name: string; currency: string | null; currency_symbol: string | null };
   revenue: number; costs: number; net: number; revenueDelta: number | null;
   revenueSar: number | null; costsSar: number | null; netSar: number | null;
+  prevRevenueSar: number | null; prevCostsSar: number | null; prevNetSar: number | null;
   entries: CostEntry[];
 }
 
@@ -454,21 +456,32 @@ export default function PnLDashboard() {
     const prevNet = prevRevenue - prevCosts;
     const revenueSar = currencyToSar(revenue, s.currency ?? "GBP", fxRates);
     const costsSar = currencyToSar(costs, s.currency ?? "GBP", fxRates);
+    const prevRevenueSar = currencyToSar(prevRevenue, s.currency ?? "GBP", fxRates);
+    const prevCostsSar = currencyToSar(prevCosts, s.currency ?? "GBP", fxRates);
     const prevNetSar = currencyToSar(prevNet, s.currency ?? "GBP", fxRates);
     const netSar = revenueSar !== null && costsSar !== null ? revenueSar - costsSar : null;
-    return { store: s, revenue, costs, net, revenueDelta: pulse?.revenueDelta ?? null, revenueSar, costsSar, netSar, prevNetSar, entries: storeEntries };
+    return { store: s, revenue, costs, net, revenueDelta: pulse?.revenueDelta ?? null, revenueSar, costsSar, prevRevenueSar, prevCostsSar, netSar, prevNetSar, entries: storeEntries };
   }), [activeStores, salesPulse, entries, prevEntries, fxRates]);
 
   const missingRates = rows.some(r => r.netSar === null);
 
   const grandTotal = rows.reduce((acc, r) => {
     if (r.revenueSar === null || r.costsSar === null) return acc;
-    return { revenue: acc.revenue + r.revenueSar, costs: acc.costs + r.costsSar, prevNet: acc.prevNet + (r.prevNetSar ?? 0) };
-  }, { revenue: 0, costs: 0, prevNet: 0 });
+    return {
+      revenue: acc.revenue + r.revenueSar,
+      costs: acc.costs + r.costsSar,
+      prevRevenue: acc.prevRevenue + (r.prevRevenueSar ?? 0),
+      prevCosts: acc.prevCosts + (r.prevCostsSar ?? 0),
+      prevNet: acc.prevNet + (r.prevNetSar ?? 0),
+    };
+  }, { revenue: 0, costs: 0, prevRevenue: 0, prevCosts: 0, prevNet: 0 });
 
-  const netDelta = grandTotal.prevNet !== 0
-    ? Math.round((((grandTotal.revenue - grandTotal.costs) - grandTotal.prevNet) / Math.abs(grandTotal.prevNet)) * 100)
-    : null;
+  const pctDelta = (cur: number, prev: number): number | null =>
+    prev !== 0 ? Math.round(((cur - prev) / Math.abs(prev)) * 100) : null;
+
+  const revenueDelta = pctDelta(grandTotal.revenue, grandTotal.prevRevenue);
+  const costsDelta = pctDelta(grandTotal.costs, grandTotal.prevCosts);
+  const netDelta = pctDelta(grandTotal.revenue - grandTotal.costs, grandTotal.prevNet);
 
   const biggestCostLabel = useMemo(() => {
     const byCategory = new Map<string, number>();
@@ -543,6 +556,8 @@ export default function PnLDashboard() {
         totalRevenue={grandTotal.revenue}
         totalCosts={grandTotal.costs}
         netSales={grandTotal.revenue - grandTotal.costs}
+        revenueDelta={revenueDelta}
+        costsDelta={costsDelta}
         netDelta={netDelta}
         biggestCostLabel={biggestCostLabel}
         loading={loading}
