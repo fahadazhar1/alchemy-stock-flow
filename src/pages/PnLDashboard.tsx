@@ -1295,39 +1295,44 @@ export default function PnLDashboard() {
         </section>
       </div>
 
-      {/* Sales by channel */}
-      <section>
-        <div className="flex items-center gap-2.5 mb-3">
-          <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-cyan-500/10 text-cyan-600 dark:text-cyan-400">Channels</span>
-          <h2 className="text-base font-semibold">Sales by Channel</h2>
-        </div>
-        <ChannelBreakdownCard
-          channels={displayChannelBreakdown}
-          symbol={isAllStores ? "SAR " : selectedStore?.currency_symbol ?? ""}
-          subtitle={isAllStores ? "All stores combined, converted to SAR" : selectedStore?.store_name ?? ""}
-          loading={loading}
-        />
-      </section>
+      {/* Sales by channel + cart abandonment, side by side on wide screens */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch">
+        <section className="flex flex-col">
+          <div className="flex items-center gap-2.5 mb-3">
+            <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-cyan-500/10 text-cyan-600 dark:text-cyan-400">Channels</span>
+            <h2 className="text-base font-semibold">Sales by Channel</h2>
+          </div>
+          <div className="flex-1">
+            <ChannelBreakdownCard
+              channels={displayChannelBreakdown}
+              symbol={isAllStores ? "SAR " : selectedStore?.currency_symbol ?? ""}
+              subtitle={isAllStores ? "All stores combined, converted to SAR" : selectedStore?.store_name ?? ""}
+              loading={loading}
+            />
+          </div>
+        </section>
 
-      {/* Cart abandonment */}
-      <section>
-        <div className="flex items-center gap-2.5 mb-3">
-          <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-rose-500/10 text-rose-600 dark:text-rose-400">Risk</span>
-          <h2 className="text-base font-semibold">Cart Abandonment</h2>
-        </div>
-        {isAllStores ? (
-          <AbandonmentByStoreCard rows={storeAbandonmentRows} loading={loading || abandonmentLoading} />
-        ) : (
-          <AbandonmentCard
-            abandonedCount={abandonmentSummary.abandonedCount}
-            revenueAtRisk={abandonmentSummary.revenueAtRisk}
-            abandonmentRate={abandonmentSummary.abandonmentRate}
-            symbol={abandonmentSummary.symbol}
-            hasSynced={abandonmentSummary.hasSynced}
-            loading={loading || abandonmentLoading}
-          />
-        )}
-      </section>
+        <section className="flex flex-col">
+          <div className="flex items-center gap-2.5 mb-3">
+            <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-rose-500/10 text-rose-600 dark:text-rose-400">Risk</span>
+            <h2 className="text-base font-semibold">Cart Abandonment</h2>
+          </div>
+          <div className="flex-1">
+            {isAllStores ? (
+              <AbandonmentByStoreCard rows={storeAbandonmentRows} loading={loading || abandonmentLoading} />
+            ) : (
+              <AbandonmentCard
+                abandonedCount={abandonmentSummary.abandonedCount}
+                revenueAtRisk={abandonmentSummary.revenueAtRisk}
+                abandonmentRate={abandonmentSummary.abandonmentRate}
+                symbol={abandonmentSummary.symbol}
+                hasSynced={abandonmentSummary.hasSynced}
+                loading={loading || abandonmentLoading}
+              />
+            )}
+          </div>
+        </section>
+      </div>
 
       {/* Net Sales trend */}
       <section>
