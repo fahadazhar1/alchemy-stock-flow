@@ -301,20 +301,27 @@ function PnLCard({ r, idx }: { r: StoreRow; idx: number }) {
           <span className="text-[10px] text-muted-foreground uppercase tracking-wide font-mono">{r.store.currency}</span>
         </div>
 
-        <div className="grid grid-cols-3 gap-2 pt-1 border-t">
-          <div>
-            <div className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">Revenue</div>
-            <div className="text-sm font-semibold tabular-nums">{fmtC(r.revenue, r.store.currency_symbol ?? "")}</div>
-            <DeltaBadge value={r.revenueDelta} />
+        <div className="pt-1 border-t space-y-1.5">
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-muted-foreground">Revenue</span>
+            <span className="flex items-center gap-1.5">
+              <span className="font-semibold tabular-nums">{fmtC(r.revenue, r.store.currency_symbol ?? "")}</span>
+              <DeltaBadge value={r.revenueDelta} />
+            </span>
           </div>
-          <div>
-            <div className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">Costs</div>
-            <div className="text-sm font-semibold tabular-nums text-red-600 dark:text-red-400">−{fmtC(r.costs, r.store.currency_symbol ?? "")}</div>
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-muted-foreground">Costs</span>
+            <span className="font-semibold tabular-nums text-red-600 dark:text-red-400">−{fmtC(r.costs, r.store.currency_symbol ?? "")}</span>
           </div>
+        </div>
+
+        <div className="flex items-center justify-between border-t pt-2">
           <div>
             <div className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">Net</div>
-            <div className="text-sm font-semibold tabular-nums">{fmtC(r.net, r.store.currency_symbol ?? "")}</div>
-            <div className="text-[10px] text-muted-foreground">{r.netSar !== null ? `SAR ${fmtNum(r.netSar)}` : "rate missing"}</div>
+            <div className="text-base font-bold tabular-nums">{fmtC(r.net, r.store.currency_symbol ?? "")}</div>
+          </div>
+          <div className="text-right text-[10px] text-muted-foreground">
+            {r.netSar !== null ? `SAR ${fmtNum(r.netSar)}` : "rate missing"}
           </div>
         </div>
 
