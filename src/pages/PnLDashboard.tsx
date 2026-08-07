@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   ChevronLeft, ChevronRight, Plus, Pencil, Trash2, Wallet,
-  TrendingUp, TrendingDown, Receipt, Coins, ArrowUp, ArrowDown,
+  TrendingUp, TrendingDown, Receipt, Coins, ArrowUp, ArrowDown, Percent, Tag,
   Download, Printer, LineChart as LineChartIcon, Info,
 } from "lucide-react";
 import {
@@ -314,7 +314,7 @@ function biggestCategoryFor(entries: CostEntry[]): string {
   return categoryLabel(top[0]);
 }
 
-function PnLCard({ r, idx }: { r: StoreRow; idx: number }) {
+function PnLCard({ r, idx, showCategoryBreakdown }: { r: StoreRow; idx: number; showCategoryBreakdown: boolean }) {
   const color = storeColor(idx);
   const byCategory = useMemo(() => {
     const map = new Map<string, number>();
@@ -356,24 +356,26 @@ function PnLCard({ r, idx }: { r: StoreRow; idx: number }) {
           </div>
         </div>
 
-        <div className="border-t pt-2 flex-1 flex flex-col min-h-0">
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Costs by category</span>
-            <span className="text-[10px] text-muted-foreground">{byCategory.length} active</span>
-          </div>
-          {byCategory.length === 0 ? (
-            <p className="text-[11px] text-muted-foreground py-3 text-center">No costs entered this period.</p>
-          ) : (
-            <div className="divide-y divide-border/50">
-              {byCategory.map(([cat, amt]) => (
-                <div key={cat} className="flex items-center gap-2.5 py-1.5">
-                  <span className="text-xs font-medium truncate flex-1 min-w-0">{categoryLabel(cat)}</span>
-                  <span className="text-xs font-semibold tabular-nums">{fmtC(amt, r.store.currency_symbol ?? "")}</span>
-                </div>
-              ))}
+        {showCategoryBreakdown && (
+          <div className="border-t pt-2 flex-1 flex flex-col min-h-0">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Costs by category</span>
+              <span className="text-[10px] text-muted-foreground">{byCategory.length} active</span>
             </div>
-          )}
-        </div>
+            {byCategory.length === 0 ? (
+              <p className="text-[11px] text-muted-foreground py-3 text-center">No costs entered this period.</p>
+            ) : (
+              <div className="divide-y divide-border/50">
+                {byCategory.map(([cat, amt]) => (
+                  <div key={cat} className="flex items-center gap-2.5 py-1.5">
+                    <span className="text-xs font-medium truncate flex-1 min-w-0">{categoryLabel(cat)}</span>
+                    <span className="text-xs font-semibold tabular-nums">{fmtC(amt, r.store.currency_symbol ?? "")}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </CardContent>
     </Card>
   );
@@ -381,21 +383,25 @@ function PnLCard({ r, idx }: { r: StoreRow; idx: number }) {
 
 // ─── Cost breakdown by category — combined across every store, one card ────
 
-function CategoryBreakdownCard({ breakdown, excludedStoreNames, loading }: {
+function CategoryBreakdownCard({ breakdown, excludedStoreNames, symbol, subtitle, loading }: {
   breakdown: { category: string; amount: number; pct: number }[];
   excludedStoreNames: string[];
+  symbol: string;
+  subtitle: string;
   loading: boolean;
 }) {
   return (
-    <Card>
+    <Card className="h-full flex flex-col">
       <CardHeader className="pb-2 pt-4 px-4">
         <div className="flex items-center gap-2">
-          <Receipt size={14} className="text-muted-foreground" />
+          <span className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: "#fef3c7", color: "#d97706" }}>
+            <Receipt size={12} strokeWidth={2.2} />
+          </span>
           <h3 className="text-sm font-semibold">Cost Breakdown by Category</h3>
-          <span className="text-xs text-muted-foreground">All stores combined, converted to SAR</span>
+          <span className="text-xs text-muted-foreground">{subtitle}</span>
         </div>
       </CardHeader>
-      <CardContent className="px-4 pb-4 pt-1">
+      <CardContent className="px-4 pb-4 pt-1 flex-1 flex flex-col justify-center">
         {!loading && excludedStoreNames.length > 0 && (
           <p className="text-[11px] text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-md px-2.5 py-1.5 mb-3">
             Missing exchange rate — excludes {excludedStoreNames.join(", ")}. Totals below understate the true cost.
@@ -408,28 +414,32 @@ function CategoryBreakdownCard({ breakdown, excludedStoreNames, loading }: {
         ) : breakdown.length === 0 ? (
           <p className="text-sm text-muted-foreground py-4 text-center">No costs entered this period.</p>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-4">
             {breakdown.map((b, idx) => {
               const color = categoryColor(b.category);
               return (
-                <div key={b.category}>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="flex items-center gap-1.5 text-sm font-medium">
-                      <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
-                      {categoryLabel(b.category)}
-                      {idx === 0 && (
-                        <Badge variant="outline" className="text-[9px] px-1.5 py-0 text-amber-700 bg-amber-50 dark:bg-amber-950/40 dark:text-amber-300 border-amber-200 dark:border-amber-800">
-                          Biggest
-                        </Badge>
-                      )}
-                    </span>
-                    <span className="text-sm font-bold tabular-nums">SAR {fmtNum(b.amount)}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
-                      <div className="h-full rounded-full transition-all" style={{ width: `${Math.max(2, b.pct)}%`, background: color }} />
+                <div key={b.category} className="flex items-center gap-3">
+                  <span className="w-7 h-7 rounded-md flex items-center justify-center shrink-0" style={{ background: `${color}1a`, color }}>
+                    <Tag size={13} strokeWidth={2.2} />
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between mb-1 gap-2">
+                      <span className="flex items-center gap-1.5 text-sm font-medium truncate">
+                        {categoryLabel(b.category)}
+                        {idx === 0 && (
+                          <Badge variant="outline" className="text-[9px] px-1.5 py-0 text-amber-700 bg-amber-50 dark:bg-amber-950/40 dark:text-amber-300 border-amber-200 dark:border-amber-800 shrink-0">
+                            Biggest
+                          </Badge>
+                        )}
+                      </span>
+                      <span className="text-sm font-bold tabular-nums shrink-0">{symbol}{fmtNum(b.amount)}</span>
                     </div>
-                    <span className="text-xs text-muted-foreground tabular-nums w-10 text-right">{b.pct.toFixed(0)}%</span>
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                        <div className="h-full rounded-full transition-all" style={{ width: `${Math.max(2, b.pct)}%`, background: color }} />
+                      </div>
+                      <span className="text-xs text-muted-foreground tabular-nums w-9 text-right shrink-0">{b.pct.toFixed(0)}%</span>
+                    </div>
                   </div>
                 </div>
               );
@@ -448,7 +458,7 @@ function SalesBridgeCard({ grossSales, discounts, netSales, symbol, loading }: {
 }) {
   const discountPct = grossSales > 0 ? (discounts / grossSales) * 100 : 0;
   return (
-    <Card>
+    <Card className="h-full flex flex-col">
       <CardHeader className="pb-2 pt-4 px-4">
         <div className="flex items-center gap-2">
           <TrendingUp size={14} className="text-muted-foreground" />
@@ -469,23 +479,48 @@ function SalesBridgeCard({ grossSales, discounts, netSales, symbol, loading }: {
           </TooltipProvider>
         </div>
       </CardHeader>
-      <CardContent className="px-4 pb-4 pt-1">
+      <CardContent className="px-4 pb-4 pt-1 flex-1 flex flex-col justify-center">
         {loading ? (
           <div className="space-y-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}</div>
         ) : (
-          <div className="grid grid-cols-3 gap-3 text-center">
-            <div>
-              <div className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Gross Sales</div>
-              <div className="text-lg font-bold tabular-nums">{fmtC(grossSales, symbol)}</div>
+          <div className="flex items-stretch">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
+                <span className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ background: "#eef2ff", color: "#6366f1" }}>
+                  <TrendingUp size={11} strokeWidth={2.2} />
+                </span>
+                Gross Sales
+              </div>
+              <div className="text-lg font-bold tabular-nums tracking-tight truncate">{fmtC(grossSales, symbol)}</div>
             </div>
-            <div>
-              <div className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Discounts</div>
-              <div className="text-lg font-bold tabular-nums text-red-600 dark:text-red-400">−{fmtC(discounts, symbol)}</div>
-              <div className="text-[10px] text-muted-foreground mt-0.5">{discountPct.toFixed(1)}% of gross</div>
+
+            <div className="flex items-center justify-center px-1.5 text-muted-foreground/30 shrink-0">
+              <ChevronRight size={16} />
             </div>
-            <div>
-              <div className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Net Sales</div>
-              <div className="text-lg font-bold tabular-nums text-emerald-600 dark:text-emerald-400">{fmtC(netSales, symbol)}</div>
+
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
+                <span className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ background: "#fee2e2", color: "#dc2626" }}>
+                  <Percent size={11} strokeWidth={2.2} />
+                </span>
+                Discounts
+              </div>
+              <div className="text-lg font-bold tabular-nums tracking-tight truncate text-red-600 dark:text-red-400">−{fmtC(discounts, symbol)}</div>
+              <div className="text-[10px] text-muted-foreground mt-1">{discountPct.toFixed(1)}% of gross</div>
+            </div>
+
+            <div className="flex items-center justify-center px-1.5 text-muted-foreground/30 shrink-0">
+              <ChevronRight size={16} />
+            </div>
+
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
+                <span className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ background: "#d1fae5", color: "#059669" }}>
+                  <Coins size={11} strokeWidth={2.2} />
+                </span>
+                Net Sales
+              </div>
+              <div className="text-lg font-bold tabular-nums tracking-tight truncate text-emerald-600 dark:text-emerald-400">{fmtC(netSales, symbol)}</div>
             </div>
           </div>
         )}
@@ -742,6 +777,20 @@ export default function PnLDashboard() {
         biggestCostLabel: biggestCategoryFor(displayRows[0]?.entries ?? []),
       };
 
+  // Category breakdown: SAR-combined across every store for All Stores, that
+  // one store's own native-currency split otherwise — no FX needed there, so
+  // a single store's breakdown is never blocked by a missing exchange rate.
+  const displayCategoryBreakdown = useMemo(() => {
+    if (isAllStores) return categoryBreakdown;
+    const entries = displayRows[0]?.entries ?? [];
+    const byCategory = new Map<string, number>();
+    for (const e of entries) byCategory.set(e.category, (byCategory.get(e.category) ?? 0) + Number(e.amount));
+    const total = [...byCategory.values()].reduce((a, b) => a + b, 0);
+    return [...byCategory.entries()]
+      .map(([category, amount]) => ({ category, amount, pct: total > 0 ? (amount / total) * 100 : 0 }))
+      .sort((a, b) => b.amount - a.amount);
+  }, [isAllStores, categoryBreakdown, displayRows]);
+
   // Sales bridge summary, same scope rule as the KPI row above.
   const bridgeByStore = new Map(bridgeRows.map(b => [b.storeId, b]));
   const bridgeSummary = useMemo(() => {
@@ -890,32 +939,44 @@ export default function PnLDashboard() {
         loading={loading}
       />
 
-      {/* Revenue bridge + cost breakdown, side by side on wide screens */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <section>
+      {/* Revenue bridge + cost breakdown, side by side on wide screens — both
+          stretch to the taller card's height (whichever has more categories) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch">
+        <section className="flex flex-col">
           <div className="flex items-center gap-2.5 mb-3">
             <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">Revenue</span>
             <h2 className="text-base font-semibold">Where the Money Comes From</h2>
           </div>
-          <SalesBridgeCard
-            grossSales={bridgeSummary.grossSales}
-            discounts={bridgeSummary.discounts}
-            netSales={bridgeSummary.netSales}
-            symbol={bridgeSummary.symbol}
-            loading={loading}
-          />
+          <div className="flex-1">
+            <SalesBridgeCard
+              grossSales={bridgeSummary.grossSales}
+              discounts={bridgeSummary.discounts}
+              netSales={bridgeSummary.netSales}
+              symbol={bridgeSummary.symbol}
+              loading={loading}
+            />
+          </div>
         </section>
 
-        {/* Cost breakdown by category — All Stores only, this is inherently a combined view */}
-        {isAllStores && (
-          <section>
-            <div className="flex items-center gap-2.5 mb-3">
-              <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400">Costs</span>
-              <h2 className="text-base font-semibold">Where the Money Goes</h2>
-            </div>
-            <CategoryBreakdownCard breakdown={categoryBreakdown} excludedStoreNames={excludedStoreNames} loading={loading} />
-          </section>
-        )}
+        {/* Cost breakdown by category — SAR-combined for All Stores, that
+            store's own native-currency split otherwise. Shown here instead of
+            inside the per-store card in single-store view (see PnLCard's
+            showCategoryBreakdown prop) to avoid showing the same numbers twice. */}
+        <section className="flex flex-col">
+          <div className="flex items-center gap-2.5 mb-3">
+            <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400">Costs</span>
+            <h2 className="text-base font-semibold">Where the Money Goes</h2>
+          </div>
+          <div className="flex-1">
+            <CategoryBreakdownCard
+              breakdown={displayCategoryBreakdown}
+              excludedStoreNames={isAllStores ? excludedStoreNames : []}
+              symbol={isAllStores ? "SAR " : selectedStore?.currency_symbol ?? ""}
+              subtitle={isAllStores ? "All stores combined, converted to SAR" : selectedStore?.store_name ?? ""}
+              loading={loading}
+            />
+          </div>
+        </section>
       </div>
 
       {/* Net Sales trend */}
@@ -949,7 +1010,7 @@ export default function PnLDashboard() {
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-            {displayRows.map((r) => <PnLCard key={r.store.id} r={r} idx={activeStores.findIndex(s => s.id === r.store.id)} />)}
+            {displayRows.map((r) => <PnLCard key={r.store.id} r={r} idx={activeStores.findIndex(s => s.id === r.store.id)} showCategoryBreakdown={isAllStores} />)}
           </div>
         )}
       </section>
