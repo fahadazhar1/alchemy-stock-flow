@@ -1,7 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { ChevronLeft, ChevronRight, Plus, Pencil, Trash2, AlertTriangle, ArrowUpRight, ArrowDownRight } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  ChevronLeft, ChevronRight, Plus, Pencil, Trash2, Wallet,
+  TrendingUp, TrendingDown, Receipt, Coins, ArrowUp, ArrowDown,
+} from "lucide-react";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,6 +16,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { cn } from "@/lib/utils";
 import { useStore } from "@/contexts/StoreContext";
 import { useRole } from "@/hooks/useRole";
 import { useStoreSalesPulse } from "@/hooks/useStoreSalesPulse";
@@ -21,21 +26,21 @@ import {
   type CostEntry, type CostEntryInput,
 } from "@/hooks/usePnL";
 
-// ─── Darussalam ledger palette — same 4 hex values used across every monthly
-// PDF report, so the dashboard finally reads as the same company as the PDFs. ──
-const NAVY = "#0b2e24";
-const GOLD = "#d4a52d";
-const GOLD_SOFT = "#f3e5c3";
-const OXBLOOD = "#8a3324";
-const INK = "#6b6b6b";
-const BAR_PALETTE = [NAVY, GOLD, OXBLOOD, INK];
+// Same accent palette + assignment order as Store Performance, so a store's
+// colour means the same thing on both pages.
+const STORE_COLORS = ["#6366f1", "#f59e0b", "#06b6d4", "#10b981", "#f43f5e", "#a855f7", "#3b82f6", "#84cc16"];
+function storeColor(idx: number): string { return STORE_COLORS[idx % STORE_COLORS.length]; }
 
-function fmtMoney(n: number, symbol: string): string {
-  return `${symbol}${n.toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+function fmtC(value: number, sym: string): string {
+  const sign = value < 0 ? "-" : "";
+  return `${sign}${sym}${Math.abs(value).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
-function categoryLabel(c: string) {
-  return COST_CATEGORIES.find(x => x.value === c)?.label ?? c;
+function fmtNum(n: number): string {
+  if (Math.abs(n) >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (Math.abs(n) >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return n.toLocaleString("en-GB", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 }
+function categoryLabel(c: string) { return COST_CATEGORIES.find(x => x.value === c)?.label ?? c; }
 function platformLabel(p: string | null) {
   if (!p) return "—";
   return [...AD_PLATFORMS, ...MARKETPLACE_PLATFORMS].find(x => x.value === p)?.label ?? p;
@@ -44,46 +49,35 @@ function prevMonthKey(year: number, month: number) {
   return month === 1 ? `${year - 1}-12` : `${year}-${String(month - 1).padStart(2, "0")}`;
 }
 
-// ─── Count-up number — the one motion moment on this page. Respects reduced-motion. ──
-function useCountUp(target: number, durationMs = 700) {
-  const [value, setValue] = useState(target);
-  const prevTarget = useRef(target);
-
-  useEffect(() => {
-    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    if (reduceMotion || !Number.isFinite(target)) { setValue(target); prevTarget.current = target; return; }
-
-    const from = prevTarget.current;
-    const to = target;
-    prevTarget.current = target;
-    const start = performance.now();
-    let frame: number;
-
-    const tick = (now: number) => {
-      const t = Math.min(1, (now - start) / durationMs);
-      const eased = 1 - Math.pow(1 - t, 3); // ease-out-cubic
-      setValue(from + (to - from) * eased);
-      if (t < 1) frame = requestAnimationFrame(tick);
-    };
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target]);
-
-  return value;
+function DeltaBadge({ value, inverse = false }: { value: number | null; inverse?: boolean }) {
+  if (value === null) return <span className="text-xs text-muted-foreground">—</span>;
+  const positive = inverse ? value <= 0 : value >= 0;
+  return (
+    <span className={cn(
+      "inline-flex items-center gap-0.5 text-xs font-medium",
+      positive ? "text-emerald-600 dark:text-emerald-400" : "text-red-500 dark:text-red-400",
+    )}>
+      {positive ? <ArrowUp size={9} strokeWidth={2.5} /> : <ArrowDown size={9} strokeWidth={2.5} />}
+      {Math.abs(value)}%
+    </span>
+  );
 }
 
-// ─── Month picker ───────────────────────────────────────────────────────────
+function Skeleton({ className }: { className?: string }) {
+  return <div className={cn("bg-muted animate-pulse rounded", className)} />;
+}
+
+// ─── Month picker — same pill-button chrome as the date range picker ───────
 
 function MonthPicker({ year, month, onChange }: { year: number; month: number; onChange: (y: number, m: number) => void }) {
   const label = new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
   const prev = () => (month === 1 ? onChange(year - 1, 12) : onChange(year, month - 1));
   const next = () => (month === 12 ? onChange(year + 1, 1) : onChange(year, month + 1));
   return (
-    <div className="flex items-center gap-1 rounded-md border" style={{ borderColor: `${NAVY}30` }}>
-      <Button variant="ghost" size="icon" className="h-9 w-9" onClick={prev}><ChevronLeft className="h-4 w-4" /></Button>
-      <span className="text-sm font-medium w-32 text-center tracking-wide" style={{ fontFamily: "'IBM Plex Sans', sans-serif" }}>{label}</span>
-      <Button variant="ghost" size="icon" className="h-9 w-9" onClick={next}><ChevronRight className="h-4 w-4" /></Button>
+    <div className="flex items-center rounded-lg border overflow-hidden text-xs">
+      <button onClick={prev} className="px-2 py-1.5 hover:bg-muted text-muted-foreground transition-colors border-r"><ChevronLeft size={13} /></button>
+      <span className="px-3 py-1.5 font-medium w-32 text-center">{label}</span>
+      <button onClick={next} className="px-2 py-1.5 hover:bg-muted text-muted-foreground transition-colors border-l"><ChevronRight size={13} /></button>
     </div>
   );
 }
@@ -205,7 +199,7 @@ function CostEntryDialog({
   );
 }
 
-// ─── FX rate inline editor (admin, for GBP/PKR only) ───────────────────────
+// ─── FX rate inline editor (admin fallback, for GBP/PKR only) ──────────────
 
 function FxRateEditor({ monthKey, fxRates }: { monthKey: string; fxRates: Record<string, number> }) {
   const upsert = useUpsertFxRate();
@@ -243,103 +237,176 @@ function FxRateEditor({ monthKey, fxRates }: { monthKey: string; fxRates: Record
   );
 }
 
-// ─── Regional Ledger Bar — the signature element. One proportional strip,
-// segmented by store, revenue share of the group total. ────────────────────
+// ─── Global summary KPI row ─────────────────────────────────────────────────
 
-function RegionalLedgerBar({ segments }: { segments: { name: string; share: number; sar: number }[] }) {
-  const [grown, setGrown] = useState(false);
-  useEffect(() => {
-    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    if (reduceMotion) { setGrown(true); return; }
-    const id = requestAnimationFrame(() => setGrown(true));
-    return () => cancelAnimationFrame(id);
-  }, []);
-
+function SummaryCards({ totalRevenue, totalCosts, netSales, netDelta, biggestCostLabel, loading }: {
+  totalRevenue: number; totalCosts: number; netSales: number; netDelta: number | null;
+  biggestCostLabel: string; loading: boolean;
+}) {
+  const cards = [
+    { label: "Total Revenue (SAR)", value: `SAR ${fmtNum(totalRevenue)}`, icon: TrendingUp, color: "#6366f1", bg: "#eef2ff", delta: null as number | null, sub: "shipping excluded" },
+    { label: "Total Costs (SAR)", value: `−SAR ${fmtNum(totalCosts)}`, icon: Receipt, color: "#dc2626", bg: "#fee2e2", delta: null as number | null, sub: "this month" },
+    { label: "Net Sales (SAR)", value: `SAR ${fmtNum(netSales)}`, icon: Coins, color: "#059669", bg: "#d1fae5", delta: netDelta, sub: "vs last month" },
+    { label: "Biggest Cost", value: biggestCostLabel, icon: TrendingDown, color: "#d97706", bg: "#fef3c7", delta: null as number | null, sub: "this month" },
+  ];
   return (
-    <div>
-      <div className="flex h-8 w-full overflow-hidden rounded-sm" style={{ background: `${INK}15` }}>
-        {segments.map((s, i) => (
-          <div
-            key={s.name}
-            title={`${s.name} — ${s.share.toFixed(1)}%`}
-            style={{
-              width: grown ? `${s.share}%` : "0%",
-              background: BAR_PALETTE[i % BAR_PALETTE.length],
-              transition: `width 700ms cubic-bezier(0.22,1,0.36,1) ${i * 80}ms`,
-            }}
-          />
-        ))}
-      </div>
-      <div className="flex flex-wrap gap-x-5 gap-y-1.5 mt-3">
-        {segments.map((s, i) => (
-          <div key={s.name} className="flex items-center gap-1.5 text-xs">
-            <span className="h-2 w-2 rounded-full shrink-0" style={{ background: BAR_PALETTE[i % BAR_PALETTE.length] }} />
-            <span className="font-medium" style={{ fontFamily: "'IBM Plex Sans', sans-serif" }}>{s.name}</span>
-            <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: INK }}>{s.share.toFixed(1)}% · SAR {s.sar.toLocaleString("en-GB", { maximumFractionDigits: 0 })}</span>
-          </div>
-        ))}
-      </div>
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      {cards.map(c => (
+        <Card key={c.label}>
+          <CardContent className="p-4">
+            <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
+              <span className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ background: c.bg, color: c.color }}>
+                <c.icon size={11} strokeWidth={2.2} />
+              </span>
+              {c.label}
+            </div>
+            {loading ? <Skeleton className="h-7 w-24 mb-1.5" /> : (
+              <div className={cn("font-bold tracking-tight leading-none", c.label === "Biggest Cost" ? "text-sm" : "text-[22px] tabular-nums")}>{c.value}</div>
+            )}
+            <div className="flex items-center gap-1.5 mt-1.5 text-xs min-h-[16px]">
+              {c.delta !== null && !loading && <DeltaBadge value={c.delta} />}
+              <span className="text-muted-foreground truncate text-[11px]">{c.sub}</span>
+            </div>
+          </CardContent>
+        </Card>
+      ))}
     </div>
   );
 }
 
-// ─── Ledger table — thin single rules, serif numerals, double rule under totals. ──
+// ─── Per-store P&L card ─────────────────────────────────────────────────────
 
-function LedgerTable({ head, rows: rowsData, totalRow }: {
-  head: { label: string; align?: "left" | "right" }[];
-  rows: ReactNode[][];
-  totalRow?: ReactNode[];
-}) {
+interface StoreRow {
+  store: { id: string; store_name: string; currency: string | null; currency_symbol: string | null };
+  revenue: number; costs: number; net: number; revenueDelta: number | null;
+  revenueSar: number | null; costsSar: number | null; netSar: number | null;
+  entries: CostEntry[];
+}
+
+function PnLCard({ r, idx }: { r: StoreRow; idx: number }) {
+  const color = storeColor(idx);
+  const byCategory = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const e of r.entries) map.set(e.category, (map.get(e.category) ?? 0) + Number(e.amount));
+    return [...map.entries()].sort((a, b) => b[1] - a[1]);
+  }, [r.entries]);
+
   return (
-    <table className="w-full text-sm" style={{ borderCollapse: "collapse" }}>
-      <thead>
-        <tr>
-          {head.map((h, i) => (
-            <th key={i} className="text-[10px] uppercase tracking-wider font-semibold pb-2"
-              style={{ color: INK, textAlign: h.align ?? "left", borderBottom: `1.5px solid ${NAVY}` }}>
-              {h.label}
-            </th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {rowsData.map((r, ri) => (
-          <tr key={ri}>
-            {r.map((cell, ci) => (
-              <td key={ci} className="py-2.5"
-                style={{
-                  textAlign: head[ci]?.align ?? "left",
-                  borderBottom: `1px solid ${NAVY}18`,
-                  fontFamily: ci === 0 ? "'IBM Plex Sans', sans-serif" : "'IBM Plex Mono', monospace",
-                  fontVariantNumeric: "tabular-nums",
-                  fontSize: ci === 0 ? "0.875rem" : "0.8rem",
-                  fontWeight: 500,
-                  color: "#1a1a1a",
-                }}>
-                {cell}
-              </td>
-            ))}
-          </tr>
-        ))}
-        {totalRow && (
-          <tr>
-            {totalRow.map((cell, ci) => (
-              <td key={ci} className="py-3 font-bold"
-                style={{
-                  textAlign: head[ci]?.align ?? "left",
-                  borderTop: `2.5px double ${GOLD}`,
-                  fontFamily: ci === 0 ? "'IBM Plex Sans', sans-serif" : "'IBM Plex Mono', monospace",
-                  fontVariantNumeric: "tabular-nums",
-                  fontSize: ci === 0 ? "0.875rem" : "0.85rem",
-                  color: NAVY,
-                }}>
-                {cell}
-              </td>
-            ))}
-          </tr>
-        )}
-      </tbody>
-    </table>
+    <Card className="overflow-hidden flex flex-col">
+      <div className="h-1.5 w-full" style={{ background: color }} />
+      <CardContent className="p-4 flex-1 flex flex-col gap-3">
+        <div className="flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
+          <h3 className="font-semibold text-sm">{r.store.store_name}</h3>
+          <span className="text-[10px] text-muted-foreground uppercase tracking-wide font-mono">{r.store.currency}</span>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2 pt-1 border-t">
+          <div>
+            <div className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">Revenue</div>
+            <div className="text-sm font-semibold tabular-nums">{fmtC(r.revenue, r.store.currency_symbol ?? "")}</div>
+            <DeltaBadge value={r.revenueDelta} />
+          </div>
+          <div>
+            <div className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">Costs</div>
+            <div className="text-sm font-semibold tabular-nums text-red-600 dark:text-red-400">−{fmtC(r.costs, r.store.currency_symbol ?? "")}</div>
+          </div>
+          <div>
+            <div className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">Net</div>
+            <div className="text-sm font-semibold tabular-nums">{fmtC(r.net, r.store.currency_symbol ?? "")}</div>
+            <div className="text-[10px] text-muted-foreground">{r.netSar !== null ? `SAR ${fmtNum(r.netSar)}` : "rate missing"}</div>
+          </div>
+        </div>
+
+        <div className="border-t pt-2 flex-1 flex flex-col min-h-0">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Costs by category</span>
+            <span className="text-[10px] text-muted-foreground">{byCategory.length} active</span>
+          </div>
+          {byCategory.length === 0 ? (
+            <p className="text-[11px] text-muted-foreground py-3 text-center">No costs entered this period.</p>
+          ) : (
+            <div className="divide-y divide-border/50">
+              {byCategory.map(([cat, amt]) => (
+                <div key={cat} className="flex items-center gap-2.5 py-1.5">
+                  <span className="text-xs font-medium truncate flex-1 min-w-0">{categoryLabel(cat)}</span>
+                  <span className="text-xs font-semibold tabular-nums">{fmtC(amt, r.store.currency_symbol ?? "")}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─── Store ranking by Net Sales (SAR) ───────────────────────────────────────
+
+function RankingTable({ rows, loading }: { rows: StoreRow[]; loading: boolean }) {
+  const ranked = useMemo(() => [...rows].sort((a, b) => (b.netSar ?? -Infinity) - (a.netSar ?? -Infinity)), [rows]);
+  const maxNet = Math.max(1, ...ranked.map(r => r.netSar ?? 0));
+
+  return (
+    <Card>
+      <CardContent className="p-0">
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b">
+                {["Rank", "Store", "Net Sales (SAR)", "Cost Ratio", "Status"].map((h, i) => (
+                  <th key={i} className={cn("px-4 py-2.5 font-medium text-muted-foreground text-left", i > 1 && "text-right", i === 0 && "w-14")}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                Array.from({ length: 4 }).map((_, i) => (
+                  <tr key={i} className="border-b last:border-0">
+                    {Array.from({ length: 5 }).map((_, j) => <td key={j} className="px-4 py-3"><Skeleton className={cn("h-3", j === 1 ? "w-20" : "w-12")} /></td>)}
+                  </tr>
+                ))
+              ) : ranked.map((r, idx) => {
+                const color = storeColor(idx);
+                const ratio = r.revenueSar && r.revenueSar > 0 && r.costsSar !== null ? (r.costsSar / r.revenueSar) * 100 : null;
+                const status =
+                  ratio === null ? { label: "No Cost Data", cls: "text-muted-foreground bg-muted" } :
+                  ratio < 10 ? { label: "Healthy", cls: "text-emerald-700 bg-emerald-50 dark:bg-emerald-950/40 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800" } :
+                  ratio < 25 ? { label: "Watch", cls: "text-amber-700 bg-amber-50 dark:bg-amber-950/40 dark:text-amber-300 border-amber-200 dark:border-amber-800" } :
+                  { label: "At Risk", cls: "text-red-700 bg-red-50 dark:bg-red-950/40 dark:text-red-300 border-red-200 dark:border-red-800" };
+                return (
+                  <tr key={r.store.id} className="border-b last:border-0 hover:bg-muted/40 transition-colors">
+                    <td className="px-4 py-3">
+                      <span className="w-6 h-6 rounded-full flex items-center justify-center font-bold text-xs" style={{ background: color + "22", color }}>{idx + 1}</span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
+                        <span className="font-medium">{r.store.store_name}</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        <div className="w-20 h-2 bg-muted rounded-full overflow-hidden">
+                          <div className="h-full rounded-full transition-all" style={{ width: `${Math.max(0, ((r.netSar ?? 0) / maxNet) * 100)}%`, background: color }} />
+                        </div>
+                        <span className="font-bold tabular-nums w-16 text-right">{r.netSar !== null ? fmtNum(r.netSar) : "—"}</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-right tabular-nums">
+                      {ratio !== null ? <span className={ratio >= 25 ? "text-red-600 dark:text-red-400 font-medium" : "text-muted-foreground"}>{ratio.toFixed(1)}%</span> : <span className="text-muted-foreground">—</span>}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <Badge variant="outline" className={cn("text-[10px] px-1.5 py-0", status.cls)}>{status.label}</Badge>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -367,9 +434,9 @@ export default function PnLDashboard() {
   const { remove } = useCostEntryMutations();
 
   const activeStores = stores.filter(s => s.is_active);
+  const loading = revenueLoading || entriesLoading;
 
-  // Per-store rollup: revenue (from Sales Pulse) + costs (from entries) = net.
-  const rows = useMemo(() => activeStores.map(s => {
+  const rows: StoreRow[] = useMemo(() => activeStores.map(s => {
     const pulse = salesPulse.find(p => p.storeId === s.id);
     const revenue = pulse?.revenue ?? 0;
     const prevRevenue = pulse?.prevRevenue ?? 0;
@@ -382,52 +449,38 @@ export default function PnLDashboard() {
     const costsSar = currencyToSar(costs, s.currency ?? "GBP", fxRates);
     const prevNetSar = currencyToSar(prevNet, s.currency ?? "GBP", fxRates);
     const netSar = revenueSar !== null && costsSar !== null ? revenueSar - costsSar : null;
-    return { store: s, revenue, costs, net, prevNet, revenueSar, costsSar, netSar, prevNetSar, entries: storeEntries };
+    return { store: s, revenue, costs, net, revenueDelta: pulse?.revenueDelta ?? null, revenueSar, costsSar, netSar, prevNetSar, entries: storeEntries };
   }), [activeStores, salesPulse, entries, prevEntries, fxRates]);
 
   const missingRates = rows.some(r => r.netSar === null);
 
-  const grandTotalSar = rows.reduce((acc, r) => {
+  const grandTotal = rows.reduce((acc, r) => {
     if (r.revenueSar === null || r.costsSar === null) return acc;
     return { revenue: acc.revenue + r.revenueSar, costs: acc.costs + r.costsSar, prevNet: acc.prevNet + (r.prevNetSar ?? 0) };
   }, { revenue: 0, costs: 0, prevNet: 0 });
 
-  const displayRow = !isAllStores && selectedStoreId ? rows.find(r => r.store.id === selectedStoreId) : null;
-  const displayEntries = !isAllStores && selectedStoreId ? entries.filter(e => e.store_id === selectedStoreId) : entries;
+  const netDelta = grandTotal.prevNet !== 0
+    ? Math.round((((grandTotal.revenue - grandTotal.costs) - grandTotal.prevNet) / Math.abs(grandTotal.prevNet)) * 100)
+    : null;
 
-  // Hero figure + trend, in whichever view is active.
-  const heroNet = isAllStores ? grandTotalSar.revenue - grandTotalSar.costs : (displayRow?.net ?? 0);
-  const heroPrevNet = isAllStores ? grandTotalSar.prevNet : (displayRow?.prevNet ?? 0);
-  const heroSymbol = isAllStores ? "SAR " : (selectedStore?.currency_symbol ?? "");
-  const heroTrendPct = heroPrevNet !== 0 ? ((heroNet - heroPrevNet) / Math.abs(heroPrevNet)) * 100 : null;
-  const animatedHero = useCountUp(heroNet);
-
-  // Signature insight sentence — reuses the same "biggest drag" logic as the PDF reports.
-  const insight = useMemo(() => {
-    if (isAllStores) {
-      const withRatio = rows
-        .filter(r => r.revenue > 0 && r.costs > 0)
-        .map(r => ({ name: r.store.store_name, ratio: r.costs / r.revenue }));
-      if (withRatio.length === 0) return "No costs entered yet this month — Net Sales equals Total Revenue across every store.";
-      const worst = withRatio.sort((a, b) => b.ratio - a.ratio)[0];
-      return `${worst.name}'s costs are consuming ${(worst.ratio * 100).toFixed(0)}% of its revenue — the largest drag in the group this month.`;
-    }
+  const biggestCostLabel = useMemo(() => {
     const byCategory = new Map<string, number>();
-    for (const e of displayEntries) byCategory.set(e.category, (byCategory.get(e.category) ?? 0) + Number(e.amount));
-    if (byCategory.size === 0) return "No costs entered yet this month.";
-    const [topCat, topAmt] = [...byCategory.entries()].sort((a, b) => b[1] - a[1])[0];
-    const totalCosts = [...byCategory.values()].reduce((a, b) => a + b, 0);
-    return `${categoryLabel(topCat)} is the biggest cost this month at ${fmtMoney(topAmt, selectedStore?.currency_symbol ?? "")} (${((topAmt / totalCosts) * 100).toFixed(0)}% of costs).`;
-  }, [isAllStores, rows, displayEntries, selectedStore]);
+    for (const r of rows) {
+      const sar = currencyToSar(r.costs, r.store.currency ?? "GBP", fxRates);
+      if (sar === null) continue;
+      for (const e of r.entries) {
+        const amtSar = currencyToSar(Number(e.amount), r.store.currency ?? "GBP", fxRates);
+        if (amtSar === null) continue;
+        byCategory.set(e.category, (byCategory.get(e.category) ?? 0) + amtSar);
+      }
+    }
+    if (byCategory.size === 0) return "None yet";
+    const [top] = [...byCategory.entries()].sort((a, b) => b[1] - a[1]);
+    return categoryLabel(top[0]);
+  }, [rows, fxRates]);
 
-  const barSegments = useMemo(() => {
-    const total = grandTotalSar.revenue;
-    if (total <= 0) return [];
-    return rows
-      .filter(r => r.revenueSar !== null && r.revenueSar > 0)
-      .map(r => ({ name: r.store.store_name.replace(/^Darussalam\s*/, ""), share: (r.revenueSar! / total) * 100, sar: r.revenueSar! }))
-      .sort((a, b) => b.share - a.share);
-  }, [rows, grandTotalSar.revenue]);
+  const displayRows = isAllStores ? rows : rows.filter(r => r.store.id === selectedStoreId);
+  const displayEntries = !isAllStores && selectedStoreId ? entries.filter(e => e.store_id === selectedStoreId) : entries;
 
   const openAdd = () => { setEditingEntry(null); setDialogOpen(true); };
   const openEdit = (e: CostEntry) => { setEditingEntry(e); setDialogOpen(true); };
@@ -444,166 +497,165 @@ export default function PnLDashboard() {
     }
   };
 
-  const loading = revenueLoading || entriesLoading;
-
   return (
-    <div className="min-h-full -m-3 sm:-m-6 p-4 sm:p-8" style={{ background: "linear-gradient(180deg, #fdfbf5 0%, #f7f4ec 100%)" }}>
-      <div className="max-w-6xl mx-auto space-y-6">
+    <div className="flex flex-col gap-5 p-4 md:p-6 max-w-[1800px] mx-auto">
 
-        {/* Header */}
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.15em]" style={{ color: GOLD }}>Executive Summary</p>
-            <h1 className="text-2xl font-semibold" style={{ fontFamily: "'Cormorant Garamond', serif", color: NAVY }}>Profit &amp; Loss Ledger</h1>
+      {/* Page header */}
+      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <Wallet size={18} className="text-primary" />
+            <h1 className="text-xl font-bold tracking-tight">Profit &amp; Loss</h1>
           </div>
-          <div className="flex items-center gap-3">
-            <MonthPicker year={year} month={month} onChange={(y, m) => { setYear(y); setMonth(m); }} />
-            {isAdmin && (
-              <Button size="sm" onClick={openAdd} style={{ background: NAVY }}><Plus className="h-4 w-4 mr-1" /> Add Cost Entry</Button>
-            )}
-          </div>
+          <p className="text-sm text-muted-foreground">
+            Revenue live from Shopify (shipping excluded) · costs entered manually · <span className="font-medium">{monthKey}</span>
+          </p>
         </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <MonthPicker year={year} month={month} onChange={(y, m) => { setYear(y); setMonth(m); }} />
+          {isAdmin && <Button size="sm" className="h-8 text-xs gap-1.5" onClick={openAdd}><Plus size={13} /> Add Cost Entry</Button>}
+        </div>
+      </div>
 
-        {missingRates && (
-          <Card className="border" style={{ background: "#fef8ea", borderColor: "#f0d78a" }}>
-            <CardContent className="pt-4 pb-4 space-y-3">
-              <div className="flex items-center gap-2 text-sm font-medium" style={{ color: "#8a6416" }}>
-                <AlertTriangle className="h-4 w-4" />
-                {fxError
-                  ? `Auto-fetching the exchange rate for ${monthKey} failed — some stores excluded from the SAR total below.`
-                  : `Fetching this month's exchange rate…`}
-                {fxError && (
-                  <Button size="sm" variant="outline" className="h-6 ml-2" onClick={() => refetchFxRates()}>Retry</Button>
-                )}
-              </div>
-              {fxError && isAdmin && <FxRateEditor monthKey={monthKey} fxRates={fxRates} />}
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Hero — the ledger's closing line */}
-        <div className="rounded-lg px-6 sm:px-10 py-8 sm:py-10 text-center relative overflow-hidden" style={{ background: NAVY }}>
-          <div className="absolute inset-x-0 top-0 h-[3px]" style={{ background: `linear-gradient(90deg, transparent, ${GOLD}, transparent)` }} />
-          <p className="text-[11px] uppercase tracking-[0.2em] font-medium" style={{ color: `${GOLD_SOFT}` }}>
-            Net Sales — {isAllStores ? "All Stores" : selectedStore?.store_name ?? ""}
-          </p>
-          <p className="mt-2 leading-none" style={{ fontFamily: "'IBM Plex Mono', monospace", fontVariantNumeric: "tabular-nums", fontWeight: 600, fontSize: "clamp(2.1rem, 6vw, 3.75rem)", color: GOLD }}>
-            {fmtMoney(animatedHero, heroSymbol)}
-          </p>
-          {heroTrendPct !== null && (
-            <div className="mt-3 inline-flex items-center gap-1 text-sm font-medium" style={{ color: heroTrendPct >= 0 ? "#8fd19e" : "#e8a598" }}>
-              {heroTrendPct >= 0 ? <ArrowUpRight className="h-4 w-4" /> : <ArrowDownRight className="h-4 w-4" />}
-              {Math.abs(heroTrendPct).toFixed(1)}% vs last month
+      {missingRates && (
+        <Card className="border-amber-300/60 dark:border-amber-800/60">
+          <CardContent className="p-3.5 space-y-3">
+            <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400 text-xs font-medium">
+              {fxError
+                ? `Auto-fetching the exchange rate for ${monthKey} failed — some stores excluded from the SAR total below.`
+                : `Fetching this month's exchange rate…`}
+              {fxError && <Button size="sm" variant="outline" className="h-6 text-xs" onClick={() => refetchFxRates()}>Retry</Button>}
             </div>
-          )}
-          <p className="mt-4 text-sm max-w-xl mx-auto" style={{ color: "#cbd5c9", fontFamily: "'IBM Plex Sans', sans-serif" }}>{insight}</p>
+            {fxError && isAdmin && <FxRateEditor monthKey={monthKey} fxRates={fxRates} />}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Summary KPIs */}
+      <SummaryCards
+        totalRevenue={grandTotal.revenue}
+        totalCosts={grandTotal.costs}
+        netSales={grandTotal.revenue - grandTotal.costs}
+        netDelta={netDelta}
+        biggestCostLabel={biggestCostLabel}
+        loading={loading}
+      />
+
+      {/* Per-store cards */}
+      <section>
+        <div className="flex items-center gap-2.5 mb-3">
+          <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-primary/10 text-primary">Stores</span>
+          <h2 className="text-base font-semibold">{isAllStores ? "Store P&L Cards" : selectedStore?.store_name ?? ""}</h2>
+          <span className="text-xs text-muted-foreground">{loading ? "Loading…" : `${displayRows.length} store${displayRows.length === 1 ? "" : "s"}`}</span>
         </div>
-
-        {/* Regional Ledger Bar — signature element, All Stores only */}
-        {isAllStores && barSegments.length > 0 && (
-          <Card className="border-none shadow-sm" style={{ background: "white" }}>
-            <CardContent className="pt-5 pb-5">
-              <p className="text-[11px] uppercase tracking-wider font-semibold mb-3" style={{ color: INK }}>Revenue Share by Region</p>
-              <RegionalLedgerBar segments={barSegments} />
-            </CardContent>
-          </Card>
+        {loading ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Card key={i} className="overflow-hidden">
+                <div className="h-1.5 bg-muted animate-pulse" />
+                <CardContent className="p-4 space-y-3">
+                  <Skeleton className="h-5 w-32" />
+                  <Skeleton className="h-16 w-full" />
+                  <Skeleton className="h-20 w-full" />
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+            {displayRows.map((r) => <PnLCard key={r.store.id} r={r} idx={activeStores.findIndex(s => s.id === r.store.id)} />)}
+          </div>
         )}
+      </section>
 
-        {/* Store-by-store ledger */}
-        {isAllStores ? (
-          <Card className="border-none shadow-sm" style={{ background: "white" }}>
-            <CardHeader className="pb-1"><CardTitle className="text-sm" style={{ color: NAVY }}>Store-by-Store</CardTitle></CardHeader>
-            <CardContent>
-              <LedgerTable
-                head={[{ label: "Store" }, { label: "Revenue", align: "right" }, { label: "Costs", align: "right" }, { label: "Net (native)", align: "right" }, { label: "Net (SAR)", align: "right" }]}
-                rows={rows.map(r => [
-                  r.store.store_name,
-                  fmtMoney(r.revenue, r.store.currency_symbol ?? ""),
-                  <span key="c" style={{ color: OXBLOOD }}>−{fmtMoney(r.costs, r.store.currency_symbol ?? "")}</span>,
-                  fmtMoney(r.net, r.store.currency_symbol ?? ""),
-                  r.netSar !== null ? fmtMoney(r.netSar, "SAR ") : "rate missing",
-                ])}
-                totalRow={["Group Total", "—", `−${fmtMoney(grandTotalSar.costs, "SAR ")}`, "—", fmtMoney(grandTotalSar.revenue - grandTotalSar.costs, "SAR ")]}
-              />
-            </CardContent>
-          </Card>
-        ) : null}
+      {/* Ranking — All Stores only */}
+      {isAllStores && (
+        <section>
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-violet-500/10 text-violet-600 dark:text-violet-400">Ranking</span>
+            <h2 className="text-base font-semibold">Net Sales Ranking</h2>
+            <span className="text-xs text-muted-foreground">By Net Sales (SAR) · cost ratio = costs ÷ revenue</span>
+          </div>
+          <RankingTable rows={rows} loading={loading} />
+        </section>
+      )}
 
-        {/* Cost entries ledger */}
-        <Card className="border-none shadow-sm" style={{ background: "white" }}>
-          <CardHeader className="pb-1">
-            <CardTitle className="text-sm" style={{ color: NAVY }}>
-              Cost Entries — {monthKey}{isAllStores ? " (All Stores)" : selectedStore ? ` — ${selectedStore.store_name}` : ""}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
+      {/* Cost entries */}
+      <section>
+        <div className="flex items-center gap-2 mb-3">
+          <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-red-500/10 text-red-600 dark:text-red-400">Ledger</span>
+          <h2 className="text-base font-semibold">Cost Entries</h2>
+          <span className="text-xs text-muted-foreground">{monthKey}{isAllStores ? " · All Stores" : selectedStore ? ` · ${selectedStore.store_name}` : ""}</span>
+        </div>
+        <Card>
+          <CardContent className="p-0">
             {loading ? (
-              <p className="text-sm" style={{ color: INK }}>Loading…</p>
+              <div className="p-4 space-y-2"><Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-full" /></div>
             ) : displayEntries.length === 0 ? (
-              <p className="text-sm" style={{ color: INK }}>No cost entries for this period.</p>
+              <p className="text-sm text-muted-foreground p-6 text-center">No cost entries for this period.</p>
             ) : (
-              <table className="w-full text-sm">
-                <thead>
-                  <tr>
-                    {isAllStores && <th className="text-left text-[10px] uppercase tracking-wider font-semibold pb-2" style={{ color: INK, borderBottom: `1.5px solid ${NAVY}` }}>Store</th>}
-                    <th className="text-left text-[10px] uppercase tracking-wider font-semibold pb-2" style={{ color: INK, borderBottom: `1.5px solid ${NAVY}` }}>Category</th>
-                    <th className="text-left text-[10px] uppercase tracking-wider font-semibold pb-2" style={{ color: INK, borderBottom: `1.5px solid ${NAVY}` }}>Platform</th>
-                    <th className="text-right text-[10px] uppercase tracking-wider font-semibold pb-2" style={{ color: INK, borderBottom: `1.5px solid ${NAVY}` }}>Amount</th>
-                    <th className="text-left text-[10px] uppercase tracking-wider font-semibold pb-2" style={{ color: INK, borderBottom: `1.5px solid ${NAVY}` }}>Notes</th>
-                    {isAdmin && <th className="text-right text-[10px] uppercase tracking-wider font-semibold pb-2" style={{ color: INK, borderBottom: `1.5px solid ${NAVY}` }}>Actions</th>}
-                  </tr>
-                </thead>
-                <tbody>
-                  {displayEntries.map(e => {
-                    const s = activeStores.find(st => st.id === e.store_id);
-                    return (
-                      <tr key={e.id}>
-                        {isAllStores && <td className="py-2.5" style={{ borderBottom: `1px solid ${NAVY}18`, color: "#1a1a1a" }}>{s?.store_name ?? "—"}</td>}
-                        <td className="py-2.5" style={{ borderBottom: `1px solid ${NAVY}18`, color: "#1a1a1a" }}>{categoryLabel(e.category)}</td>
-                        <td className="py-2.5" style={{ borderBottom: `1px solid ${NAVY}18`, color: "#1a1a1a" }}>{platformLabel(e.platform)}</td>
-                        <td className="py-2.5 text-right" style={{ borderBottom: `1px solid ${NAVY}18`, fontFamily: "'IBM Plex Mono', monospace", fontVariantNumeric: "tabular-nums", fontWeight: 600, fontSize: "0.8rem", color: OXBLOOD }}>
-                          −{fmtMoney(Number(e.amount), s?.currency_symbol ?? "")}
-                        </td>
-                        <td className="py-2.5 text-xs" style={{ borderBottom: `1px solid ${NAVY}18`, color: INK }}>{e.notes ?? "—"}</td>
-                        {isAdmin && (
-                          <td className="py-2.5 text-right" style={{ borderBottom: `1px solid ${NAVY}18` }}>
-                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(e)}><Pencil className="h-3.5 w-3.5" /></Button>
-                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setDeletingId(e.id)}><Trash2 className="h-3.5 w-3.5" style={{ color: OXBLOOD }} /></Button>
-                          </td>
-                        )}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b">
+                      {isAllStores && <th className="px-4 py-2.5 text-left font-medium text-muted-foreground">Store</th>}
+                      <th className="px-4 py-2.5 text-left font-medium text-muted-foreground">Category</th>
+                      <th className="px-4 py-2.5 text-left font-medium text-muted-foreground">Platform</th>
+                      <th className="px-4 py-2.5 text-right font-medium text-muted-foreground">Amount</th>
+                      <th className="px-4 py-2.5 text-left font-medium text-muted-foreground">Notes</th>
+                      {isAdmin && <th className="px-4 py-2.5 text-right font-medium text-muted-foreground">Actions</th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {displayEntries.map(e => {
+                      const s = activeStores.find(st => st.id === e.store_id);
+                      return (
+                        <tr key={e.id} className="border-b last:border-0 hover:bg-muted/40 transition-colors">
+                          {isAllStores && <td className="px-4 py-2.5">{s?.store_name ?? "—"}</td>}
+                          <td className="px-4 py-2.5">{categoryLabel(e.category)}</td>
+                          <td className="px-4 py-2.5 text-muted-foreground">{platformLabel(e.platform)}</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums font-medium text-red-600 dark:text-red-400">−{fmtC(Number(e.amount), s?.currency_symbol ?? "")}</td>
+                          <td className="px-4 py-2.5 text-muted-foreground">{e.notes ?? "—"}</td>
+                          {isAdmin && (
+                            <td className="px-4 py-2.5 text-right">
+                              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(e)}><Pencil size={13} /></Button>
+                              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setDeletingId(e.id)}><Trash2 size={13} className="text-red-500" /></Button>
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             )}
           </CardContent>
         </Card>
+      </section>
 
-        {isAdmin && (
-          <CostEntryDialog
-            open={dialogOpen}
-            onOpenChange={setDialogOpen}
-            monthKey={monthKey}
-            stores={activeStores}
-            editing={editingEntry}
-            defaultStoreId={!isAllStores ? selectedStoreId : null}
-          />
-        )}
+      {isAdmin && (
+        <CostEntryDialog
+          open={dialogOpen}
+          onOpenChange={setDialogOpen}
+          monthKey={monthKey}
+          stores={activeStores}
+          editing={editingEntry}
+          defaultStoreId={!isAllStores ? selectedStoreId : null}
+        />
+      )}
 
-        <AlertDialog open={!!deletingId} onOpenChange={(v) => !v && setDeletingId(null)}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Delete this cost entry?</AlertDialogTitle>
-              <AlertDialogDescription>This can't be undone.</AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction onClick={confirmDelete}>Delete</AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      </div>
+      <AlertDialog open={!!deletingId} onOpenChange={(v) => !v && setDeletingId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this cost entry?</AlertDialogTitle>
+            <AlertDialogDescription>This can't be undone.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDelete}>Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
