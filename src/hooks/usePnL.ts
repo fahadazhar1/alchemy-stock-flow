@@ -265,6 +265,35 @@ export function useTrafficSource(bounds: DateBounds) {
   });
 }
 
+// ─── Discount tiers ─────────────────────────────────────────────────────────
+// Per-order discount % excludes shipping from both sides of the ratio (see
+// migration comment) — mirrors the store's old Excel P&L tracker's "Sales
+// by Discount Tier" table. tier: 0 = No Discount, 5..30 = that tier exactly,
+// 35 = "35%+". Fetched lazily (only when the card is expanded).
+
+export interface DiscountTierRow { storeId: string; tier: number; orders: number; revenue: number }
+
+export function useDiscountTiers(bounds: DateBounds, enabled: boolean) {
+  return useQuery<DiscountTierRow[]>({
+    queryKey: ["discount-tiers", bounds.cacheKey],
+    staleTime: 5 * 60_000,
+    enabled,
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("get_store_discount_tiers" as any, {
+        p_start_iso: bounds.startISO,
+        p_end_iso: bounds.endISO,
+      } as any);
+      if (error) throw error;
+      return ((data ?? []) as any[]).map(r => ({
+        storeId: r.store_id,
+        tier: Number(r.tier),
+        orders: Number(r.orders),
+        revenue: Number(r.revenue),
+      }));
+    },
+  });
+}
+
 // ─── Monthly Net Sales trend ────────────────────────────────────────────────
 
 export interface MonthlyTrendPoint { storeId: string; monthStart: string; netSales: number }

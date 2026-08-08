@@ -26,9 +26,9 @@ import { useRole } from "@/hooks/useRole";
 import { useStoreSalesPulse, type ChannelSalesStat } from "@/hooks/useStoreSalesPulse";
 import {
   getMonthBounds, useAllCostEntries, useCostEntryMutations, useEnsureFxRates, useUpsertFxRate,
-  useSalesBridge, useMonthlyNetSalesTrend, useCheckoutAbandonment, useTrafficSource, currencyToSar,
+  useSalesBridge, useMonthlyNetSalesTrend, useCheckoutAbandonment, useTrafficSource, useDiscountTiers, currencyToSar,
   COST_CATEGORIES, AD_PLATFORMS, MARKETPLACE_PLATFORMS,
-  type CostEntry, type CostEntryInput, type SalesBridgeRow, type MonthlyTrendPoint, type AbandonmentRow, type TrafficSourceRow,
+  type CostEntry, type CostEntryInput, type SalesBridgeRow, type MonthlyTrendPoint, type AbandonmentRow, type TrafficSourceRow, type DiscountTierRow,
 } from "@/hooks/usePnL";
 import { Tooltip as UiTooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePageLayout } from "@/hooks/usePageLayout";
@@ -599,8 +599,17 @@ function ChannelBreakdownCard({ channels, symbol, subtitle, loading }: {
 
 // ─── Sales bridge: Gross -> Discounts -> Net (Returns not tracked, disclosed) ──
 
-function SalesBridgeCard({ grossSales, discounts, netSales, symbol, loading }: {
+interface DiscountTierSummary { tier: number; orders: number; revenue: number }
+
+function tierLabel(tier: number): string {
+  if (tier === 0) return "No Discount";
+  if (tier >= 35) return "35%+";
+  return `${tier}%`;
+}
+
+function SalesBridgeCard({ grossSales, discounts, netSales, symbol, loading, tiersExpanded, onToggleTiers, tiers, tiersLoading }: {
   grossSales: number; discounts: number; netSales: number; symbol: string; loading: boolean;
+  tiersExpanded: boolean; onToggleTiers: () => void; tiers: DiscountTierSummary[]; tiersLoading: boolean;
 }) {
   const discountPct = grossSales > 0 ? (discounts / grossSales) * 100 : 0;
   return (
@@ -673,6 +682,43 @@ function SalesBridgeCard({ grossSales, discounts, netSales, symbol, loading }: {
         <p className="text-[10px] text-muted-foreground mt-3 pt-2 border-t">
           Returns not included — not synced to this dashboard yet. See the monthly PDF report for verified figures.
         </p>
+        {!loading && (
+          <button
+            onClick={onToggleTiers}
+            className="flex items-center gap-1 text-[11px] font-medium text-primary hover:underline mt-2 self-start"
+          >
+            <ChevronRight size={11} className={cn("transition-transform", tiersExpanded && "rotate-90")} />
+            {tiersExpanded ? "Hide" : "View"} by discount tier
+          </button>
+        )}
+        {tiersExpanded && (
+          <div className="mt-2 pt-2 border-t">
+            {tiersLoading ? (
+              <div className="space-y-1.5">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-5 w-full" />)}</div>
+            ) : tiers.length === 0 ? (
+              <p className="text-xs text-muted-foreground text-center py-2">No orders this period.</p>
+            ) : (
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-muted-foreground">
+                    <th className="text-left font-medium pb-1">Tier</th>
+                    <th className="text-right font-medium pb-1">Orders</th>
+                    <th className="text-right font-medium pb-1">Sales</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tiers.map(t => (
+                    <tr key={t.tier} className="border-t border-border/50">
+                      <td className="py-1.5">{tierLabel(t.tier)}</td>
+                      <td className="py-1.5 text-right tabular-nums">{fmtNum(t.orders)}</td>
+                      <td className="py-1.5 text-right tabular-nums font-semibold">{fmtC(t.revenue, symbol)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
       </CardContent>
     </Card>
   );
@@ -1251,6 +1297,8 @@ export default function PnLDashboard() {
   const { remove } = useCostEntryMutations();
   const { order: sectionOrder, save: saveLayout, reset: resetLayout } = usePageLayout("pnl", PNL_DEFAULT_ORDER);
   const [customizerOpen, setCustomizerOpen] = useState(false);
+  const [showDiscountTiers, setShowDiscountTiers] = useState(false);
+  const { data: discountTierRows = [], isLoading: discountTiersLoading } = useDiscountTiers(bounds, showDiscountTiers);
 
   const activeStores = stores.filter(s => s.is_active);
   const loading = revenueLoading || entriesLoading;
@@ -1571,6 +1619,28 @@ export default function PnLDashboard() {
     return { totalPct, platforms };
   }, [isAllStores, selectedStoreId, entries, activeStores, fxRates, bridgeSummary.netSales]);
 
+  // Discount tier breakdown for the Sales Bridge card's expandable table.
+  // All Stores combines orders directly (counts, no FX needed) and revenue
+  // in SAR; single store shows native currency. Only fetched once expanded
+  // (see useDiscountTiers' `enabled` flag) — most people never open this.
+  const discountTierSummary: DiscountTierSummary[] = useMemo(() => {
+    const targetRows = isAllStores ? discountTierRows : discountTierRows.filter(r => r.storeId === selectedStoreId);
+    const map = new Map<number, { orders: number; revenue: number }>();
+    for (const row of targetRows) {
+      const store = activeStores.find(s => s.id === row.storeId);
+      if (!store) continue;
+      const revenue = isAllStores ? currencyToSar(row.revenue, store.currency ?? "GBP", fxRates) : row.revenue;
+      if (revenue === null) continue;
+      if (!map.has(row.tier)) map.set(row.tier, { orders: 0, revenue: 0 });
+      const entry = map.get(row.tier)!;
+      entry.orders += row.orders;
+      entry.revenue += revenue;
+    }
+    return [...map.entries()]
+      .map(([tier, v]) => ({ tier, orders: v.orders, revenue: v.revenue }))
+      .sort((a, b) => a.tier - b.tier);
+  }, [isAllStores, selectedStoreId, discountTierRows, activeStores, fxRates]);
+
   // Net Sales trend — indexed to 100 in All Stores mode (avoids needing an FX
   // rate for every past month just to draw a line chart), native currency
   // for a single store.
@@ -1678,6 +1748,10 @@ export default function PnLDashboard() {
               netSales={bridgeSummary.netSales}
               symbol={bridgeSummary.symbol}
               loading={loading}
+              tiersExpanded={showDiscountTiers}
+              onToggleTiers={() => setShowDiscountTiers(v => !v)}
+              tiers={discountTierSummary}
+              tiersLoading={discountTiersLoading}
             />
           </div>
         </section>
