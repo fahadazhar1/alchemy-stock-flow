@@ -1887,6 +1887,18 @@ export default function PnLDashboard() {
           </section>
 
           <section className="flex flex-col">
+            <div className="flex-1">
+              <MarketingSpendCard
+                totalPct={marketingSpendBreakdown.totalPct}
+                platforms={marketingSpendBreakdown.platforms}
+                loading={loading}
+              />
+            </div>
+          </section>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch">
+          <section className="flex flex-col">
             <div className="flex items-center gap-2.5 mb-3">
               <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-indigo-500/10 text-indigo-600 dark:text-indigo-400">Traffic</span>
               <h2 className="text-base font-semibold">Where Customers Come From</h2>
@@ -1899,25 +1911,13 @@ export default function PnLDashboard() {
               />
             </div>
           </section>
-        </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch">
           <section className="flex flex-col">
             <div className="flex-1">
               <TrafficSourceCard
                 rows={trafficSourceSummary}
                 symbol={isAllStores ? "SAR " : selectedStore?.currency_symbol ?? ""}
                 loading={trafficSourceLoading}
-              />
-            </div>
-          </section>
-
-          <section className="flex flex-col">
-            <div className="flex-1">
-              <MarketingSpendCard
-                totalPct={marketingSpendBreakdown.totalPct}
-                platforms={marketingSpendBreakdown.platforms}
-                loading={loading}
               />
             </div>
           </section>
