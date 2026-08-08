@@ -550,7 +550,6 @@ function ChannelBreakdownCard({ channels, symbol, subtitle, loading }: {
           <span className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: "#e0f2fe", color: "#0284c7" }}>
             <Share2 size={12} strokeWidth={2.2} />
           </span>
-          <h3 className="text-sm font-semibold">Sales by Channel</h3>
           <span className="text-xs text-muted-foreground">{subtitle}</span>
         </div>
       </CardHeader>
@@ -744,7 +743,7 @@ function AbandonmentCard({ abandonedCount, revenueAtRisk, abandonmentRate, symbo
           <span className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: "#ffe4e6", color: "#e11d48" }}>
             <ShoppingCart size={12} strokeWidth={2.2} />
           </span>
-          <h3 className="text-sm font-semibold">Cart Abandonment</h3>
+          <span className="text-xs text-muted-foreground">This month</span>
         </div>
       </CardHeader>
       <CardContent className="px-4 pb-4 pt-1 flex-1 flex flex-col justify-center">
@@ -820,7 +819,6 @@ function AbandonmentByStoreCard({ rows, loading }: { rows: StoreAbandonmentRow[]
           <span className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: "#ffe4e6", color: "#e11d48" }}>
             <ShoppingCart size={12} strokeWidth={2.2} />
           </span>
-          <h3 className="text-sm font-semibold">Cart Abandonment</h3>
           <span className="text-xs text-muted-foreground">By store</span>
         </div>
       </CardHeader>
@@ -1144,7 +1142,6 @@ function TrendChart({ mode, series, loading }: {
       <CardHeader className="pb-2 pt-4 px-4">
         <div className="flex items-center gap-2">
           <LineChartIcon size={14} className="text-muted-foreground" />
-          <h3 className="text-sm font-semibold">Net Sales Trend</h3>
           <span className="text-xs text-muted-foreground">{mode === "indexed" ? "Indexed to 100 at the earliest month — compares growth, not scale" : "Last 6 months"}</span>
         </div>
       </CardHeader>
