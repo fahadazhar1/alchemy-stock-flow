@@ -317,16 +317,18 @@ function FxRateEditor({ monthKey, fxRates }: { monthKey: string; fxRates: Record
 
 // ─── Global summary KPI row ─────────────────────────────────────────────────
 
-function SummaryCards({ totalRevenue, totalCosts, netSales, revenueDelta, costsDelta, netDelta, biggestCostLabel, symbol, unit, loading }: {
+function SummaryCards({ totalRevenue, totalCosts, netSales, prevRevenue, prevCosts, prevNet, orderCount, revenueDelta, costsDelta, netDelta, biggestCostLabel, symbol, unit, loading }: {
   totalRevenue: number; totalCosts: number; netSales: number;
+  prevRevenue: number; prevCosts: number; prevNet: number; orderCount: number;
   revenueDelta: number | null; costsDelta: number | null; netDelta: number | null;
   biggestCostLabel: string; symbol: string; unit: string; loading: boolean;
 }) {
+  const orders = `${fmtNum(orderCount)} order${orderCount === 1 ? "" : "s"}`;
   const cards = [
-    { label: `Total Revenue ${unit}`.trim(), value: `${symbol}${fmtNum(totalRevenue)}`, icon: TrendingUp, color: "#6366f1", bg: "#eef2ff", delta: revenueDelta, inverse: false, sub: "vs last month" },
-    { label: `Total Costs ${unit}`.trim(), value: `−${symbol}${fmtNum(totalCosts)}`, icon: Receipt, color: "#dc2626", bg: "#fee2e2", delta: costsDelta, inverse: true, sub: "vs last month" },
-    { label: `Net Sales ${unit}`.trim(), value: `${symbol}${fmtNum(netSales)}`, icon: Coins, color: "#059669", bg: "#d1fae5", delta: netDelta, inverse: false, sub: "vs last month" },
-    { label: "Biggest Cost", value: biggestCostLabel, icon: TrendingDown, color: "#d97706", bg: "#fef3c7", delta: null as number | null, inverse: false, sub: "this month" },
+    { label: `Total Revenue ${unit}`.trim(), value: `${symbol}${fmtNum(totalRevenue)}`, icon: TrendingUp, color: "#6366f1", bg: "#eef2ff", delta: revenueDelta, inverse: false, sub: `vs ${symbol}${fmtNum(prevRevenue)} last month`, orders },
+    { label: `Total Costs ${unit}`.trim(), value: `−${symbol}${fmtNum(totalCosts)}`, icon: Receipt, color: "#dc2626", bg: "#fee2e2", delta: costsDelta, inverse: true, sub: `vs ${symbol}${fmtNum(prevCosts)} last month`, orders: null },
+    { label: `Net Sales ${unit}`.trim(), value: `${symbol}${fmtNum(netSales)}`, icon: Coins, color: "#059669", bg: "#d1fae5", delta: netDelta, inverse: false, sub: `vs ${symbol}${fmtNum(prevNet)} last month`, orders },
+    { label: "Biggest Cost", value: biggestCostLabel, icon: TrendingDown, color: "#d97706", bg: "#fef3c7", delta: null as number | null, inverse: false, sub: "this month", orders: null },
   ];
   return (
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -345,6 +347,7 @@ function SummaryCards({ totalRevenue, totalCosts, netSales, revenueDelta, costsD
               <div className={cn("font-bold tracking-tight leading-none", c.label === "Biggest Cost" ? "text-base" : "text-[26px] tabular-nums")}>{c.value}</div>
             )}
             <div className="text-[11px] text-muted-foreground mt-1.5">{c.sub}</div>
+            {c.orders && !loading && <div className="text-[11px] text-muted-foreground mt-0.5">{c.orders}</div>}
           </CardContent>
         </Card>
       ))}
@@ -375,6 +378,7 @@ function KpiDeltaPill({ value, inverse = false }: { value: number; inverse?: boo
 interface StoreRow {
   store: { id: string; store_name: string; currency: string | null; currency_symbol: string | null };
   revenue: number; costs: number; net: number;
+  prevRevenue: number; prevCosts: number; prevNet: number;
   revenueDelta: number | null; costsDelta: number | null; netDelta: number | null;
   revenueSar: number | null; costsSar: number | null; netSar: number | null;
   prevRevenueSar: number | null; prevCostsSar: number | null; prevNetSar: number | null;
@@ -606,8 +610,8 @@ function tierLabel(tier: number): string {
   return `${tier}%`;
 }
 
-function SalesBridgeCard({ grossSales, discounts, netSales, symbol, loading, tiersExpanded, onToggleTiers, tiers, tiersLoading }: {
-  grossSales: number; discounts: number; netSales: number; symbol: string; loading: boolean;
+function SalesBridgeCard({ grossSales, discounts, netSales, orderCount, symbol, loading, tiersExpanded, onToggleTiers, tiers, tiersLoading }: {
+  grossSales: number; discounts: number; netSales: number; orderCount: number; symbol: string; loading: boolean;
   tiersExpanded: boolean; onToggleTiers: () => void; tiers: DiscountTierSummary[]; tiersLoading: boolean;
 }) {
   const discountPct = grossSales > 0 ? (discounts / grossSales) * 100 : 0;
@@ -617,6 +621,7 @@ function SalesBridgeCard({ grossSales, discounts, netSales, symbol, loading, tie
         <div className="flex items-center gap-2">
           <TrendingUp size={14} className="text-muted-foreground" />
           <h3 className="text-sm font-semibold">Gross → Discounts → Net</h3>
+          {!loading && <span className="text-xs text-muted-foreground">{fmtNum(orderCount)} order{orderCount === 1 ? "" : "s"}</span>}
           <TooltipProvider delayDuration={100}>
             <UiTooltip>
               <TooltipTrigger asChild>
@@ -1274,6 +1279,7 @@ export default function PnLDashboard() {
     return getMonthBounds(prevYear, prevMonth);
   }, [year, month]);
   const { data: prevBridgeRows = [] } = useSalesBridge(prevBounds);
+  const bridgeByStoreForRoi = new Map(bridgeRows.map(b => [b.storeId, b]));
   const { data: trafficSourceRows = [], isLoading: trafficSourceLoading } = useTrafficSource(bounds);
   const { data: abandonmentRows = [], isLoading: abandonmentLoading } = useCheckoutAbandonment(bounds);
 
@@ -1317,6 +1323,7 @@ export default function PnLDashboard() {
     // for a single store regardless of whether that month's FX rate is on record.
     return {
       store: s, revenue, costs, net,
+      prevRevenue, prevCosts, prevNet,
       revenueDelta: pulse?.revenueDelta ?? null,
       costsDelta: pctDelta(costs, prevCosts),
       netDelta: pctDelta(net, prevNet),
@@ -1368,17 +1375,23 @@ export default function PnLDashboard() {
   // KPI row reflects whatever scope is selected: the group total in SAR for All
   // Stores, or that one store's own native-currency numbers — not the group
   // total again, which is what was showing regardless of the store picker before.
+  const kpiOrderCount = isAllStores
+    ? activeStores.reduce((sum, s) => sum + (bridgeByStoreForRoi.get(s.id)?.orderCount ?? 0), 0)
+    : selectedStoreId ? bridgeByStoreForRoi.get(selectedStoreId)?.orderCount ?? 0 : 0;
+
   const summary = isAllStores
     ? {
         revenue: grandTotal.revenue, costs: grandTotal.costs, net: grandTotal.revenue - grandTotal.costs,
+        prevRevenue: grandTotal.prevRevenue, prevCosts: grandTotal.prevCosts, prevNet: grandTotal.prevNet,
         revenueDelta: groupRevenueDelta, costsDelta: groupCostsDelta, netDelta: groupNetDelta,
-        symbol: "SAR ", unit: "(SAR)", biggestCostLabel: groupBiggestCostLabel,
+        symbol: "SAR ", unit: "(SAR)", biggestCostLabel: groupBiggestCostLabel, orderCount: kpiOrderCount,
       }
     : {
         revenue: displayRows[0]?.revenue ?? 0, costs: displayRows[0]?.costs ?? 0, net: displayRows[0]?.net ?? 0,
+        prevRevenue: displayRows[0]?.prevRevenue ?? 0, prevCosts: displayRows[0]?.prevCosts ?? 0, prevNet: displayRows[0]?.prevNet ?? 0,
         revenueDelta: displayRows[0]?.revenueDelta ?? null, costsDelta: displayRows[0]?.costsDelta ?? null, netDelta: displayRows[0]?.netDelta ?? null,
         symbol: selectedStore?.currency_symbol ?? "", unit: "",
-        biggestCostLabel: biggestCategoryFor(displayRows[0]?.entries ?? []),
+        biggestCostLabel: biggestCategoryFor(displayRows[0]?.entries ?? []), orderCount: kpiOrderCount,
       };
 
   // Category breakdown: SAR-combined across every store for All Stores, that
@@ -1422,18 +1435,19 @@ export default function PnLDashboard() {
   const bridgeSummary = useMemo(() => {
     if (!isAllStores) {
       const b = selectedStoreId ? bridgeByStore.get(selectedStoreId) : undefined;
-      return { grossSales: b?.grossSales ?? 0, discounts: b?.discounts ?? 0, netSales: b?.netSales ?? 0, symbol: selectedStore?.currency_symbol ?? "" };
+      return { grossSales: b?.grossSales ?? 0, discounts: b?.discounts ?? 0, netSales: b?.netSales ?? 0, orderCount: b?.orderCount ?? 0, symbol: selectedStore?.currency_symbol ?? "" };
     }
-    let gross = 0, disc = 0, net = 0;
+    let gross = 0, disc = 0, net = 0, orders = 0;
     for (const s of activeStores) {
       const b = bridgeByStore.get(s.id);
       if (!b) continue;
+      orders += b.orderCount;
       const netSar = currencyToSar(b.netSales, s.currency ?? "GBP", fxRates);
       const discSar = currencyToSar(b.discounts, s.currency ?? "GBP", fxRates);
       if (netSar === null || discSar === null) continue;
       net += netSar; disc += discSar; gross += netSar + discSar;
     }
-    return { grossSales: gross, discounts: disc, netSales: net, symbol: "SAR " };
+    return { grossSales: gross, discounts: disc, netSales: net, orderCount: orders, symbol: "SAR " };
   }, [isAllStores, selectedStoreId, selectedStore, bridgeRows, activeStores, fxRates]);
 
   // Cart abandonment summary, same scope rule as the KPI row above. Counts
@@ -1518,7 +1532,6 @@ export default function PnLDashboard() {
   // this month (not just ad-attributed ones), so it's a blended efficiency
   // signal, not per-sale attribution. Same currency-scope rule as the rest
   // of the page: native for a single store, SAR-combined for All Stores.
-  const bridgeByStoreForRoi = new Map(bridgeRows.map(b => [b.storeId, b]));
   const prevBridgeByStore = new Map(prevBridgeRows.map(b => [b.storeId, b]));
   const marketingRoi = useMemo(() => {
     const sumAdSpend = (rows: CostEntry[], toSar: boolean, onlyStoreId: string | null) => {
@@ -1717,6 +1730,10 @@ export default function PnLDashboard() {
         totalRevenue={summary.revenue}
         totalCosts={summary.costs}
         netSales={summary.net}
+        prevRevenue={summary.prevRevenue}
+        prevCosts={summary.prevCosts}
+        prevNet={summary.prevNet}
+        orderCount={summary.orderCount}
         revenueDelta={summary.revenueDelta}
         costsDelta={summary.costsDelta}
         netDelta={summary.netDelta}
@@ -1741,6 +1758,7 @@ export default function PnLDashboard() {
               grossSales={bridgeSummary.grossSales}
               discounts={bridgeSummary.discounts}
               netSales={bridgeSummary.netSales}
+              orderCount={bridgeSummary.orderCount}
               symbol={bridgeSummary.symbol}
               loading={loading}
               tiersExpanded={showDiscountTiers}
