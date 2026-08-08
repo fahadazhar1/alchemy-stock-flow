@@ -888,8 +888,8 @@ function AbandonmentByStoreCard({ rows, loading }: { rows: StoreAbandonmentRow[]
 // sales that month, including ones that cost nothing to win). Simpler than
 // true attribution, and still shows the thing that matters: is spend
 // growing faster than sales, or slower.
-function MarketingRoiCard({ costPerSale, revenuePerSale, costPerSaleDelta, symbol, hasData, loading }: {
-  costPerSale: number | null; revenuePerSale: number | null; costPerSaleDelta: number | null;
+function MarketingRoiCard({ costPerSale, revenuePerSale, costPerSaleDelta, orderCount, symbol, hasData, loading }: {
+  costPerSale: number | null; revenuePerSale: number | null; costPerSaleDelta: number | null; orderCount: number;
   symbol: string; hasData: boolean; loading: boolean;
 }) {
   const ratio = costPerSale && costPerSale > 0 && revenuePerSale !== null ? revenuePerSale / costPerSale : null;
@@ -907,8 +907,7 @@ function MarketingRoiCard({ costPerSale, revenuePerSale, costPerSaleDelta, symbo
           <span className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: "#ede9fe", color: "#7c3aed" }}>
             <TrendingUp size={12} strokeWidth={2.2} />
           </span>
-          <h3 className="text-sm font-semibold">Is Marketing Paying Off?</h3>
-          <span className="text-xs text-muted-foreground">This month</span>
+          <span className="text-xs text-muted-foreground">{hasData && !loading ? `Based on ${fmtNum(orderCount)} sales this month` : "This month"}</span>
         </div>
       </CardHeader>
       <CardContent className="px-4 pb-4 pt-1 flex-1 flex flex-col justify-center items-center text-center">
@@ -951,7 +950,7 @@ function MarketingRoiCard({ costPerSale, revenuePerSale, costPerSaleDelta, symbo
           </>
         )}
         <p className="text-[10px] text-muted-foreground mt-4 pt-2 border-t w-full">
-          Blended across all sales this month, not just ad-attributed ones — see "Where Your Sales Really Come From" for the paid vs. free split.
+          Blended across all {fmtNum(orderCount)} sales this month, not just ad-attributed ones — see "Where Your Sales Really Come From" for the paid vs. free split.
         </p>
       </CardContent>
     </Card>
@@ -981,7 +980,7 @@ function TrafficSourceCard({ rows, symbol, loading }: { rows: TrafficSourceCardR
           <span className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: "#fef3c7", color: "#d97706" }}>
             <Globe size={12} strokeWidth={2.2} />
           </span>
-          <h3 className="text-sm font-semibold">Where Your Sales Really Come From</h3>
+          <span className="text-xs text-muted-foreground">This month</span>
         </div>
       </CardHeader>
       <CardContent className="px-4 pb-4 pt-1 flex-1 flex flex-col justify-center">
@@ -1031,7 +1030,6 @@ function MarketingSpendCard({ totalPct, platforms, loading }: {
           <span className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: "#ede9fe", color: "#7c3aed" }}>
             <Percent size={12} strokeWidth={2.2} />
           </span>
-          <h3 className="text-sm font-semibold">Marketing Spend vs. Sales</h3>
           <span className="text-xs text-muted-foreground">This month</span>
         </div>
       </CardHeader>
@@ -1552,7 +1550,7 @@ export default function PnLDashboard() {
       const prevCostPerSale = prevOrderCount > 0 ? prevAdSpend / prevOrderCount : null;
       const revenuePerSale = orderCount > 0 ? bridgeSummary.netSales / orderCount : null;
       return {
-        costPerSale, revenuePerSale,
+        costPerSale, revenuePerSale, orderCount,
         costPerSaleDelta: costPerSale !== null && prevCostPerSale !== null ? pctDelta(costPerSale, prevCostPerSale) : null,
         symbol: selectedStore?.currency_symbol ?? "",
         hasData: adSpend > 0 && orderCount > 0,
@@ -1567,7 +1565,7 @@ export default function PnLDashboard() {
     const prevCostPerSale = prevOrderCount > 0 ? prevAdSpend / prevOrderCount : null;
     const revenuePerSale = orderCount > 0 ? bridgeSummary.netSales / orderCount : null;
     return {
-      costPerSale, revenuePerSale,
+      costPerSale, revenuePerSale, orderCount,
       costPerSaleDelta: costPerSale !== null && prevCostPerSale !== null ? pctDelta(costPerSale, prevCostPerSale) : null,
       symbol: "SAR ",
       hasData: adSpend > 0 && orderCount > 0,
@@ -1879,6 +1877,7 @@ export default function PnLDashboard() {
                 costPerSale={marketingRoi.costPerSale}
                 revenuePerSale={marketingRoi.revenuePerSale}
                 costPerSaleDelta={marketingRoi.costPerSaleDelta}
+                orderCount={marketingRoi.orderCount}
                 symbol={marketingRoi.symbol}
                 hasData={marketingRoi.hasData}
                 loading={loading || bridgeLoading}
@@ -1887,6 +1886,10 @@ export default function PnLDashboard() {
           </section>
 
           <section className="flex flex-col">
+            <div className="flex items-center gap-2.5 mb-3">
+              <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-fuchsia-500/10 text-fuchsia-600 dark:text-fuchsia-400">Spend</span>
+              <h2 className="text-base font-semibold">Marketing Spend vs. Sales</h2>
+            </div>
             <div className="flex-1">
               <MarketingSpendCard
                 totalPct={marketingSpendBreakdown.totalPct}
@@ -1913,6 +1916,10 @@ export default function PnLDashboard() {
           </section>
 
           <section className="flex flex-col">
+            <div className="flex items-center gap-2.5 mb-3">
+              <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400">Source</span>
+              <h2 className="text-base font-semibold">Where Your Sales Really Come From</h2>
+            </div>
             <div className="flex-1">
               <TrafficSourceCard
                 rows={trafficSourceSummary}
