@@ -87,6 +87,17 @@ function ga4DateToIso(d: string): string {
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
+  // Daily cron calls this with an empty body -> default 4-day rolling
+  // window. Pass {"days": N} for a one-time backfill of N days of history
+  // (e.g. after adding a new property, or the initial historical backfill
+  // done 2026-08-08 — the daily sync never looked back further than 4 days,
+  // so anything older was never populated until backfilled explicitly).
+  let days = SYNC_DAYS;
+  try {
+    const body = await req.json();
+    if (typeof body?.days === "number" && body.days > 0) days = body.days;
+  } catch { /* empty/non-JSON body -> default */ }
+
   const supabase = createClient(SUPABASE_URL, SERVICE_ROLE);
   const token = await getAccessToken();
   const results: Record<string, string> = {};
@@ -94,9 +105,10 @@ Deno.serve(async (req) => {
   for (const [storeId, propertyId] of Object.entries(STORE_PROPERTY_MAP)) {
     try {
       const daily = await runReport(token, propertyId, {
-        dateRanges: [{ startDate: `${SYNC_DAYS}daysAgo`, endDate: "today" }],
+        dateRanges: [{ startDate: `${days}daysAgo`, endDate: "today" }],
         dimensions: [{ name: "date" }],
         metrics: [{ name: "sessions" }, { name: "bounceRate" }, { name: "conversions" }],
+        limit: 100000,
       });
       const dailyRows = (daily.rows ?? []).map((r: any) => ({
         store_id: storeId,
@@ -112,9 +124,10 @@ Deno.serve(async (req) => {
       }
 
       const channels = await runReport(token, propertyId, {
-        dateRanges: [{ startDate: `${SYNC_DAYS}daysAgo`, endDate: "today" }],
+        dateRanges: [{ startDate: `${days}daysAgo`, endDate: "today" }],
         dimensions: [{ name: "date" }, { name: "sessionDefaultChannelGroup" }],
         metrics: [{ name: "sessions" }],
+        limit: 100000,
       });
       const channelRows = (channels.rows ?? []).map((r: any) => ({
         store_id: storeId,
