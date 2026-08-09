@@ -1031,8 +1031,8 @@ function TrafficSourceCard({ rows, symbol, loading }: { rows: TrafficSourceCardR
 // "Marketing Spend vs. Sales" — ad spend as a % of revenue, overall and per
 // platform. Pure arithmetic on data already on this page (Cost Entries +
 // the Sales Bridge's Net Sales) — no new data source.
-function MarketingSpendCard({ totalPct, platforms, loading }: {
-  totalPct: number; platforms: { platform: string; pct: number }[]; loading: boolean;
+function MarketingSpendCard({ totalPct, platforms, netSales, symbol, loading }: {
+  totalPct: number; platforms: { platform: string; pct: number }[]; netSales: number; symbol: string; loading: boolean;
 }) {
   const platformColor: Record<string, string> = { google: "#4285F4", meta: "#1877F2", tiktok: "#69C9D0", other: "#94a3b8" };
   return (
@@ -1066,6 +1066,15 @@ function MarketingSpendCard({ totalPct, platforms, loading }: {
                   <span className="text-xs font-bold w-12 text-right shrink-0">{p.pct.toFixed(1)}%</span>
                 </div>
               ))}
+            </div>
+            <div className="w-full mt-5 rounded-xl border border-violet-500/15 bg-violet-500/5 dark:bg-violet-500/10 p-3.5 text-left">
+              <div className="flex items-center gap-1.5 mb-1.5">
+                <Sparkles size={12} className="text-violet-600 dark:text-violet-400 shrink-0" />
+                <span className="text-[11px] font-bold uppercase tracking-wide text-violet-700 dark:text-violet-400">How this is worked out</span>
+              </div>
+              <p className="text-[11.5px] text-muted-foreground leading-relaxed">
+                Each platform's ad spend this month is divided by your Net Sales (<b className="text-foreground">{fmtC(netSales, symbol)}</b>) to get its share. {platforms[0] && <>{platforms[0].platform === "other" ? "Other" : platforms[0].platform.charAt(0).toUpperCase() + platforms[0].platform.slice(1)} spent enough to equal <b className="text-foreground">{platforms[0].pct.toFixed(1)}%</b> of sales. </>}Add every platform together and you get <b className="text-foreground">{totalPct.toFixed(0)}%</b> — the total slice of this month's sales that went back into ads.
+              </p>
             </div>
           </>
         )}
@@ -1918,6 +1927,8 @@ export default function PnLDashboard() {
               <MarketingSpendCard
                 totalPct={marketingSpendBreakdown.totalPct}
                 platforms={marketingSpendBreakdown.platforms}
+                netSales={bridgeSummary.netSales}
+                symbol={bridgeSummary.symbol}
                 loading={loading}
               />
             </div>
