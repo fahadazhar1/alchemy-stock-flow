@@ -36,8 +36,7 @@ export function monthKeyToDate(monthKey: string) {
 
 export const COST_CATEGORIES = [
   { value: "ad_spend", label: "Ad Spend" },
-  { value: "shopify_plan", label: "Shopify Plan" },
-  { value: "shopify_apps", label: "Shopify Apps" },
+  { value: "shopify", label: "Shopify" },
   { value: "marketplace_fee", label: "Marketplace Fee" },
   { value: "other", label: "Other" },
 ] as const;
@@ -46,20 +45,35 @@ export const AD_PLATFORMS = [
   { value: "google", label: "Google Ads" },
   { value: "meta", label: "Meta Ads" },
   { value: "tiktok", label: "TikTok Ads" },
+  { value: "shopify", label: "Shopify" },
   { value: "other", label: "Other" },
 ] as const;
 
 export const MARKETPLACE_PLATFORMS = [
   { value: "amazon", label: "Amazon" },
   { value: "ebay", label: "eBay" },
+  { value: "tiktok", label: "TikTok Shop" },
   { value: "other", label: "Other" },
 ] as const;
+
+export const SHOPIFY_PLATFORMS = [
+  { value: "plan", label: "Shopify Plan" },
+  { value: "apps", label: "Shopify Apps" },
+  { value: "other", label: "Other" },
+] as const;
+
+export function platformOptionsFor(category: string) {
+  if (category === "ad_spend") return AD_PLATFORMS;
+  if (category === "marketplace_fee") return MARKETPLACE_PLATFORMS;
+  if (category === "shopify") return SHOPIFY_PLATFORMS;
+  return [] as const;
+}
 
 export interface CostEntry {
   id: string;
   store_id: string;
-  category: "ad_spend" | "shopify_plan" | "shopify_apps" | "marketplace_fee" | "other";
-  platform: "google" | "meta" | "tiktok" | "amazon" | "ebay" | "other" | null;
+  category: "ad_spend" | "shopify" | "marketplace_fee" | "other";
+  platform: "google" | "meta" | "tiktok" | "shopify" | "amazon" | "ebay" | "plan" | "apps" | "other" | null;
   month: string; // yyyy-mm-dd, first of month
   amount: number;
   currency: string;

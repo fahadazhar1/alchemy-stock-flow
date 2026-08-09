@@ -27,7 +27,7 @@ import { useStoreSalesPulse, type ChannelSalesStat } from "@/hooks/useStoreSales
 import {
   getMonthBounds, useAllCostEntries, useCostEntryMutations, useEnsureFxRates, useUpsertFxRate,
   useSalesBridge, useMonthlyNetSalesTrend, useCheckoutAbandonment, useTrafficSource, useDiscountTiers, currencyToSar,
-  COST_CATEGORIES, AD_PLATFORMS, MARKETPLACE_PLATFORMS,
+  COST_CATEGORIES, platformOptionsFor,
   type CostEntry, type CostEntryInput, type SalesBridgeRow, type MonthlyTrendPoint, type AbandonmentRow, type TrafficSourceRow, type DiscountTierRow,
 } from "@/hooks/usePnL";
 import { Tooltip as UiTooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -102,8 +102,7 @@ function storeColor(idx: number): string { return STORE_COLORS[idx % STORE_COLOR
 
 const CATEGORY_COLORS: Record<string, string> = {
   ad_spend: "#6366f1",
-  shopify_plan: "#06b6d4",
-  shopify_apps: "#10b981",
+  shopify: "#95BF47",
   marketplace_fee: "#f59e0b",
   other: "#94a3b8",
 };
@@ -119,9 +118,9 @@ function fmtNum(n: number): string {
   return n.toLocaleString("en-GB", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 }
 function categoryLabel(c: string) { return COST_CATEGORIES.find(x => x.value === c)?.label ?? c; }
-function platformLabel(p: string | null) {
+function platformLabel(category: string, p: string | null) {
   if (!p) return "—";
-  return [...AD_PLATFORMS, ...MARKETPLACE_PLATFORMS].find(x => x.value === p)?.label ?? p;
+  return platformOptionsFor(category).find(x => x.value === p)?.label ?? p;
 }
 function prevMonthKey(year: number, month: number) {
   return month === 1 ? `${year - 1}-12` : `${year}-${String(month - 1).padStart(2, "0")}`;
@@ -189,8 +188,8 @@ function CostEntryDialog({
     notes: editing?.notes ?? "",
   }));
 
-  const needsPlatform = form.category === "ad_spend" || form.category === "marketplace_fee";
-  const platformOptions = form.category === "ad_spend" ? AD_PLATFORMS : MARKETPLACE_PLATFORMS;
+  const platformOptions = platformOptionsFor(form.category);
+  const needsPlatform = platformOptions.length > 0;
   const store = stores.find(s => s.id === form.store_id);
 
   const handleSubmit = async () => {
@@ -467,12 +466,18 @@ function PnLCard({ r, idx }: { r: StoreRow; idx: number }) {
 // ─── Cost breakdown by category — combined across every store, one card ────
 
 function CategoryBreakdownCard({ breakdown, excludedStoreNames, symbol, subtitle, loading }: {
-  breakdown: { category: string; amount: number; pct: number }[];
+  breakdown: { category: string; amount: number; pct: number; platforms: { platform: string; amount: number }[] }[];
   excludedStoreNames: string[];
   symbol: string;
   subtitle: string;
   loading: boolean;
 }) {
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggle = (category: string) => setExpanded(prev => {
+    const next = new Set(prev);
+    if (next.has(category)) next.delete(category); else next.add(category);
+    return next;
+  });
   return (
     <Card className="h-full flex flex-col">
       <CardHeader className="pb-2 pt-4 px-4">
@@ -504,30 +509,51 @@ function CategoryBreakdownCard({ breakdown, excludedStoreNames, symbol, subtitle
             </div>
             {breakdown.map((b, idx) => {
               const color = categoryColor(b.category);
+              const canExpand = b.platforms.length > 0;
+              const isOpen = expanded.has(b.category);
               return (
-                <div key={b.category} className="flex items-center gap-3">
-                  <span className="w-7 h-7 rounded-md flex items-center justify-center shrink-0" style={{ background: `${color}1a`, color }}>
-                    <Tag size={13} strokeWidth={2.2} />
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between mb-1 gap-2">
-                      <span className="flex items-center gap-1.5 text-sm font-medium truncate">
-                        {categoryLabel(b.category)}
-                        {idx === 0 && (
-                          <Badge variant="outline" className="text-[9px] px-1.5 py-0 text-amber-700 bg-amber-50 dark:bg-amber-950/40 dark:text-amber-300 border-amber-200 dark:border-amber-800 shrink-0">
-                            Biggest
-                          </Badge>
-                        )}
-                      </span>
-                      <span className="text-sm font-bold tabular-nums shrink-0">{symbol}{fmtNum(b.amount)}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
-                        <div className="h-full rounded-full transition-all" style={{ width: `${Math.max(2, b.pct)}%`, background: color }} />
+                <div key={b.category}>
+                  <div
+                    className={cn("flex items-center gap-3", canExpand && "cursor-pointer")}
+                    role={canExpand ? "button" : undefined}
+                    tabIndex={canExpand ? 0 : undefined}
+                    onClick={canExpand ? () => toggle(b.category) : undefined}
+                    onKeyDown={canExpand ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(b.category); } } : undefined}
+                  >
+                    <span className="w-7 h-7 rounded-md flex items-center justify-center shrink-0" style={{ background: `${color}1a`, color }}>
+                      <Tag size={13} strokeWidth={2.2} />
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between mb-1 gap-2">
+                        <span className="flex items-center gap-1.5 text-sm font-medium truncate">
+                          {categoryLabel(b.category)}
+                          {idx === 0 && (
+                            <Badge variant="outline" className="text-[9px] px-1.5 py-0 text-amber-700 bg-amber-50 dark:bg-amber-950/40 dark:text-amber-300 border-amber-200 dark:border-amber-800 shrink-0">
+                              Biggest
+                            </Badge>
+                          )}
+                          {canExpand && <ChevronRight size={12} className={cn("text-muted-foreground transition-transform shrink-0", isOpen && "rotate-90")} />}
+                        </span>
+                        <span className="text-sm font-bold tabular-nums shrink-0">{symbol}{fmtNum(b.amount)}</span>
                       </div>
-                      <span className="text-xs text-muted-foreground tabular-nums w-9 text-right shrink-0">{b.pct.toFixed(0)}%</span>
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                          <div className="h-full rounded-full transition-all" style={{ width: `${Math.max(2, b.pct)}%`, background: color }} />
+                        </div>
+                        <span className="text-xs text-muted-foreground tabular-nums w-9 text-right shrink-0">{b.pct.toFixed(0)}%</span>
+                      </div>
                     </div>
                   </div>
+                  {canExpand && isOpen && (
+                    <div className="ml-10 mt-2 space-y-1.5 pl-3 border-l-2" style={{ borderColor: `${color}40` }}>
+                      {b.platforms.map(p => (
+                        <div key={p.platform} className="flex items-center justify-between text-xs">
+                          <span className="text-muted-foreground">{platformLabel(b.category, p.platform)}</span>
+                          <span className="font-semibold tabular-nums">{symbol}{fmtNum(p.amount)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -1045,7 +1071,7 @@ function TrafficSourceCard({ rows, symbol, loading }: { rows: TrafficSourceCardR
 function MarketingSpendCard({ totalPct, platforms, netSales, symbol, loading }: {
   totalPct: number; platforms: { platform: string; pct: number }[]; netSales: number; symbol: string; loading: boolean;
 }) {
-  const platformColor: Record<string, string> = { google: "#4285F4", meta: "#1877F2", tiktok: "#69C9D0", other: "#94a3b8" };
+  const platformColor: Record<string, string> = { google: "#4285F4", meta: "#1877F2", tiktok: "#69C9D0", shopify: "#95BF47", other: "#94a3b8" };
   return (
     <Card className="h-full flex flex-col">
       <CardHeader className="pb-2 pt-4 px-4">
@@ -1388,16 +1414,27 @@ export default function PnLDashboard() {
   // single source both the "Biggest Cost" KPI and the breakdown card read from.
   const categoryBreakdown = useMemo(() => {
     const byCategory = new Map<string, number>();
+    const byCategoryPlatform = new Map<string, Map<string, number>>();
     for (const r of rows) {
       for (const e of r.entries) {
         const amtSar = currencyToSar(Number(e.amount), r.store.currency ?? "GBP", fxRates);
         if (amtSar === null) continue;
         byCategory.set(e.category, (byCategory.get(e.category) ?? 0) + amtSar);
+        if (e.platform) {
+          if (!byCategoryPlatform.has(e.category)) byCategoryPlatform.set(e.category, new Map());
+          const pm = byCategoryPlatform.get(e.category)!;
+          pm.set(e.platform, (pm.get(e.platform) ?? 0) + amtSar);
+        }
       }
     }
     const total = [...byCategory.values()].reduce((a, b) => a + b, 0);
     return [...byCategory.entries()]
-      .map(([category, amount]) => ({ category, amount, pct: total > 0 ? (amount / total) * 100 : 0 }))
+      .map(([category, amount]) => ({
+        category, amount, pct: total > 0 ? (amount / total) * 100 : 0,
+        platforms: [...(byCategoryPlatform.get(category)?.entries() ?? [])]
+          .map(([platform, amt]) => ({ platform, amount: amt }))
+          .sort((a, b) => b.amount - a.amount),
+      }))
       .sort((a, b) => b.amount - a.amount);
   }, [rows, fxRates]);
 
@@ -1434,10 +1471,23 @@ export default function PnLDashboard() {
     if (isAllStores) return categoryBreakdown;
     const entries = displayRows[0]?.entries ?? [];
     const byCategory = new Map<string, number>();
-    for (const e of entries) byCategory.set(e.category, (byCategory.get(e.category) ?? 0) + Number(e.amount));
+    const byCategoryPlatform = new Map<string, Map<string, number>>();
+    for (const e of entries) {
+      byCategory.set(e.category, (byCategory.get(e.category) ?? 0) + Number(e.amount));
+      if (e.platform) {
+        if (!byCategoryPlatform.has(e.category)) byCategoryPlatform.set(e.category, new Map());
+        const pm = byCategoryPlatform.get(e.category)!;
+        pm.set(e.platform, (pm.get(e.platform) ?? 0) + Number(e.amount));
+      }
+    }
     const total = [...byCategory.values()].reduce((a, b) => a + b, 0);
     return [...byCategory.entries()]
-      .map(([category, amount]) => ({ category, amount, pct: total > 0 ? (amount / total) * 100 : 0 }))
+      .map(([category, amount]) => ({
+        category, amount, pct: total > 0 ? (amount / total) * 100 : 0,
+        platforms: [...(byCategoryPlatform.get(category)?.entries() ?? [])]
+          .map(([platform, amt]) => ({ platform, amount: amt }))
+          .sort((a, b) => b.amount - a.amount),
+      }))
       .sort((a, b) => b.amount - a.amount);
   }, [isAllStores, categoryBreakdown, displayRows]);
 
@@ -1727,7 +1777,7 @@ export default function PnLDashboard() {
       ["Store", "Category", "Platform", "Amount", "Currency", "Notes"].join(","),
       ...displayEntries.map(e => {
         const s = activeStores.find(st => st.id === e.store_id);
-        return [q(s?.store_name ?? ""), q(categoryLabel(e.category)), q(platformLabel(e.platform)), q(Number(e.amount).toFixed(2)), q(e.currency), q(e.notes ?? "")].join(",");
+        return [q(s?.store_name ?? ""), q(categoryLabel(e.category)), q(platformLabel(e.category, e.platform)), q(Number(e.amount).toFixed(2)), q(e.currency), q(e.notes ?? "")].join(",");
       }),
       "",
       ["", "Total Revenue", "", summary.revenue.toFixed(2), summary.symbol.trim(), ""].join(","),
@@ -2039,7 +2089,7 @@ export default function PnLDashboard() {
                         <tr key={e.id} className="border-b last:border-0 hover:bg-muted/40 transition-colors">
                           {ledgerShowsStoreColumn && <td className="px-4 py-2.5">{s?.store_name ?? "—"}</td>}
                           <td className="px-4 py-2.5">{categoryLabel(e.category)}</td>
-                          <td className="px-4 py-2.5 text-muted-foreground">{platformLabel(e.platform)}</td>
+                          <td className="px-4 py-2.5 text-muted-foreground">{platformLabel(e.category, e.platform)}</td>
                           <td className="px-4 py-2.5 text-right tabular-nums font-medium text-red-600 dark:text-red-400">−{fmtC(Number(e.amount), s?.currency_symbol ?? "")}</td>
                           <td className="px-4 py-2.5 text-muted-foreground">{e.notes ?? "—"}</td>
                           {isAdmin && (
