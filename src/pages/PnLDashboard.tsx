@@ -498,6 +498,10 @@ function CategoryBreakdownCard({ breakdown, excludedStoreNames, symbol, subtitle
           <p className="text-sm text-muted-foreground py-4 text-center">No costs entered this period.</p>
         ) : (
           <div className="space-y-4">
+            <div className="flex items-center justify-between pb-3 mb-1 border-b">
+              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Total Costs</span>
+              <span className="text-lg font-extrabold tabular-nums">{symbol}{fmtNum(breakdown.reduce((sum, b) => sum + b.amount, 0))}</span>
+            </div>
             {breakdown.map((b, idx) => {
               const color = categoryColor(b.category);
               return (
@@ -1002,6 +1006,10 @@ function TrafficSourceCard({ rows, symbol, loading }: { rows: TrafficSourceCardR
           <p className="text-sm text-muted-foreground py-4 text-center">No online-store sales this period.</p>
         ) : (
           <>
+            <div className="flex items-center justify-between pb-3 mb-3 border-b">
+              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Total</span>
+              <span className="text-sm font-bold tabular-nums">{fmtNum(total)} orders · {fmtC(rows.reduce((sum, r) => sum + r.revenue, 0), symbol)}</span>
+            </div>
             <div className="flex h-4 rounded-lg overflow-hidden mb-4">
               {rows.map(r => total > 0 && r.orders > 0 && (
                 <div key={r.source} style={{ width: `${(r.orders / total) * 100}%`, background: TRAFFIC_SOURCE_META[r.source].color }} />
@@ -1021,6 +1029,9 @@ function TrafficSourceCard({ rows, symbol, loading }: { rows: TrafficSourceCardR
                 );
               })}
             </div>
+            <p className="text-[10px] text-muted-foreground mt-3 pt-2 border-t">
+              Online Store orders only — excludes POS, Draft Orders, and other marketplace channels (Amazon/eBay/TikTok Shop, etc.).
+            </p>
           </>
         )}
       </CardContent>
@@ -1106,6 +1117,10 @@ function TrafficByChannelCard({ channels, subtitle, loading }: {
           <p className="text-sm text-muted-foreground py-4 text-center">Not synced for this store yet.</p>
         ) : (
           <div className="space-y-4">
+            <div className="flex items-center justify-between pb-3 mb-1 border-b">
+              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Total Sessions</span>
+              <span className="text-lg font-extrabold tabular-nums">{fmtNum(channels.reduce((sum, c) => sum + c.sessions, 0))}</span>
+            </div>
             {channels.map((c, idx) => {
               const color = storeColor(idx + 4); // offset from store colors so it reads as a distinct palette
               return (
