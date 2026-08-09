@@ -3,7 +3,7 @@ import { toast } from "sonner";
 import {
   ChevronLeft, ChevronRight, Plus, Pencil, Trash2, Wallet,
   TrendingUp, TrendingDown, Receipt, Coins, ArrowUp, ArrowDown, Percent, Tag, Share2, ShoppingCart,
-  Download, Printer, LineChart as LineChartIcon, Info, LayoutGrid, RotateCcw, Globe,
+  Download, Printer, LineChart as LineChartIcon, Info, LayoutGrid, RotateCcw, Globe, Sparkles,
 } from "lucide-react";
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend,
@@ -950,6 +950,15 @@ function MarketingRoiCard({ costPerSale, revenuePerSale, costPerSaleDelta, order
                 {Math.abs(costPerSaleDelta)}% {costPerSaleDelta <= 0 ? "cheaper" : "more expensive"} per sale vs last month
               </span>
             )}
+            <div className="w-full mt-5 rounded-xl border border-violet-500/15 bg-violet-500/5 dark:bg-violet-500/10 p-3.5 text-left">
+              <div className="flex items-center gap-1.5 mb-1.5">
+                <Sparkles size={12} className="text-violet-600 dark:text-violet-400 shrink-0" />
+                <span className="text-[11px] font-bold uppercase tracking-wide text-violet-700 dark:text-violet-400">How this is worked out</span>
+              </div>
+              <p className="text-[11.5px] text-muted-foreground leading-relaxed">
+                This month's ad spend and net sales are each divided by your {fmtNum(orderCount)} sales, giving <b className="text-foreground">{fmtC(costPerSale, symbol)} spent</b> and <b className="text-foreground">{fmtC(revenuePerSale, symbol)} earned</b> per sale. {ratio !== null && <>Revenue per sale ÷ cost per sale = <b className="text-foreground">{ratio.toFixed(1)}×</b> — that's total revenue, not profit, for every {symbol.trim() || "unit"}1 put into ads.</>}
+              </p>
+            </div>
           </>
         )}
         <p className="text-[10px] text-muted-foreground mt-4 pt-2 border-t w-full">
