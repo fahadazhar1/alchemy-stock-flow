@@ -1013,8 +1013,10 @@ const TRAFFIC_SOURCE_META = {
   direct: { label: "Direct", desc: "Typed the URL, bookmarks, no trace", color: "#94a3b8" },
 } as const;
 
-function TrafficSourceCard({ rows, symbol, loading }: { rows: TrafficSourceCardRow[]; symbol: string; loading: boolean }) {
+function TrafficSourceCard({ rows, adSpend, symbol, loading }: { rows: TrafficSourceCardRow[]; adSpend: number; symbol: string; loading: boolean }) {
   const total = rows.reduce((sum, r) => sum + r.orders, 0);
+  const paidOrders = rows.find(r => r.source === "paid")?.orders ?? 0;
+  const costPerConversion = paidOrders > 0 ? adSpend / paidOrders : null;
   return (
     <Card className="h-full flex flex-col">
       <CardHeader className="pb-2 pt-4 px-4">
@@ -1045,12 +1047,19 @@ function TrafficSourceCard({ rows, symbol, loading }: { rows: TrafficSourceCardR
               {rows.map(r => {
                 const meta = TRAFFIC_SOURCE_META[r.source];
                 return (
-                  <div key={r.source} className="flex items-center gap-3 py-2 border-b last:border-0 border-border/50">
-                    <span className="w-3 h-3 rounded-full shrink-0" style={{ background: meta.color }} />
-                    <span className="text-sm font-semibold w-28 shrink-0">{meta.label}</span>
-                    <span className="text-xs text-muted-foreground flex-1 truncate hidden sm:block">{meta.desc}</span>
-                    <span className="text-xs text-muted-foreground w-20 text-right shrink-0">{fmtNum(r.orders)} orders</span>
-                    <span className="text-sm font-bold tabular-nums w-24 text-right shrink-0">{fmtC(r.revenue, symbol)}</span>
+                  <div key={r.source} className="py-2 border-b last:border-0 border-border/50">
+                    <div className="flex items-center gap-3">
+                      <span className="w-3 h-3 rounded-full shrink-0" style={{ background: meta.color }} />
+                      <span className="text-sm font-semibold w-28 shrink-0">{meta.label}</span>
+                      <span className="text-xs text-muted-foreground flex-1 truncate hidden sm:block">{meta.desc}</span>
+                      <span className="text-xs text-muted-foreground w-20 text-right shrink-0">{fmtNum(r.orders)} orders</span>
+                      <span className="text-sm font-bold tabular-nums w-24 text-right shrink-0">{fmtC(r.revenue, symbol)}</span>
+                    </div>
+                    {r.source === "paid" && costPerConversion !== null && (
+                      <div className="text-[11px] text-muted-foreground mt-1 ml-6">
+                        Cost per conversion: <span className="font-semibold text-foreground">{fmtC(costPerConversion, symbol)}</span> ({fmtC(adSpend, symbol)} ad spend ÷ {fmtNum(paidOrders)} ad-driven sales)
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -1643,7 +1652,7 @@ export default function PnLDashboard() {
       const prevCostPerSale = prevOrderCount > 0 ? prevAdSpend / prevOrderCount : null;
       const revenuePerSale = orderCount > 0 ? bridgeSummary.netSales / orderCount : null;
       return {
-        costPerSale, revenuePerSale, orderCount,
+        costPerSale, revenuePerSale, orderCount, adSpend,
         costPerSaleDelta: costPerSale !== null && prevCostPerSale !== null ? pctDelta(costPerSale, prevCostPerSale) : null,
         symbol: selectedStore?.currency_symbol ?? "",
         hasData: adSpend > 0 && orderCount > 0,
@@ -1658,7 +1667,7 @@ export default function PnLDashboard() {
     const prevCostPerSale = prevOrderCount > 0 ? prevAdSpend / prevOrderCount : null;
     const revenuePerSale = orderCount > 0 ? bridgeSummary.netSales / orderCount : null;
     return {
-      costPerSale, revenuePerSale, orderCount,
+      costPerSale, revenuePerSale, orderCount, adSpend,
       costPerSaleDelta: costPerSale !== null && prevCostPerSale !== null ? pctDelta(costPerSale, prevCostPerSale) : null,
       symbol: "SAR ",
       hasData: adSpend > 0 && orderCount > 0,
@@ -2023,6 +2032,7 @@ export default function PnLDashboard() {
             <div className="flex-1">
               <TrafficSourceCard
                 rows={trafficSourceSummary}
+                adSpend={marketingRoi.adSpend}
                 symbol={isAllStores ? "SAR " : selectedStore?.currency_symbol ?? ""}
                 loading={trafficSourceLoading}
               />
