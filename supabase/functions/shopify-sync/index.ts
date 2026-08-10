@@ -47,6 +47,56 @@ async function shopifyFetch(domain: string, token: string, path: string): Promis
   throw new Error("Shopify fetch retries exhausted");
 }
 
+// REST's orders.json has no "current shipping" field — shipping_lines[].discounted_price
+// is what was CHARGED at order time and never changes when shipping is later refunded
+// (Shopify tracks that under order.refunds[].shipping, not by mutating shipping_lines).
+// currentShippingPriceSet is GraphQL-only and IS the live, post-refund shipping value.
+//
+// Uses nodes(ids:) — direct ID lookup — NOT orders(query:"id:X OR id:Y ..."). The
+// query-filter form goes through Shopify's search index, which does not reliably include
+// older/closed orders: found via the refund-shipping backfill (2026-08-10), where every
+// order below a certain age was silently missing from the search-based batch response
+// with no error, no throttling, and no pattern by batch position — just older orders
+// dropped. nodes(ids:) fetches by ID directly, bypassing the search index, and correctly
+// returned every order in the same test set. Also cheaper (cost ~1 vs ~3-5 per query).
+// Returns {} on any failure so a GraphQL hiccup degrades to the old REST-based estimate
+// for this sync pass rather than failing the whole order page — the next incremental
+// sync retries.
+async function fetchCurrentShippingBatch(domain: string, token: string, orderIds: string[]): Promise<Record<string, number>> {
+  if (orderIds.length === 0) return {};
+  const gids = orderIds.map((id) => `gid://shopify/Order/${id}`);
+  const query = `{
+    nodes(ids: ${JSON.stringify(gids)}) {
+      ... on Order { legacyResourceId currentShippingPriceSet { shopMoney { amount } } }
+    }
+  }`;
+  try {
+    const res = await fetch(`https://${domain}/admin/api/2024-01/graphql.json`, {
+      method: "POST",
+      headers: { "X-Shopify-Access-Token": token, "Content-Type": "application/json" },
+      body: JSON.stringify({ query }),
+    });
+    if (!res.ok) {
+      console.warn(`currentShippingPriceSet fetch [${res.status}] for ${domain} — falling back to shipping_lines this pass`);
+      return {};
+    }
+    const data = await res.json();
+    if (data.errors) {
+      console.warn(`currentShippingPriceSet GraphQL errors for ${domain}:`, JSON.stringify(data.errors));
+      return {};
+    }
+    const map: Record<string, number> = {};
+    for (const node of data.data?.nodes ?? []) {
+      if (!node?.legacyResourceId) continue; // null for a deleted/inaccessible order
+      map[node.legacyResourceId] = parseFloat(node.currentShippingPriceSet?.shopMoney?.amount ?? "0") || 0;
+    }
+    return map;
+  } catch (e) {
+    console.warn(`currentShippingPriceSet fetch threw for ${domain}:`, e instanceof Error ? e.message : String(e));
+    return {};
+  }
+}
+
 async function triggerContinue(connectionId: string) {
   for (let attempt = 0; attempt < 3; attempt++) {
     const ctrl = new AbortController();
@@ -668,7 +718,7 @@ async function fetchAndInsertVariant(supabase: any, conn: any, shopifyVariantId:
 
 // Upserts a single Shopify order and its line items.
 // Used by both the bulk sync loop and the real-time webhook handler.
-async function processSingleOrder(supabase: any, conn: any, o: any): Promise<void> {
+async function processSingleOrder(supabase: any, conn: any, o: any, currentShipping?: number): Promise<void> {
   const orderRow = {
     order_number: String(o.name || o.order_number || o.id),
     status: o.financial_status || o.fulfillment_status || "unknown",
@@ -681,12 +731,14 @@ async function processSingleOrder(supabase: any, conn: any, o: any): Promise<voi
     shopify_created_at: o.created_at || null,
     total_price: o.total_price ? Number(o.total_price) : null,
     current_total_price: o.current_total_price != null ? Number(o.current_total_price) : null,
-    // total_shipping_price_set is frozen at creation and does NOT reflect shipping
-    // discounts/edits applied afterward — shipping_lines[].discounted_price is the
-    // live, post-discount value (REST has no order-level "current shipping" field).
-    total_shipping_price: (o.shipping_lines ?? []).reduce(
-      (sum: number, line: any) => sum + Number(line.discounted_price ?? line.price ?? 0), 0,
-    ),
+    // Live, post-refund shipping from GraphQL's currentShippingPriceSet (fetched in bulk
+    // by the caller) — falls back to REST's shipping_lines (charged-at-creation, does NOT
+    // reflect a later shipping refund) only if that GraphQL batch call failed this pass.
+    total_shipping_price: currentShipping !== undefined
+      ? currentShipping
+      : (o.shipping_lines ?? []).reduce(
+          (sum: number, line: any) => sum + Number(line.discounted_price ?? line.price ?? 0), 0,
+        ),
     shopify_order_id: String(o.id),
     store_id: conn.store_id,
     customer_email: o.email || o.customer?.email || null,
@@ -755,6 +807,59 @@ async function processSingleOrder(supabase: any, conn: any, o: any): Promise<voi
   }
 }
 
+// Single-order webhook path (orders/create, orders/updated) — fetches this one order's
+// live shipping before upserting, same reasoning as fetchCurrentShippingBatch above.
+async function processOrderWebhook(supabase: any, conn: any, payload: any): Promise<void> {
+  const domain = normalizeDomain(conn.shop_domain);
+  const shippingMap = await fetchCurrentShippingBatch(domain, conn.access_token, [String(payload.id)]);
+  await processSingleOrder(supabase, conn, payload, shippingMap[String(payload.id)]);
+}
+
+// One-time targeted backfill for the total_shipping_price bug (see fetchCurrentShippingBatch)
+// — only touches orders that were ever refunded/partially refunded, i.e. the only rows that
+// could actually be wrong. NOT a full re-sync: it doesn't re-fetch line items, customer data,
+// or any other order field, and never revisits an order that was never refunded. Runs
+// synchronously (321 orders total across all 4 stores as of 2026-08-10 — comfortably inside
+// the edge function timeout) and returns a per-store summary directly.
+async function backfillRefundShipping(supabase: any): Promise<Record<string, unknown>> {
+  const { data: connections, error: connErr } = await supabase
+    .from("shopify_connections")
+    .select("id, store_id, shop_domain, access_token")
+    .eq("is_active", true);
+  if (connErr) throw connErr;
+
+  const results: Record<string, unknown> = {};
+  for (const conn of connections ?? []) {
+    const domain = normalizeDomain(conn.shop_domain);
+    const { data: orders, error: ordersErr } = await supabase
+      .from("orders")
+      .select("id, shopify_order_id")
+      .eq("store_id", conn.store_id)
+      .in("financial_status", ["refunded", "partially_refunded"]);
+    if (ordersErr) { results[conn.store_id] = `error: ${ordersErr.message}`; continue; }
+    if (!orders?.length) { results[conn.store_id] = "0 refunded orders on record"; continue; }
+
+    let updated = 0, skipped = 0;
+    const skippedIds: string[] = [];
+    const updateErrors: string[] = [];
+    const BATCH = 50;
+    for (let i = 0; i < orders.length; i += BATCH) {
+      const batch = orders.slice(i, i + BATCH);
+      const shippingMap = await fetchCurrentShippingBatch(domain, conn.access_token, batch.map((o: any) => o.shopify_order_id));
+      for (const o of batch) {
+        const shipping = shippingMap[o.shopify_order_id];
+        if (shipping === undefined) { skipped++; skippedIds.push(o.shopify_order_id); continue; }
+        const { error: updErr } = await supabase.from("orders").update({ total_shipping_price: shipping }).eq("id", o.id);
+        if (updErr) { skipped++; skippedIds.push(o.shopify_order_id); updateErrors.push(updErr.message); continue; }
+        updated++;
+      }
+    }
+    results[conn.store_id] = `${updated} updated, ${skipped} skipped (of ${orders.length} refunded orders)`;
+    if (skippedIds.length) console.warn(`backfillRefundShipping: ${conn.store_id} skipped orders:`, skippedIds, updateErrors);
+  }
+  return results;
+}
+
 // FIXED: single page per invocation (was: all pages in one invocation)
 async function syncOrders(supabase: any, conn: any, log: any, totalRef: { n: number }, syncSince: string | null): Promise<boolean> {
   const domain = normalizeDomain(conn.shop_domain);
@@ -777,8 +882,12 @@ async function syncOrders(supabase: any, conn: any, log: any, totalRef: { n: num
   const json = await res.json();
   const orders = json.orders ?? [];
 
+  // One batched GraphQL call for the whole page's live shipping (not per-order) —
+  // see fetchCurrentShippingBatch for why this can't come from the REST payload.
+  const shippingMap = await fetchCurrentShippingBatch(domain, conn.access_token, orders.map((o: any) => String(o.id)));
+
   for (const o of orders) {
-    await processSingleOrder(supabase, conn, o);
+    await processSingleOrder(supabase, conn, o, shippingMap[String(o.id)]);
     totalRef.n++;
   }
 
@@ -1050,9 +1159,12 @@ Deno.serve(async (req) => {
       const payload = await req.json().catch(() => null);
 
       if ((topic === "orders/create" || topic === "orders/updated") && payload) {
-        // Process just this order directly — no full sync needed
+        // Process just this order directly — no full sync needed. orders/updated is what
+        // fires on a refund (including a shipping-only refund), so this path needs the
+        // same live-shipping fetch as the bulk sync loop — otherwise a refund arriving via
+        // webhook would still land with stale shipping_lines-derived shipping.
         // @ts-ignore
-        EdgeRuntime.waitUntil(processSingleOrder(supabase, conn, payload));
+        EdgeRuntime.waitUntil(processOrderWebhook(supabase, conn, payload));
       } else if (topic === "inventory_levels/update" && payload) {
         // Update this inventory item's quantity in real-time across all locations
         // @ts-ignore
@@ -1071,6 +1183,11 @@ Deno.serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
     const action = String(body.action || "");
+
+    if (action === "backfill_refund_shipping") {
+      const results = await backfillRefundShipping(supabase);
+      return json(200, { ok: true, results });
+    }
 
     if (action === "test") {
       const domain = normalizeDomain(body.shop_domain || "");
