@@ -1198,10 +1198,12 @@ function TrafficByChannelCard({ channels, subtitle, loading }: {
 // month (a real risk — the FX table only fills in for months someone has
 // actually opened). Single store: absolute Net Sales in its own currency.
 
-function TrendChart({ mode, series, loading }: {
-  mode: "indexed" | "native";
+function TrendChart({ mode, series, loading, metric, onMetricChange }: {
+  mode: "indexed" | "native" | "count";
   series: { key: string; name: string; color: string; symbol?: string; points: { month: string; value: number }[] }[];
   loading: boolean;
+  metric: "sales" | "orders";
+  onMetricChange: (m: "sales" | "orders") => void;
 }) {
   const months = series[0]?.points.map(p => p.month) ?? [];
   const chartData = months.map((month, i) => {
@@ -1209,13 +1211,24 @@ function TrendChart({ mode, series, loading }: {
     for (const s of series) row[s.key] = s.points[i]?.value ?? 0;
     return row;
   });
+  const subtitle = mode === "indexed"
+    ? "Indexed to 100 at the earliest month — compares growth, not scale"
+    : mode === "count"
+    ? "Number of orders per month"
+    : "Last 6 months";
 
   return (
     <Card>
       <CardHeader className="pb-2 pt-4 px-4">
-        <div className="flex items-center gap-2">
-          <LineChartIcon size={14} className="text-muted-foreground" />
-          <span className="text-xs text-muted-foreground">{mode === "indexed" ? "Indexed to 100 at the earliest month — compares growth, not scale" : "Last 6 months"}</span>
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2">
+            <LineChartIcon size={14} className="text-muted-foreground" />
+            <span className="text-xs text-muted-foreground">{subtitle}</span>
+          </div>
+          <div className="flex items-center gap-1 print:hidden">
+            <Button size="sm" variant={metric === "sales" ? "default" : "outline"} className="h-6 px-2 text-[11px]" onClick={() => onMetricChange("sales")}>Net Sales</Button>
+            <Button size="sm" variant={metric === "orders" ? "default" : "outline"} className="h-6 px-2 text-[11px]" onClick={() => onMetricChange("orders")}>Orders</Button>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="px-2 pb-4 pt-1">
@@ -1228,12 +1241,13 @@ function TrendChart({ mode, series, loading }: {
             <LineChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis dataKey="month" tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
-              <YAxis tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" width={mode === "indexed" ? 36 : 56} />
+              <YAxis tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" width={mode === "native" ? 56 : 36} />
               <RechartsTooltip
                 contentStyle={{ background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", borderRadius: 8, fontSize: 12 }}
                 formatter={(value: number, name: string) => {
                   const s = series.find(x => x.key === name);
                   if (mode === "indexed") return [value.toFixed(0), s?.name ?? name];
+                  if (mode === "count") return [value.toLocaleString(), s?.name ?? name];
                   return [fmtC(value, s?.symbol ?? ""), s?.name ?? name];
                 }}
               />
@@ -1366,6 +1380,7 @@ export default function PnLDashboard() {
   const { remove } = useCostEntryMutations();
   const { order: sectionOrder, save: saveLayout, reset: resetLayout } = usePageLayout("pnl", PNL_DEFAULT_ORDER);
   const [customizerOpen, setCustomizerOpen] = useState(false);
+  const [trendMetric, setTrendMetric] = useState<"sales" | "orders">("sales");
   const [showDiscountTiers, setShowDiscountTiers] = useState(false);
   const { data: discountTierRows = [], isLoading: discountTiersLoading } = useDiscountTiers(bounds, showDiscountTiers);
 
@@ -1758,10 +1773,17 @@ export default function PnLDashboard() {
 
     const targetStores = isAllStores ? activeStores : activeStores.filter(s => s.id === selectedStoreId);
     return targetStores.map((s, idx) => {
-      const byMonth = new Map(trendData.filter(t => t.storeId === s.id).map(t => [t.monthStart.slice(0, 7), t.netSales]));
-      const raw = monthKeys.map(k => byMonth.get(k) ?? 0);
+      const byMonth = new Map(trendData.filter(t => t.storeId === s.id).map(t => [t.monthStart.slice(0, 7), t]));
+      const raw = monthKeys.map(k => {
+        const row = byMonth.get(k);
+        if (!row) return 0;
+        return trendMetric === "orders" ? row.orderCount : row.netSales;
+      });
+      // Order counts are currency-agnostic, so they're always shown as plain
+      // numbers — only Net Sales needs the indexed-to-100 trick to compare
+      // stores in different currencies on one chart.
       const base = raw.find(v => v !== 0) ?? 0;
-      const values = isAllStores && base !== 0 ? raw.map(v => (v / base) * 100) : raw;
+      const values = trendMetric === "sales" && isAllStores && base !== 0 ? raw.map(v => (v / base) * 100) : raw;
       return {
         key: s.id,
         name: s.store_name,
@@ -1770,7 +1792,7 @@ export default function PnLDashboard() {
         points: monthLabels.map((month, i) => ({ month, value: values[i] })),
       };
     });
-  }, [trendData, activeStores, isAllStores, selectedStoreId, month, year]);
+  }, [trendData, activeStores, isAllStores, selectedStoreId, month, year, trendMetric]);
 
   const displayEntries = !isAllStores && selectedStoreId
     ? entries.filter(e => e.store_id === selectedStoreId)
@@ -2048,7 +2070,13 @@ export default function PnLDashboard() {
           <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-sky-500/10 text-sky-600 dark:text-sky-400">Trend</span>
           <h2 className="text-base font-semibold">Net Sales Trend</h2>
         </div>
-        <TrendChart mode={isAllStores ? "indexed" : "native"} series={trendSeries} loading={trendLoading} />
+        <TrendChart
+          mode={trendMetric === "orders" ? "count" : isAllStores ? "indexed" : "native"}
+          series={trendSeries}
+          loading={trendLoading}
+          metric={trendMetric}
+          onMetricChange={setTrendMetric}
+        />
       </section>
     ),
 

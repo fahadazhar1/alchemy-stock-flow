@@ -310,7 +310,7 @@ export function useDiscountTiers(bounds: DateBounds, enabled: boolean) {
 
 // ─── Monthly Net Sales trend ────────────────────────────────────────────────
 
-export interface MonthlyTrendPoint { storeId: string; monthStart: string; netSales: number }
+export interface MonthlyTrendPoint { storeId: string; monthStart: string; netSales: number; orderCount: number }
 
 export function useMonthlyNetSalesTrend(startISO: string, endISO: string) {
   return useQuery<MonthlyTrendPoint[]>({
@@ -326,6 +326,7 @@ export function useMonthlyNetSalesTrend(startISO: string, endISO: string) {
         storeId: r.store_id,
         monthStart: r.month_start,
         netSales: Number(r.net_sales),
+        orderCount: Number(r.order_count),
       }));
     },
   });
