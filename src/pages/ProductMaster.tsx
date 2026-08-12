@@ -231,47 +231,86 @@ export default function ProductMaster() {
 
   const handleRevert = async (productId: string) => {
     try {
-      const { data: variants } = await supabase.from("variants").select("id").eq("product_id", productId);
-      const variantIds = (variants ?? []).map((v: any) => v.id);
-      const { data: campaignItem } = await supabase.from("pricing_campaign_items").select("campaign_id")
-        .in("variant_id", variantIds).eq("action_status", "applied").limit(1).maybeSingle();
+      if (!shopifyConn?.id) { toast.error("No active Shopify connection"); return; }
+
       const { error: revertErr } = await supabase.rpc("revert_variant_pricing", { p_product_id: productId });
       if (revertErr) throw revertErr;
-      if (campaignItem?.campaign_id) {
+
+      // Push the now-reverted price straight to Shopify for every variant on this product —
+      // no campaign required. This is the fix: previously this only ran if an "applied"
+      // campaign item existed, so a revert with no active/linked campaign silently never
+      // reached Shopify while still showing a success toast.
+      const { data: variants, error: fetchErr } = await supabase
+        .from("variants")
+        .select("shopify_variant_id, price")
+        .eq("product_id", productId);
+      if (fetchErr) throw fetchErr;
+
+      const targets = (variants ?? []).filter((v: any) => v.shopify_variant_id);
+      let failed = 0;
+      for (const v of targets) {
         const { data: syncResult, error: syncErr } = await supabase.functions.invoke("shopify-sync", {
-          body: { action: "revert_prices", campaign_id: campaignItem.campaign_id }
+          body: {
+            action: "edit_price",
+            connection_id: shopifyConn.id,
+            shopify_variant_id: v.shopify_variant_id,
+            new_price: v.price,
+            new_compare_at_price: null,
+          },
         });
-        if (syncErr) throw syncErr;
-        if (!syncResult?.ok) throw new Error(syncResult?.error || "Shopify revert failed");
-      } else {
-        console.warn("No active campaign found for product — DB reverted but Shopify not updated");
+        if (syncErr || !syncResult?.ok) failed++;
       }
+
       await queryClient.invalidateQueries();
-      toast.success("Price reverted successfully on Shopify");
+      if (targets.length === 0) {
+        toast.error("Reverted in dashboard, but no Shopify variant is linked — could not sync");
+      } else if (failed > 0) {
+        toast.error(`Reverted in dashboard, but ${failed} of ${targets.length} variant(s) failed to sync to Shopify`);
+      } else {
+        toast.success("Price reverted and synced to Shopify");
+      }
     } catch (e: any) { toast.error(e?.message || "Revert failed"); }
   };
 
   const handleBulkRemoveDiscount = async () => {
     if (selected.size === 0) return;
     try {
+      if (!shopifyConn?.id) { toast.error("No active Shopify connection"); return; }
       const ids = Array.from(selected);
-      const { data: variants } = await supabase.from("variants").select("id").in("product_id", ids);
-      const variantIds = (variants ?? []).map((v: any) => v.id);
-      const { data: campaignItems } = await supabase.from("pricing_campaign_items").select("campaign_id")
-        .in("variant_id", variantIds).eq("action_status", "applied");
-      const campaignIds = [...new Set((campaignItems ?? []).map((i: any) => i.campaign_id))];
+
       const { data: result, error: revertErr } = await supabase.rpc("revert_variant_pricing", { p_product_ids: ids });
       if (revertErr) throw revertErr;
-      for (const campaignId of campaignIds) {
+
+      // Push every reverted variant straight to Shopify — same fix as handleRevert:
+      // don't gate the Shopify push on an "applied" campaign item existing.
+      const { data: variants, error: fetchErr } = await supabase
+        .from("variants")
+        .select("shopify_variant_id, price")
+        .in("product_id", ids);
+      if (fetchErr) throw fetchErr;
+
+      const targets = (variants ?? []).filter((v: any) => v.shopify_variant_id);
+      let failed = 0;
+      for (const v of targets) {
         const { data: syncResult, error: syncErr } = await supabase.functions.invoke("shopify-sync", {
-          body: { action: "revert_prices", campaign_id: campaignId }
+          body: {
+            action: "edit_price",
+            connection_id: shopifyConn.id,
+            shopify_variant_id: v.shopify_variant_id,
+            new_price: v.price,
+            new_compare_at_price: null,
+          },
         });
-        if (syncErr) console.error("Shopify revert error", campaignId, syncErr);
-        if (!syncResult?.ok) console.error("Shopify revert failed", campaignId, syncResult?.error);
+        if (syncErr || !syncResult?.ok) failed++;
       }
+
       const r = result as Record<string, unknown>;
       await queryClient.invalidateQueries();
-      toast.success(`Discount removed from ${Number(r.affected_count || 0)} variants and pushed to Shopify`);
+      if (failed > 0) {
+        toast.error(`Reverted ${Number(r.affected_count || 0)} variant(s) in dashboard, but ${failed} failed to sync to Shopify`);
+      } else {
+        toast.success(`Discount removed from ${Number(r.affected_count || 0)} variants and pushed to Shopify`);
+      }
       setSelected(new Set());
     } catch (e: any) { toast.error(e?.message || "Bulk remove discount failed"); }
   };
