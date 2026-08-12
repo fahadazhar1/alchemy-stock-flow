@@ -32,7 +32,7 @@ import {
 } from "@/hooks/usePnL";
 import { Tooltip as UiTooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePageLayout } from "@/hooks/usePageLayout";
-import { useGa4ChannelSummary } from "@/hooks/useGa4";
+import { useGa4ChannelSummary, useGa4MonthlySessionsTrend } from "@/hooks/useGa4";
 
 // Reorderable page sections, saved per-account via usePageLayout("pnl", ...).
 // Keys are stable identifiers persisted to the DB — never rename a key
@@ -1198,13 +1198,14 @@ function TrafficByChannelCard({ channels, subtitle, loading }: {
 // month (a real risk — the FX table only fills in for months someone has
 // actually opened). Single store: absolute Net Sales in its own currency.
 
-function TrendChart({ mode, series, loading, metric, onMetricChange }: {
-  mode: "indexed" | "native" | "count";
+function TrendChart({ metric, onMetricChange, isAllStores, series, loading }: {
+  metric: "sales" | "orders" | "visitors";
+  onMetricChange: (m: "sales" | "orders" | "visitors") => void;
+  isAllStores: boolean;
   series: { key: string; name: string; color: string; symbol?: string; points: { month: string; value: number }[] }[];
   loading: boolean;
-  metric: "sales" | "orders";
-  onMetricChange: (m: "sales" | "orders") => void;
 }) {
+  const mode: "indexed" | "native" | "count" = metric === "sales" ? (isAllStores ? "indexed" : "native") : "count";
   const months = series[0]?.points.map(p => p.month) ?? [];
   const chartData = months.map((month, i) => {
     const row: Record<string, number | string> = { month };
@@ -1213,8 +1214,10 @@ function TrendChart({ mode, series, loading, metric, onMetricChange }: {
   });
   const subtitle = mode === "indexed"
     ? "Indexed to 100 at the earliest month — compares growth, not scale"
-    : mode === "count"
+    : metric === "orders"
     ? "Number of orders per month"
+    : metric === "visitors"
+    ? "Total visitors per month, all channels combined"
     : "Last 6 months";
 
   return (
@@ -1228,6 +1231,7 @@ function TrendChart({ mode, series, loading, metric, onMetricChange }: {
           <div className="flex items-center gap-1 print:hidden">
             <Button size="sm" variant={metric === "sales" ? "default" : "outline"} className="h-6 px-2 text-[11px]" onClick={() => onMetricChange("sales")}>Net Sales</Button>
             <Button size="sm" variant={metric === "orders" ? "default" : "outline"} className="h-6 px-2 text-[11px]" onClick={() => onMetricChange("orders")}>Orders</Button>
+            <Button size="sm" variant={metric === "visitors" ? "default" : "outline"} className="h-6 px-2 text-[11px]" onClick={() => onMetricChange("visitors")}>Visitors</Button>
           </div>
         </div>
       </CardHeader>
@@ -1372,6 +1376,11 @@ export default function PnLDashboard() {
     return { startISO: getMonthBounds(startYear, startMonth).startISO, endISO: bounds.endISO };
   }, [year, month, bounds.endISO]);
   const { data: trendData = [], isLoading: trendLoading } = useMonthlyNetSalesTrend(trendBounds.startISO, trendBounds.endISO);
+  // GA4 dates are plain calendar dates, no KSA UTC-shift needed (see ga4StartDate above).
+  const { data: ga4TrendData = [], isLoading: ga4TrendLoading } = useGa4MonthlySessionsTrend(
+    trendBounds.startISO.slice(0, 10),
+    bounds.endISO.slice(0, 10)
+  );
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<CostEntry | null>(null);
@@ -1380,7 +1389,7 @@ export default function PnLDashboard() {
   const { remove } = useCostEntryMutations();
   const { order: sectionOrder, save: saveLayout, reset: resetLayout } = usePageLayout("pnl", PNL_DEFAULT_ORDER);
   const [customizerOpen, setCustomizerOpen] = useState(false);
-  const [trendMetric, setTrendMetric] = useState<"sales" | "orders">("sales");
+  const [trendMetric, setTrendMetric] = useState<"sales" | "orders" | "visitors">("sales");
   const [showDiscountTiers, setShowDiscountTiers] = useState(false);
   const { data: discountTierRows = [], isLoading: discountTiersLoading } = useDiscountTiers(bounds, showDiscountTiers);
 
@@ -1772,16 +1781,19 @@ export default function PnLDashboard() {
     });
 
     const targetStores = isAllStores ? activeStores : activeStores.filter(s => s.id === selectedStoreId);
+    const ga4ByStore = new Map(ga4TrendData.map(t => [`${t.storeId}|${t.monthStart.slice(0, 7)}`, t.sessions]));
     return targetStores.map((s, idx) => {
       const byMonth = new Map(trendData.filter(t => t.storeId === s.id).map(t => [t.monthStart.slice(0, 7), t]));
       const raw = monthKeys.map(k => {
+        if (trendMetric === "visitors") return ga4ByStore.get(`${s.id}|${k}`) ?? 0;
         const row = byMonth.get(k);
         if (!row) return 0;
         return trendMetric === "orders" ? row.orderCount : row.netSales;
       });
-      // Order counts are currency-agnostic, so they're always shown as plain
-      // numbers — only Net Sales needs the indexed-to-100 trick to compare
-      // stores in different currencies on one chart.
+      // Order counts and GA4 sessions are currency-agnostic, so they're
+      // always shown as plain numbers — only Net Sales needs the
+      // indexed-to-100 trick to compare stores in different currencies on
+      // one chart.
       const base = raw.find(v => v !== 0) ?? 0;
       const values = trendMetric === "sales" && isAllStores && base !== 0 ? raw.map(v => (v / base) * 100) : raw;
       return {
@@ -1792,7 +1804,7 @@ export default function PnLDashboard() {
         points: monthLabels.map((month, i) => ({ month, value: values[i] })),
       };
     });
-  }, [trendData, activeStores, isAllStores, selectedStoreId, month, year, trendMetric]);
+  }, [trendData, ga4TrendData, activeStores, isAllStores, selectedStoreId, month, year, trendMetric]);
 
   const displayEntries = !isAllStores && selectedStoreId
     ? entries.filter(e => e.store_id === selectedStoreId)
@@ -2071,11 +2083,11 @@ export default function PnLDashboard() {
           <h2 className="text-base font-semibold">Net Sales Trend</h2>
         </div>
         <TrendChart
-          mode={trendMetric === "orders" ? "count" : isAllStores ? "indexed" : "native"}
-          series={trendSeries}
-          loading={trendLoading}
           metric={trendMetric}
           onMetricChange={setTrendMetric}
+          isAllStores={isAllStores}
+          series={trendSeries}
+          loading={trendMetric === "visitors" ? ga4TrendLoading : trendLoading}
         />
       </section>
     ),

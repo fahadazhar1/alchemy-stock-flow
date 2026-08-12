@@ -42,6 +42,27 @@ export interface Ga4ChannelRow {
   sessions: number;
 }
 
+export interface Ga4MonthlyTrendPoint { storeId: string; monthStart: string; sessions: number }
+
+export function useGa4MonthlySessionsTrend(startDate: string, endDate: string) {
+  return useQuery<Ga4MonthlyTrendPoint[]>({
+    queryKey: ["ga4-monthly-sessions-trend", startDate, endDate],
+    staleTime: 30 * 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("get_ga4_monthly_sessions_trend" as any, {
+        p_start_date: startDate,
+        p_end_date: endDate,
+      } as any);
+      if (error) throw error;
+      return ((data ?? []) as any[]).map(r => ({
+        storeId: r.store_id,
+        monthStart: r.month_start,
+        sessions: Number(r.sessions),
+      }));
+    },
+  });
+}
+
 export function useGa4ChannelSummary(startDate: string, endDate: string) {
   return useQuery<Ga4ChannelRow[]>({
     queryKey: ["ga4-channel-summary", startDate, endDate],
