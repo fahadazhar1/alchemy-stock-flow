@@ -4,9 +4,10 @@ import { AppSidebar } from "./AppSidebar";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { GlobalSearch } from "./GlobalSearch";
 import { ThemeToggle } from "./ThemeToggle";
-import { StoreSelector } from "./StoreSelector";
+import { StoreSelector, ALL_STORES_ROUTES } from "./StoreSelector";
 import { useAuth } from "@/contexts/AuthContext";
 import { usePageVisibility } from "@/hooks/usePageVisibility";
+import { useStore } from "@/contexts/StoreContext";
 
 function ViewerRouteGuard() {
   const { isViewer } = useAuth();
@@ -24,10 +25,27 @@ function ViewerRouteGuard() {
   return null;
 }
 
+// If "All Stores" is active and the user navigates to a page that isn't
+// built for an aggregate view, fall back to a single store instead of
+// leaving the page showing mixed-currency/confusing data.
+function StoreScopeGuard() {
+  const { stores, isAllStores, setSelectedStoreId } = useStore();
+  const location = useLocation();
+
+  useEffect(() => {
+    if (!isAllStores || stores.length === 0) return;
+    if (ALL_STORES_ROUTES.includes(location.pathname)) return;
+    setSelectedStoreId(stores[0].id);
+  }, [location.pathname, isAllStores, stores]);
+
+  return null;
+}
+
 export function AppLayout() {
   return (
     <>
       <ViewerRouteGuard />
+      <StoreScopeGuard />
       <div className="print:hidden contents">
         <AppSidebar />
       </div>
