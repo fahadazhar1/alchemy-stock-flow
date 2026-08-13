@@ -817,8 +817,10 @@ export default function CollectionSortManager() {
       }
 
       let processedCount = 0;
+      let summaryReceived = false;
       await readNdjsonStream(response, (data) => {
         if (data.type === "summary") {
+          summaryReceived = true;
           const summary: RunSummary = {
             collectionsTotal: data.collectionsTotal as number,
             collectionsSorted: data.collectionsSorted as number,
@@ -852,6 +854,15 @@ export default function CollectionSortManager() {
           }),
         );
       });
+      // The connection can close cleanly (no throw) before the backend ever
+      // reaches its "summary" frame — e.g. the platform kills a long-running
+      // invocation mid-run. That leaves whatever was "processing" stuck
+      // forever with no error, since the catch block below never runs.
+      if (!summaryReceived) {
+        const msg = "Connection closed before the run finished";
+        toast.error(`Sort run failed: ${msg}`);
+        failStalledProgress(setCollectionProgress, msg);
+      }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       toast.error(`Sort run failed: ${msg}`);
@@ -905,8 +916,10 @@ export default function CollectionSortManager() {
       if (!response.ok || !response.body) throw new Error(`Edge function returned ${response.status}`);
 
       let processedCount = 0;
+      let summaryReceived = false;
       await readNdjsonStream(response, (data) => {
         if (data.type === "summary") {
+          summaryReceived = true;
           setSpRunSummary({ collectionsTotal: data.collectionsTotal as number, collectionsSorted: data.collectionsSorted as number, totalProductsReordered: data.totalProductsReordered as number, errors: (data.errors as RunSummary["errors"]) ?? [], runAt: data.runAt as string });
           queryClient.invalidateQueries({ queryKey: ["collection-sort-all-runs"] });
           return;
@@ -921,6 +934,14 @@ export default function CollectionSortManager() {
           }),
         );
       });
+      // See confirmAndRun above: a clean-but-early connection close never
+      // throws, so without this check a stuck "processing" row would never
+      // get marked failed.
+      if (!summaryReceived) {
+        const msg = "Connection closed before the run finished";
+        toast.error(`Sales sort failed: ${msg}`);
+        failStalledProgress(setSpCollectionProgress, msg);
+      }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       toast.error(`Sales sort failed: ${msg}`);
@@ -966,8 +987,10 @@ export default function CollectionSortManager() {
       if (!response.ok || !response.body) throw new Error(`Edge function returned ${response.status}`);
 
       let processedCount = 0;
+      let summaryReceived = false;
       await readNdjsonStream(response, (data) => {
         if (data.type === "summary") {
+          summaryReceived = true;
           setDcRunSummary({ collectionsTotal: data.collectionsTotal as number, collectionsSorted: data.collectionsSorted as number, totalProductsReordered: data.totalProductsReordered as number, errors: (data.errors as RunSummary["errors"]) ?? [], runAt: data.runAt as string });
           queryClient.invalidateQueries({ queryKey: ["collection-sort-all-runs"] });
           return;
@@ -982,6 +1005,14 @@ export default function CollectionSortManager() {
           }),
         );
       });
+      // See confirmAndRun above: a clean-but-early connection close never
+      // throws, so without this check a stuck "processing" row would never
+      // get marked failed.
+      if (!summaryReceived) {
+        const msg = "Connection closed before the run finished";
+        toast.error(`Discount sort failed: ${msg}`);
+        failStalledProgress(setDcCollectionProgress, msg);
+      }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       toast.error(`Discount sort failed: ${msg}`);
@@ -1029,8 +1060,10 @@ export default function CollectionSortManager() {
       if (!response.ok || !response.body) throw new Error(`Edge function returned ${response.status}`);
 
       let processedCount = 0;
+      let summaryReceived = false;
       await readNdjsonStream(response, (data) => {
         if (data.type === "summary") {
+          summaryReceived = true;
           setInvRunSummary({ collectionsTotal: data.collectionsTotal as number, collectionsSorted: data.collectionsSorted as number, totalProductsReordered: data.totalProductsReordered as number, errors: (data.errors as RunSummary["errors"]) ?? [], runAt: data.runAt as string });
           queryClient.invalidateQueries({ queryKey: ["collection-sort-all-runs"] });
           return;
@@ -1045,6 +1078,14 @@ export default function CollectionSortManager() {
           }),
         );
       });
+      // See confirmAndRun above: a clean-but-early connection close never
+      // throws, so without this check a stuck "processing" row would never
+      // get marked failed.
+      if (!summaryReceived) {
+        const msg = "Connection closed before the run finished";
+        toast.error(`Inventory sort failed: ${msg}`);
+        failStalledProgress(setInvCollectionProgress, msg);
+      }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       toast.error(`Inventory sort failed: ${msg}`);
