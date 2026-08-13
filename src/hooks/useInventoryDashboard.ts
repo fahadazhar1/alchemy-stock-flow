@@ -157,7 +157,7 @@ export function useInventoryDashboard(statusFilter: ProductStatusFilter = "all")
       const PAGE_SIZE = 1000;
       const SUMMARY_COLS =
         "product_id, product_name, sku, vendor_name, collection_name, product_type, " +
-        "days_old, total_inventory, min_current_price, max_compare_at_price, " +
+        "days_old, total_inventory, min_current_price, max_compare_at_price, total_stock_value, " +
         "nearest_expiry_date, product_status";
       const allRows: any[] = [];
       let from = 0;
@@ -259,8 +259,11 @@ export function useInventoryDashboard(statusFilter: ProductStatusFilter = "all")
     };
 
     // ── Stock value ───────────────────────────────────────────────────────────
+    // total_stock_value is pre-summed per variant (inventory × price) in the view —
+    // total_inventory * min_current_price would undervalue multi-variant products,
+    // since it prices ALL variants' combined stock at the CHEAPEST variant's price.
     const stockValue = inStockRows.reduce(
-      (s: number, r: any) => s + Number(r.total_inventory ?? 0) * Number(r.min_current_price ?? 0),
+      (s: number, r: any) => s + Number(r.total_stock_value ?? 0),
       0
     );
 
@@ -296,7 +299,7 @@ export function useInventoryDashboard(statusFilter: ProductStatusFilter = "all")
         sku: (r.sku as string) ?? "—",
         stock,
         velocity: velMap.get(r.product_id as string) ?? 0,
-        value: stock * Number(r.min_current_price ?? 0),
+        value: Number(r.total_stock_value ?? 0),
       };
     });
 

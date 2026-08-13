@@ -349,17 +349,22 @@ async function syncProducts(supabase: any, conn: any, log: any, totalRef: { n: n
       };
       const { data: existV, error: findVariantErr } = await supabase
         .from("variants")
-        .select("id, campaign_name")
+        .select("id, campaign_name, price")
         .eq("store_id", conn.store_id)
         .eq("shopify_variant_id", String(v.id))
         .maybeSingle();
       if (findVariantErr) throw findVariantErr;
       if (existV?.id) {
-        // If variant is under an active campaign, protect its price/compare_at_price
-        // so a sync pull from Shopify doesn't overwrite campaign-managed prices
-        const updateRow = existV.campaign_name
+        // Protect price/compare_at_price while campaign_name is set — but ONLY while Shopify's
+        // live price still matches what's stored (the campaign is genuinely still in effect).
+        // If Shopify's price has actually moved away from the stored value, the campaign was
+        // changed/reverted directly on Shopify (bypassing the dashboard's Revert button) —
+        // trust the live value and clear the stale tag, instead of freezing the price forever.
+        const shopifyPriceMatchesStored = Math.abs(Number(v.price ?? 0) - Number(existV.price ?? 0)) < 0.005;
+        const stillUnderCampaign = existV.campaign_name && shopifyPriceMatchesStored;
+        const updateRow = stillUnderCampaign
           ? { ...variantRow, price: undefined, compare_at_price: undefined }
-          : variantRow;
+          : { ...variantRow, campaign_name: null, last_discounted_at: null };
         const { error: updateVariantErr } = await supabase.from("variants").update(updateRow).eq("id", existV.id);
         if (updateVariantErr) throw updateVariantErr;
       } else {
@@ -964,6 +969,87 @@ async function handleInventoryWebhook(supabase: any, conn: any, payload: any) {
     .eq("store_id", conn.store_id);
 }
 
+// Called when Shopify fires products/create or products/update. Updates just this one
+// product + its variants directly from the webhook payload — much cheaper than triggering
+// a full syncShopifyData pass (which re-crawls collections/orders too) for a single edit.
+async function handleProductWebhook(supabase: any, conn: any, payload: any) {
+  const p = payload;
+  if (!p?.id) return;
+
+  let vendorId: string | null = null;
+  if (p.vendor) {
+    const { data: vendor } = await supabase
+      .from("vendors")
+      .upsert({ name: p.vendor }, { onConflict: "name" })
+      .select("id")
+      .single();
+    vendorId = vendor?.id ?? null;
+  }
+
+  const productRow = {
+    name: p.title,
+    sku: p.variants?.[0]?.sku || `shopify-${p.id}`,
+    slug: p.handle,
+    product_type: p.product_type || null,
+    status: p.status || "active",
+    shopify_product_id: String(p.id),
+    store_id: conn.store_id,
+    image_alt_text: p.images?.[0]?.alt || null,
+    ...(vendorId ? { vendor_id: vendorId } : {}),
+  };
+
+  const { data: existing } = await supabase
+    .from("products")
+    .select("id")
+    .eq("store_id", conn.store_id)
+    .eq("shopify_product_id", String(p.id))
+    .maybeSingle();
+
+  let productId: string;
+  if (existing?.id) {
+    await supabase.from("products").update(productRow).eq("id", existing.id);
+    productId = existing.id;
+  } else {
+    const { data: ins, error } = await supabase.from("products").insert(productRow).select("id").single();
+    if (error) throw error;
+    productId = ins.id;
+  }
+
+  const variants = p.variants ?? [];
+  await Promise.all(variants.map(async (v: any) => {
+    const variantRow = {
+      product_id: productId,
+      variant_sku: v.sku || `shopify-v-${v.id}`,
+      size: v.option1 || v.title || "Default",
+      price: Number(v.price ?? 0),
+      compare_at_price: v.compare_at_price ? Number(v.compare_at_price) : null,
+      inventory_quantity: Number(v.inventory_quantity ?? 0),
+      shopify_variant_id: String(v.id),
+      shopify_inventory_item_id: v.inventory_item_id ? String(v.inventory_item_id) : null,
+      store_id: conn.store_id,
+    };
+    const { data: existV } = await supabase
+      .from("variants")
+      .select("id, campaign_name, price")
+      .eq("store_id", conn.store_id)
+      .eq("shopify_variant_id", String(v.id))
+      .maybeSingle();
+    if (existV?.id) {
+      // Same rule as the full sync: only protect price while Shopify's live value still
+      // matches what's stored (campaign genuinely still in effect). Otherwise trust the
+      // webhook's live value and clear the stale tag.
+      const shopifyPriceMatchesStored = Math.abs(Number(v.price ?? 0) - Number(existV.price ?? 0)) < 0.005;
+      const stillUnderCampaign = existV.campaign_name && shopifyPriceMatchesStored;
+      const updateRow = stillUnderCampaign
+        ? { ...variantRow, price: undefined, compare_at_price: undefined }
+        : { ...variantRow, campaign_name: null, last_discounted_at: null };
+      await supabase.from("variants").update(updateRow).eq("id", existV.id);
+    } else {
+      await supabase.from("variants").insert(variantRow);
+    }
+  }));
+}
+
 // Called when Shopify fires collections/delete. Removes the local row directly
 // instead of triggering a full incremental sync (which would re-crawl every collection).
 async function handleCollectionDeleteWebhook(supabase: any, conn: any, payload: any) {
@@ -1173,8 +1259,12 @@ Deno.serve(async (req) => {
         // Remove the local row directly — no need to re-crawl every collection for this
         // @ts-ignore
         EdgeRuntime.waitUntil(handleCollectionDeleteWebhook(supabase, conn, payload));
+      } else if ((topic === "products/create" || topic === "products/update") && payload) {
+        // Update just this one product + its variants directly — no full re-crawl needed
+        // @ts-ignore
+        EdgeRuntime.waitUntil(handleProductWebhook(supabase, conn, payload));
       } else {
-        // Products, collections create/update — trigger incremental sync
+        // Collections create/update, products/delete — trigger incremental sync
         // @ts-ignore
         EdgeRuntime.waitUntil(syncShopifyData(supabase, conn.id));
       }

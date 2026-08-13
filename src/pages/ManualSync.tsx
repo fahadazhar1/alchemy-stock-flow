@@ -514,7 +514,7 @@ export default function ManualSync() {
                     <TableCell className="text-right font-mono">{p.total_inventory}</TableCell>
                     <TableCell className="text-right font-mono">{p.min_current_price ? formatCurrency(p.min_current_price) : '-'}</TableCell>
                     <TableCell className="text-right font-mono text-muted-foreground">
-                      {p.min_current_price && p.total_inventory ? formatCurrency(p.min_current_price * p.total_inventory) : '-'}
+                      {p.total_stock_value ? formatCurrency(p.total_stock_value) : '-'}
                     </TableCell>
                     <TableCell><Badge variant={p.discount_status === 'discounted' ? 'default' : 'secondary'}>{p.discount_status}</Badge></TableCell>
                   </TableRow>
