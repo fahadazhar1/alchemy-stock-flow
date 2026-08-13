@@ -275,6 +275,94 @@ function failStalledProgress(
   );
 }
 
+// A single streaming connection covering the whole catalog can't survive a
+// platform wall-clock limit once the collection count grows (confirmed live:
+// runs were dying mid-stream around collection ~65-69/87 with a clean
+// connection close, no error). Splitting the run into smaller batches means
+// no single HTTP connection has to survive more than SORT_BATCH_SIZE
+// collections' worth of watchdog time, and a batch that dies still lets the
+// rest of the run continue instead of leaving everything after it "pending"
+// forever.
+const SORT_BATCH_SIZE = 25;
+
+async function runSortBatches(
+  collections: { id: string; title: string }[],
+  buildBody: (batchIds: string[]) => Record<string, unknown>,
+  setProgress: (updater: (prev: CollectionProgress[]) => CollectionProgress[]) => void,
+  setSummary: (s: RunSummary) => void,
+  invalidateRuns: () => void,
+  failLabel: string,
+): Promise<void> {
+  let globalProcessed = 0;
+  let collectionsSorted = 0;
+  let totalProductsReordered = 0;
+  const errors: RunSummary["errors"] = [];
+
+  for (let batchStart = 0; batchStart < collections.length; batchStart += SORT_BATCH_SIZE) {
+    const batch = collections.slice(batchStart, batchStart + SORT_BATCH_SIZE);
+    let summaryReceived = false;
+
+    try {
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/collection-sort-manager`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${SUPABASE_ANON_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify(buildBody(batch.map((c) => c.id))),
+      });
+      if (!response.ok || !response.body) throw new Error(`Edge function returned ${response.status}`);
+
+      await readNdjsonStream(response, (data) => {
+        if (data.type === "summary") {
+          summaryReceived = true;
+          collectionsSorted += data.collectionsSorted as number;
+          totalProductsReordered += data.totalProductsReordered as number;
+          errors.push(...(((data.errors as RunSummary["errors"]) ?? [])));
+          setSummary({
+            collectionsTotal: collections.length,
+            collectionsSorted,
+            totalProductsReordered,
+            errors: [...errors],
+            runAt: data.runAt as string,
+          });
+          invalidateRuns();
+          return;
+        }
+
+        globalProcessed++;
+        const nextIndex = globalProcessed;
+        setProgress((prev) =>
+          prev.map((p, idx) => {
+            if (p.id === data.collectionId) {
+              return {
+                ...p,
+                status: data.status as CollectionProgress["status"],
+                productsReordered: data.productsReordered as number | undefined,
+                error: data.error as string | undefined,
+              };
+            }
+            if (idx === nextIndex && p.status === "pending") {
+              return { ...p, status: "processing" };
+            }
+            return p;
+          }),
+        );
+      });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      toast.error(`${failLabel} failed: ${msg}`);
+      failStalledProgress(setProgress, msg);
+      return; // a hard network/HTTP error stops the whole run
+    }
+
+    if (!summaryReceived) {
+      // This batch's connection died mid-stream with no error — mark
+      // whatever it left "processing" as failed, but keep going with the
+      // remaining batches rather than leaving them "pending" forever.
+      toast.error(`${failLabel}: a batch's connection closed early — continuing with the rest`);
+      failStalledProgress(setProgress, "Connection closed before this batch finished");
+    }
+  }
+}
+
 // ── Main page component ───────────────────────────────────────────────────────
 
 export default function CollectionSortManager() {
@@ -795,78 +883,14 @@ export default function CollectionSortManager() {
     ];
 
     try {
-      const response = await fetch(
-        `${SUPABASE_URL}/functions/v1/collection-sort-manager`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            action: "run_sort",
-            storeId: selectedStoreId,
-            collections: sortableCollections.map((c) => c.id),
-            sortRules: rulesPayload,
-          }),
-        },
+      await runSortBatches(
+        sortableCollections,
+        (batchIds) => ({ action: "run_sort", storeId: selectedStoreId, collections: batchIds, sortRules: rulesPayload }),
+        setCollectionProgress,
+        setRunSummary,
+        () => queryClient.invalidateQueries({ queryKey: ["collection-sort-all-runs"] }),
+        "Sort run",
       );
-
-      if (!response.ok || !response.body) {
-        throw new Error(`Edge function returned ${response.status}`);
-      }
-
-      let processedCount = 0;
-      let summaryReceived = false;
-      await readNdjsonStream(response, (data) => {
-        if (data.type === "summary") {
-          summaryReceived = true;
-          const summary: RunSummary = {
-            collectionsTotal: data.collectionsTotal as number,
-            collectionsSorted: data.collectionsSorted as number,
-            totalProductsReordered: data.totalProductsReordered as number,
-            errors: (data.errors as RunSummary["errors"]) ?? [],
-            runAt: data.runAt as string,
-          };
-          setRunSummary(summary);
-          queryClient.invalidateQueries({ queryKey: ["collection-sort-all-runs"] });
-          return;
-        }
-
-        // Per-collection progress line
-        processedCount++;
-        const nextIndex = processedCount; // 0-indexed next collection to process
-
-        setCollectionProgress((prev) =>
-          prev.map((p, idx) => {
-            if (p.id === data.collectionId) {
-              return {
-                ...p,
-                status: data.status as CollectionProgress["status"],
-                productsReordered: data.productsReordered as number | undefined,
-                error: data.error as string | undefined,
-              };
-            }
-            if (idx === nextIndex && p.status === "pending") {
-              return { ...p, status: "processing" };
-            }
-            return p;
-          }),
-        );
-      });
-      // The connection can close cleanly (no throw) before the backend ever
-      // reaches its "summary" frame — e.g. the platform kills a long-running
-      // invocation mid-run. That leaves whatever was "processing" stuck
-      // forever with no error, since the catch block below never runs.
-      if (!summaryReceived) {
-        const msg = "Connection closed before the run finished";
-        toast.error(`Sort run failed: ${msg}`);
-        failStalledProgress(setCollectionProgress, msg);
-      }
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      toast.error(`Sort run failed: ${msg}`);
-      failStalledProgress(setCollectionProgress, msg);
     } finally {
       setRunning(false);
     }
@@ -901,51 +925,21 @@ export default function CollectionSortManager() {
     setSpCollectionProgress((prev) => prev.map((p, i) => (i === 0 ? { ...p, status: "processing" } : p)));
 
     try {
-      const response = await fetch(`${SUPABASE_URL}/functions/v1/collection-sort-manager`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${SUPABASE_ANON_KEY}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
+      await runSortBatches(
+        spSortableCollections,
+        (batchIds) => ({
           action: "run_sales_sort",
           storeId: selectedStoreId,
-          collections: spSortableCollections.map((c) => c.id),
+          collections: batchIds,
           sortRule: spSortRule,
           inStockFirst: spInStockFirst,
           salesWindowDays: spSalesWindow,
         }),
-      });
-      if (!response.ok || !response.body) throw new Error(`Edge function returned ${response.status}`);
-
-      let processedCount = 0;
-      let summaryReceived = false;
-      await readNdjsonStream(response, (data) => {
-        if (data.type === "summary") {
-          summaryReceived = true;
-          setSpRunSummary({ collectionsTotal: data.collectionsTotal as number, collectionsSorted: data.collectionsSorted as number, totalProductsReordered: data.totalProductsReordered as number, errors: (data.errors as RunSummary["errors"]) ?? [], runAt: data.runAt as string });
-          queryClient.invalidateQueries({ queryKey: ["collection-sort-all-runs"] });
-          return;
-        }
-        processedCount++;
-        const nextIndex = processedCount;
-        setSpCollectionProgress((prev) =>
-          prev.map((p, idx) => {
-            if (p.id === data.collectionId) return { ...p, status: data.status as CollectionProgress["status"], productsReordered: data.productsReordered as number | undefined, error: data.error as string | undefined };
-            if (idx === nextIndex && p.status === "pending") return { ...p, status: "processing" };
-            return p;
-          }),
-        );
-      });
-      // See confirmAndRun above: a clean-but-early connection close never
-      // throws, so without this check a stuck "processing" row would never
-      // get marked failed.
-      if (!summaryReceived) {
-        const msg = "Connection closed before the run finished";
-        toast.error(`Sales sort failed: ${msg}`);
-        failStalledProgress(setSpCollectionProgress, msg);
-      }
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      toast.error(`Sales sort failed: ${msg}`);
-      failStalledProgress(setSpCollectionProgress, msg);
+        setSpCollectionProgress,
+        setSpRunSummary,
+        () => queryClient.invalidateQueries({ queryKey: ["collection-sort-all-runs"] }),
+        "Sales sort",
+      );
     } finally {
       setSpRunning(false);
     }
@@ -973,50 +967,20 @@ export default function CollectionSortManager() {
     setDcCollectionProgress((prev) => prev.map((p, i) => (i === 0 ? { ...p, status: "processing" } : p)));
 
     try {
-      const response = await fetch(`${SUPABASE_URL}/functions/v1/collection-sort-manager`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${SUPABASE_ANON_KEY}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
+      await runSortBatches(
+        dcSortableCollections,
+        (batchIds) => ({
           action: "run_discount_sort",
           storeId: selectedStoreId,
-          collections: dcSortableCollections.map((c) => c.id),
+          collections: batchIds,
           sortRule: dcSortRule,
           inStockFirst: dcInStockFirst,
         }),
-      });
-      if (!response.ok || !response.body) throw new Error(`Edge function returned ${response.status}`);
-
-      let processedCount = 0;
-      let summaryReceived = false;
-      await readNdjsonStream(response, (data) => {
-        if (data.type === "summary") {
-          summaryReceived = true;
-          setDcRunSummary({ collectionsTotal: data.collectionsTotal as number, collectionsSorted: data.collectionsSorted as number, totalProductsReordered: data.totalProductsReordered as number, errors: (data.errors as RunSummary["errors"]) ?? [], runAt: data.runAt as string });
-          queryClient.invalidateQueries({ queryKey: ["collection-sort-all-runs"] });
-          return;
-        }
-        processedCount++;
-        const nextIndex = processedCount;
-        setDcCollectionProgress((prev) =>
-          prev.map((p, idx) => {
-            if (p.id === data.collectionId) return { ...p, status: data.status as CollectionProgress["status"], productsReordered: data.productsReordered as number | undefined, error: data.error as string | undefined };
-            if (idx === nextIndex && p.status === "pending") return { ...p, status: "processing" };
-            return p;
-          }),
-        );
-      });
-      // See confirmAndRun above: a clean-but-early connection close never
-      // throws, so without this check a stuck "processing" row would never
-      // get marked failed.
-      if (!summaryReceived) {
-        const msg = "Connection closed before the run finished";
-        toast.error(`Discount sort failed: ${msg}`);
-        failStalledProgress(setDcCollectionProgress, msg);
-      }
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      toast.error(`Discount sort failed: ${msg}`);
-      failStalledProgress(setDcCollectionProgress, msg);
+        setDcCollectionProgress,
+        setDcRunSummary,
+        () => queryClient.invalidateQueries({ queryKey: ["collection-sort-all-runs"] }),
+        "Discount sort",
+      );
     } finally {
       setDcRunning(false);
     }
@@ -1044,52 +1008,22 @@ export default function CollectionSortManager() {
     setInvCollectionProgress((prev) => prev.map((p, i) => (i === 0 ? { ...p, status: "processing" } : p)));
 
     try {
-      const response = await fetch(`${SUPABASE_URL}/functions/v1/collection-sort-manager`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${SUPABASE_ANON_KEY}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
+      await runSortBatches(
+        invSortableCollections,
+        (batchIds) => ({
           action: "run_inventory_sort",
           storeId: selectedStoreId,
-          collections: invSortableCollections.map((c) => c.id),
+          collections: batchIds,
           sortRule: invSortRule,
           lowStockThreshold,
           overstockThreshold,
           inStockFirst: invInStockFirst,
         }),
-      });
-      if (!response.ok || !response.body) throw new Error(`Edge function returned ${response.status}`);
-
-      let processedCount = 0;
-      let summaryReceived = false;
-      await readNdjsonStream(response, (data) => {
-        if (data.type === "summary") {
-          summaryReceived = true;
-          setInvRunSummary({ collectionsTotal: data.collectionsTotal as number, collectionsSorted: data.collectionsSorted as number, totalProductsReordered: data.totalProductsReordered as number, errors: (data.errors as RunSummary["errors"]) ?? [], runAt: data.runAt as string });
-          queryClient.invalidateQueries({ queryKey: ["collection-sort-all-runs"] });
-          return;
-        }
-        processedCount++;
-        const nextIndex = processedCount;
-        setInvCollectionProgress((prev) =>
-          prev.map((p, idx) => {
-            if (p.id === data.collectionId) return { ...p, status: data.status as CollectionProgress["status"], productsReordered: data.productsReordered as number | undefined, error: data.error as string | undefined };
-            if (idx === nextIndex && p.status === "pending") return { ...p, status: "processing" };
-            return p;
-          }),
-        );
-      });
-      // See confirmAndRun above: a clean-but-early connection close never
-      // throws, so without this check a stuck "processing" row would never
-      // get marked failed.
-      if (!summaryReceived) {
-        const msg = "Connection closed before the run finished";
-        toast.error(`Inventory sort failed: ${msg}`);
-        failStalledProgress(setInvCollectionProgress, msg);
-      }
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      toast.error(`Inventory sort failed: ${msg}`);
-      failStalledProgress(setInvCollectionProgress, msg);
+        setInvCollectionProgress,
+        setInvRunSummary,
+        () => queryClient.invalidateQueries({ queryKey: ["collection-sort-all-runs"] }),
+        "Inventory sort",
+      );
     } finally {
       setInvRunning(false);
     }
