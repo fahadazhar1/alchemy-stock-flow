@@ -382,8 +382,13 @@ function DateRangePicker({ from, to, isActive, onChange, onOpen }: {
 
   function handleOpenChange(next: boolean) {
     if (next) {
-      // Reset to last confirmed range (or clear) each time user opens the picker
-      setSelecting(from && to ? { from, to } : undefined);
+      // Always start blank, never pre-loaded with the last confirmed range.
+      // react-day-picker's range mode treats a click against an
+      // already-complete range as EXTENDING it (old `from` kept, new click
+      // becomes `to`) rather than starting fresh — so pre-loading the old
+      // range here made the very first click after reopening silently span
+      // old-date -> new-date instead of selecting just the new date.
+      setSelecting(undefined);
       onOpen();
     }
     setOpen(next);

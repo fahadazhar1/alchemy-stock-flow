@@ -233,9 +233,15 @@ function DateRangePicker({ range, onRangeChange, customFrom, customTo, onCustomC
   onCustomChange: (from: Date, to: Date) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [sel, setSel] = useState<{ from: Date; to?: Date } | undefined>(
-    customFrom && customTo ? { from: customFrom, to: customTo } : undefined,
-  );
+  // Deliberately NOT seeded from customFrom/customTo. react-day-picker's range
+  // mode treats a click against an already-complete range as extending it
+  // (see addToRange: from+to both set -> new click becomes the new `to`,
+  // keeping the old `from`) instead of starting fresh. So if we reopened with
+  // the previous range pre-loaded, the very first click after reopening would
+  // silently span old-date -> new-date instead of selecting just the new date.
+  // Starting blank on every open means the first click always begins a new
+  // single-day selection, and a second click is needed to extend it.
+  const [sel, setSel] = useState<{ from: Date; to?: Date } | undefined>(undefined);
   const label = customFrom && customTo && range === "Custom"
     ? `${format(customFrom, "dd MMM")} – ${format(customTo, "dd MMM")}`
     : "Custom";
@@ -256,7 +262,7 @@ function DateRangePicker({ range, onRangeChange, customFrom, customTo, onCustomC
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           <button
-            onClick={() => { setSel(customFrom && customTo ? { from: customFrom, to: customTo } : undefined); onRangeChange("Custom"); }}
+            onClick={() => { setSel(undefined); onRangeChange("Custom"); }}
             className={cn(
               "px-2.5 py-1.5 font-medium transition-colors flex items-center gap-1 border-l",
               range === "Custom" ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground",
