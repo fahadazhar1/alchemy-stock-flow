@@ -277,12 +277,10 @@ function failStalledProgress(
 
 // A single streaming connection covering the whole catalog can't survive a
 // platform wall-clock limit once the collection count grows (confirmed live:
-// runs were dying mid-stream around collection ~65-69/87 with a clean
+// runs were dying mid-stream around collection ~65-71/87 with a clean
 // connection close, no error). Splitting the run into smaller batches means
 // no single HTTP connection has to survive more than SORT_BATCH_SIZE
-// collections' worth of watchdog time, and a batch that dies still lets the
-// rest of the run continue instead of leaving everything after it "pending"
-// forever.
+// collections' worth of watchdog time.
 const SORT_BATCH_SIZE = 25;
 
 async function runSortBatches(
@@ -293,14 +291,25 @@ async function runSortBatches(
   invalidateRuns: () => void,
   failLabel: string,
 ): Promise<void> {
-  let globalProcessed = 0;
   let collectionsSorted = 0;
   let totalProductsReordered = 0;
   const errors: RunSummary["errors"] = [];
+  // Tracks whichever collections have NOT yet gotten a terminal done/failed
+  // status. A batch is re-sliced from the front of this list every loop, so
+  // a batch that dies partway through (whether it throws or just closes
+  // cleanly) resumes from exactly where it left off on the next iteration —
+  // never skips ahead by a fixed batch size and leaves untried collections
+  // stranded on "pending".
+  let remaining = [...collections];
 
-  for (let batchStart = 0; batchStart < collections.length; batchStart += SORT_BATCH_SIZE) {
-    const batch = collections.slice(batchStart, batchStart + SORT_BATCH_SIZE);
+  while (remaining.length > 0) {
+    const batch = remaining.slice(0, SORT_BATCH_SIZE);
     let summaryReceived = false;
+    const settledIds = new Set<string>();
+
+    setProgress((prev) =>
+      prev.map((p) => (p.id === batch[0].id && p.status === "pending" ? { ...p, status: "processing" } : p)),
+    );
 
     try {
       const response = await fetch(`${SUPABASE_URL}/functions/v1/collection-sort-manager`, {
@@ -327,11 +336,14 @@ async function runSortBatches(
           return;
         }
 
-        globalProcessed++;
-        const nextIndex = globalProcessed;
+        const settledId = data.collectionId as string;
+        settledIds.add(settledId);
+        const posInBatch = batch.findIndex((c) => c.id === settledId);
+        const nextInBatch = posInBatch >= 0 ? batch[posInBatch + 1] : undefined;
+
         setProgress((prev) =>
-          prev.map((p, idx) => {
-            if (p.id === data.collectionId) {
+          prev.map((p) => {
+            if (p.id === settledId) {
               return {
                 ...p,
                 status: data.status as CollectionProgress["status"],
@@ -339,7 +351,7 @@ async function runSortBatches(
                 error: data.error as string | undefined,
               };
             }
-            if (idx === nextIndex && p.status === "pending") {
+            if (nextInBatch && p.id === nextInBatch.id && p.status === "pending") {
               return { ...p, status: "processing" };
             }
             return p;
@@ -347,19 +359,38 @@ async function runSortBatches(
         );
       });
     } catch (e: unknown) {
+      // Deliberately NOT re-thrown/returned here — a hard error on one batch
+      // (network blip, non-200, etc.) must not abort every collection after
+      // it. Fall through and let the "unsettled" bookkeeping below retry the
+      // rest of this batch on the next loop iteration.
       const msg = e instanceof Error ? e.message : String(e);
       toast.error(`${failLabel} failed: ${msg}`);
-      failStalledProgress(setProgress, msg);
-      return; // a hard network/HTTP error stops the whole run
     }
 
     if (!summaryReceived) {
-      // This batch's connection died mid-stream with no error — mark
-      // whatever it left "processing" as failed, but keep going with the
-      // remaining batches rather than leaving them "pending" forever.
-      toast.error(`${failLabel}: a batch's connection closed early — continuing with the rest`);
       failStalledProgress(setProgress, "Connection closed before this batch finished");
     }
+
+    remaining = remaining.filter((c) => !settledIds.has(c.id));
+
+    // An entire batch making zero progress (nothing settled, no summary)
+    // means the endpoint itself is unreachable/broken right now — retrying
+    // forever would just hammer it. Stop and let the caller mark the rest
+    // failed below instead of looping indefinitely.
+    if (settledIds.size === 0 && !summaryReceived) break;
+  }
+
+  // Anything left never got a terminal status — mark it failed instead of
+  // leaving it stuck on "pending"/"processing" forever.
+  if (remaining.length > 0) {
+    const neverRan = new Set(remaining.map((c) => c.id));
+    setProgress((prev) =>
+      prev.map((p) =>
+        neverRan.has(p.id) && (p.status === "pending" || p.status === "processing")
+          ? { ...p, status: "failed", error: "Run stopped before this collection was reached" }
+          : p,
+      ),
+    );
   }
 }
 
