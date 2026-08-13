@@ -70,9 +70,11 @@ function fmtNum(n: number): string {
   return n.toLocaleString("en-GB");
 }
 
-function fmtC(value: number, sym: string): string {
-  if (value >= 1_000_000) return `${sym}${(value / 1_000_000).toFixed(1)}M`;
-  if (value >= 1_000)     return `${sym}${(value / 1_000).toFixed(1)}K`;
+function fmtC(value: number, sym: string, full = false): string {
+  if (!full) {
+    if (value >= 1_000_000) return `${sym}${(value / 1_000_000).toFixed(1)}M`;
+    if (value >= 1_000)     return `${sym}${(value / 1_000).toFixed(1)}K`;
+  }
   return `${sym}${Math.round(value).toLocaleString("en-GB")}`;
 }
 
@@ -612,13 +614,13 @@ function StoreCardsSection({ metrics, loading }: {
 
 // ─── Section: Sales Pulse (current vs previous period, all channels) ─────────
 
-function ChannelSalesRow({ c, sym }: { c: ChannelSalesStat; sym: string }) {
+function ChannelSalesRow({ c, sym, fullNumbers }: { c: ChannelSalesStat; sym: string; fullNumbers: boolean }) {
   return (
     <div className="flex items-center gap-2.5 py-1.5">
       <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: c.color }} />
       <span className="text-xs font-medium truncate flex-1 min-w-0">{c.name}</span>
       <span className="text-[11px] text-muted-foreground tabular-nums w-9 text-right shrink-0">{fmtNum(c.orders)}</span>
-      <span className="text-xs font-semibold tabular-nums w-16 text-right shrink-0">{fmtC(c.revenue, sym)}</span>
+      <span className={cn("text-xs font-semibold tabular-nums text-right shrink-0", fullNumbers ? "w-24" : "w-16")}>{fmtC(c.revenue, sym, fullNumbers)}</span>
       <span className="w-11 text-right shrink-0">
         <DeltaBadge value={c.revenueDelta} />
       </span>
@@ -653,7 +655,7 @@ function applyChannelFilter(p: StoreSalesPulse, selectedKeys: Set<string>): Stor
   };
 }
 
-function SalesPulseCard({ p, idx, channelFiltered }: { p: StoreSalesPulse; idx: number; channelFiltered: boolean }) {
+function SalesPulseCard({ p, idx, channelFiltered, fullNumbers }: { p: StoreSalesPulse; idx: number; channelFiltered: boolean; fullNumbers: boolean }) {
   const color = storeColor(idx);
   return (
     <Card className="overflow-hidden flex flex-col">
@@ -670,10 +672,10 @@ function SalesPulseCard({ p, idx, channelFiltered }: { p: StoreSalesPulse; idx: 
         <div className="grid grid-cols-2 gap-3 pt-1 border-t">
           <div>
             <div className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">Net Sales</div>
-            <div className="text-lg font-bold tabular-nums leading-none">{fmtC(p.revenue, p.currencySymbol)}</div>
+            <div className="text-lg font-bold tabular-nums leading-none">{fmtC(p.revenue, p.currencySymbol, fullNumbers)}</div>
             <div className="flex items-center gap-1.5 mt-1.5">
               <DeltaBadge value={p.revenueDelta} />
-              <span className="text-[10px] text-muted-foreground truncate">prev {fmtC(p.prevRevenue, p.currencySymbol)}</span>
+              <span className="text-[10px] text-muted-foreground truncate">prev {fmtC(p.prevRevenue, p.currencySymbol, fullNumbers)}</span>
             </div>
           </div>
           <div>
@@ -697,7 +699,7 @@ function SalesPulseCard({ p, idx, channelFiltered }: { p: StoreSalesPulse; idx: 
               <p className="text-[11px] text-muted-foreground py-3 text-center">No orders in this period.</p>
             ) : (
               <div className="max-h-56 overflow-y-auto pr-1 -mr-1 divide-y divide-border/50">
-                {p.channels.map(c => <ChannelSalesRow key={c.key} c={c} sym={p.currencySymbol} />)}
+                {p.channels.map(c => <ChannelSalesRow key={c.key} c={c} sym={p.currencySymbol} fullNumbers={fullNumbers} />)}
               </div>
             )}
           </div>
@@ -766,6 +768,7 @@ function SalesPulseSection({ pulse, loading, bounds, range, excludeShipping, onE
   onExcludeShippingChange: (value: boolean) => void;
 }) {
   const [channelFilter, setChannelFilter] = useState<Set<string>>(new Set());
+  const [fullNumbers, setFullNumbers] = useState(false);
 
   const channelOptions = useMemo(() => {
     const map = new Map<string, { key: string; name: string }>();
@@ -806,6 +809,17 @@ function SalesPulseSection({ pulse, loading, bounds, range, excludeShipping, onE
               Exclude shipping
             </Label>
           </div>
+          <div className="flex items-center gap-1.5">
+            <Switch
+              id="full-numbers"
+              checked={fullNumbers}
+              onCheckedChange={setFullNumbers}
+              className="h-4 w-7 [&>span]:h-3 [&>span]:w-3"
+            />
+            <Label htmlFor="full-numbers" className="text-xs text-muted-foreground cursor-pointer">
+              Full numbers
+            </Label>
+          </div>
           <ChannelMultiSelect options={channelOptions} selected={channelFilter} onChange={setChannelFilter} />
         </div>
       </div>
@@ -825,7 +839,7 @@ function SalesPulseSection({ pulse, loading, bounds, range, excludeShipping, onE
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
           {filteredPulse.map((p, i) => (
-            <SalesPulseCard key={p.storeId} p={p} idx={i} channelFiltered={channelFilter.size > 0} />
+            <SalesPulseCard key={p.storeId} p={p} idx={i} channelFiltered={channelFilter.size > 0} fullNumbers={fullNumbers} />
           ))}
         </div>
       )}
