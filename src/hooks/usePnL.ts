@@ -221,13 +221,20 @@ export function currencyToSar(amount: number, currency: string, fxRates: Record<
   return rate ? amount * rate : null;
 }
 
-// ─── Sales bridge (Gross -> Discounts -> Net) ──────────────────────────────
+// ─── Sales bridge (Gross -> Discounts -> Net -> Shipping -> Returns) ───────
 // Gross Sales is DERIVED as net_sales + discounts (not summed independently)
 // so it always reconciles exactly to the same Net Sales figure shown
-// everywhere else on the page. Returns is not included — the orders table has
-// no refund/return field synced (see the migration comment); only the
-// standalone monthly PDF report scripts have that, pulled live from Shopify.
-export interface SalesBridgeRow { storeId: string; netSales: number; discounts: number; grossSales: number; orderCount: number }
+// everywhere else on the page (Net Sales itself is NOT redefined by adding
+// shipping/returns — they're appended as trailing steps). shippingCollected
+// is the same total_shipping_price already subtracted out of net_sales,
+// surfaced separately. returnsAmount is bucketed by the refund's OWN date
+// (order_refunds.refunded_at), not the original order date — confirmed with
+// the business this is the correct finance convention (a return lands in the
+// P&L period it actually happened in, not the period of the original sale).
+export interface SalesBridgeRow {
+  storeId: string; netSales: number; discounts: number; grossSales: number;
+  shippingCollected: number; returnsAmount: number; orderCount: number;
+}
 
 export function useSalesBridge(bounds: DateBounds) {
   return useQuery<SalesBridgeRow[]>({
@@ -244,7 +251,37 @@ export function useSalesBridge(bounds: DateBounds) {
         netSales: Number(r.net_sales),
         discounts: Number(r.discounts),
         grossSales: Number(r.net_sales) + Number(r.discounts),
+        shippingCollected: Number(r.shipping_collected),
+        returnsAmount: Number(r.returns_amount),
         orderCount: Number(r.order_count),
+      }));
+    },
+  });
+}
+
+// ─── Returns by channel — for the Sales Bridge card's "View by channel" ────
+// table. Raw source_name, grouped — same convention as get_channel_performance
+// / get_store_period_channel_sales: the frontend applies normalizeKey()/
+// CHANNEL_META to fold into friendly names, not duplicated in SQL. Fetched
+// lazily (only when the section is expanded), same pattern as useDiscountTiers.
+export interface ReturnsByChannelRow { storeId: string; sourceName: string | null; refundAmount: number; refundCount: number }
+
+export function useReturnsByChannel(bounds: DateBounds, enabled: boolean) {
+  return useQuery<ReturnsByChannelRow[]>({
+    queryKey: ["returns-by-channel", bounds.cacheKey],
+    enabled,
+    staleTime: 3 * 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("get_returns_by_channel" as any, {
+        p_start_iso: bounds.startISO,
+        p_end_iso: bounds.endISO,
+      } as any);
+      if (error) throw error;
+      return ((data ?? []) as any[]).map(r => ({
+        storeId: r.store_id,
+        sourceName: r.source_name,
+        refundAmount: Number(r.refund_amount),
+        refundCount: Number(r.refund_count),
       }));
     },
   });

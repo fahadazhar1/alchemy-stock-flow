@@ -779,6 +779,29 @@ async function processSingleOrder(supabase: any, conn: any, o: any, currentShipp
     orderId = ins.id;
   }
 
+  // Refunds — Shopify includes the full `refunds` array on every order by
+  // default (confirmed live, no `fields` restriction on this sync's fetch).
+  // amount = sum of actual cash-back transactions (kind "refund", status
+  // "success") — NOT order_adjustments, which is a smaller/different
+  // internal breakdown, not the real refunded total (verified against live
+  // orders). refunded_at is the refund's own date, not the order's, so P&L
+  // returns land in the period they actually happened.
+  for (const r of o.refunds ?? []) {
+    const amount = (r.transactions ?? [])
+      .filter((t: any) => t.kind === "refund" && (t.status === "success" || !t.status))
+      .reduce((sum: number, t: any) => sum + Number(t.amount ?? 0), 0);
+    if (amount <= 0) continue;
+    const { error: refundErr } = await supabase.from("order_refunds").upsert({
+      store_id: conn.store_id,
+      shopify_order_id: String(o.id),
+      shopify_refund_id: String(r.id),
+      amount,
+      refunded_at: r.created_at || o.updated_at || new Date().toISOString(),
+      source_name: o.source_name || null,
+    }, { onConflict: "store_id,shopify_refund_id" });
+    if (refundErr) console.error("order_refunds upsert failed:", refundErr.message);
+  }
+
   for (const li of o.line_items ?? []) {
     if (Number(li.quantity ?? 0) <= 0) continue;
 
@@ -861,6 +884,63 @@ async function backfillRefundShipping(supabase: any): Promise<Record<string, unk
     }
     results[conn.store_id] = `${updated} updated, ${skipped} skipped (of ${orders.length} refunded orders)`;
     if (skippedIds.length) console.warn(`backfillRefundShipping: ${conn.store_id} skipped orders:`, skippedIds, updateErrors);
+  }
+  return results;
+}
+
+// One-time targeted backfill for order_refunds — only fetches orders whose
+// financial_status is refunded/partially_refunded (the only orders that can
+// have a refund at all), same scoping principle as backfillRefundShipping
+// above. NOT a full re-sync: doesn't touch line items, customer data, or any
+// other order field. Uses REST's financial_status filter (a real DB filter,
+// not Shopify's search index — doesn't have the "drops older orders" gap
+// that GraphQL's query: search has, see fetchCurrentShippingBatch above).
+async function backfillOrderRefunds(supabase: any): Promise<Record<string, unknown>> {
+  const { data: connections, error: connErr } = await supabase
+    .from("shopify_connections")
+    .select("id, store_id, shop_domain, access_token")
+    .eq("is_active", true);
+  if (connErr) throw connErr;
+
+  const results: Record<string, unknown> = {};
+  for (const conn of connections ?? []) {
+    const domain = normalizeDomain(conn.shop_domain);
+    let ordersScanned = 0;
+    let refundsRecorded = 0;
+    const errors: string[] = [];
+
+    for (const status of ["refunded", "partially_refunded"]) {
+      let path: string | null = `/orders.json?status=any&financial_status=${status}&limit=250`;
+      while (path) {
+        const res = await shopifyFetch(domain, conn.access_token, path);
+        if (!res.ok) { errors.push(`${status}: ${res.status} ${await res.text()}`); break; }
+        const data = await res.json();
+        for (const o of data.orders ?? []) {
+          ordersScanned++;
+          for (const r of o.refunds ?? []) {
+            const amount = (r.transactions ?? [])
+              .filter((t: any) => t.kind === "refund" && (t.status === "success" || !t.status))
+              .reduce((sum: number, t: any) => sum + Number(t.amount ?? 0), 0);
+            if (amount <= 0) continue;
+            const { error: refundErr } = await supabase.from("order_refunds").upsert({
+              store_id: conn.store_id,
+              shopify_order_id: String(o.id),
+              shopify_refund_id: String(r.id),
+              amount,
+              refunded_at: r.created_at || o.updated_at || new Date().toISOString(),
+              source_name: o.source_name || null,
+            }, { onConflict: "store_id,shopify_refund_id" });
+            if (refundErr) errors.push(`order ${o.id} refund ${r.id}: ${refundErr.message}`);
+            else refundsRecorded++;
+          }
+        }
+        const link = res.headers.get("Link") || "";
+        const next = link.match(/<([^>]+)>;\s*rel="next"/);
+        path = next ? next[1].split("/admin/api/2024-01")[1] : null;
+        if (path) await new Promise((r) => setTimeout(r, 500));
+      }
+    }
+    results[conn.store_id] = { ordersScanned, refundsRecorded, errors: errors.slice(0, 10) };
   }
   return results;
 }
@@ -1276,6 +1356,11 @@ Deno.serve(async (req) => {
 
     if (action === "backfill_refund_shipping") {
       const results = await backfillRefundShipping(supabase);
+      return json(200, { ok: true, results });
+    }
+
+    if (action === "backfill_order_refunds") {
+      const results = await backfillOrderRefunds(supabase);
       return json(200, { ok: true, results });
     }
 
