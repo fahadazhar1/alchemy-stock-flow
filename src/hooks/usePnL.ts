@@ -287,6 +287,32 @@ export function useReturnsByChannel(bounds: DateBounds, enabled: boolean) {
   });
 }
 
+// ─── Shipping by channel — for the standalone "Shipping Collected" card's ──
+// "View by channel" table. Same raw-source_name + frontend normalizeKey()/
+// CHANNEL_META convention as returns-by-channel above.
+export interface ShippingByChannelRow { storeId: string; sourceName: string | null; shippingAmount: number; orderCount: number }
+
+export function useShippingByChannel(bounds: DateBounds, enabled: boolean) {
+  return useQuery<ShippingByChannelRow[]>({
+    queryKey: ["shipping-by-channel", bounds.cacheKey],
+    enabled,
+    staleTime: 3 * 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("get_shipping_by_channel" as any, {
+        p_start_iso: bounds.startISO,
+        p_end_iso: bounds.endISO,
+      } as any);
+      if (error) throw error;
+      return ((data ?? []) as any[]).map(r => ({
+        storeId: r.store_id,
+        sourceName: r.source_name,
+        shippingAmount: Number(r.shipping_amount),
+        orderCount: Number(r.order_count),
+      }));
+    },
+  });
+}
+
 // ─── Traffic source (paid / organic / direct) ──────────────────────────────
 // Classifies each online-store order using its landing_site query string.
 // "Paid" requires an actual ad-click ID (gclid/fbclid/ttclid/gbraid/wbraid)

@@ -26,7 +26,7 @@ import { useRole } from "@/hooks/useRole";
 import { useStoreSalesPulse, type ChannelSalesStat } from "@/hooks/useStoreSalesPulse";
 import {
   getMonthBounds, useAllCostEntries, useCostEntryMutations, useEnsureFxRates, useUpsertFxRate,
-  useSalesBridge, useMonthlyNetSalesTrend, useCheckoutAbandonment, useTrafficSource, useDiscountTiers, useReturnsByChannel, currencyToSar,
+  useSalesBridge, useMonthlyNetSalesTrend, useCheckoutAbandonment, useTrafficSource, useDiscountTiers, useReturnsByChannel, useShippingByChannel, currencyToSar,
   COST_CATEGORIES, platformOptionsFor,
   type CostEntry, type CostEntryInput, type SalesBridgeRow, type MonthlyTrendPoint, type AbandonmentRow, type TrafficSourceRow, type DiscountTierRow,
 } from "@/hooks/usePnL";
@@ -48,6 +48,7 @@ const PNL_SECTIONS: { key: string; label: string }[] = [
   { key: "marketing", label: "Marketing & Traffic (GA4)" },
   { key: "trend", label: "Net Sales Trend" },
   { key: "ledger", label: "Cost Entries" },
+  { key: "shipping-returns", label: "Shipping & Returns" },
 ];
 const PNL_DEFAULT_ORDER = PNL_SECTIONS.map(s => s.key);
 
@@ -631,10 +632,17 @@ function ChannelBreakdownCard({ channels, symbol, subtitle, loading }: {
   );
 }
 
-// ─── Sales bridge: Gross -> Discounts -> Net -> Shipping -> Returns ────────
+// ─── Sales bridge: Gross -> Discounts -> Net (unchanged, matches everywhere ─
+// else on the dashboard). Shipping and Returns are deliberately NOT chained
+// into this waterfall — current_total_price (which Net Sales is built from)
+// already reflects any refund the instant it happens, so bolting an explicit
+// "Final Total" onto the end double-counts same-period refunds and reads as
+// one continuous calculation when it isn't. They're shown as their own
+// standalone cards instead (see ChannelAmountCard below).
 
 interface DiscountTierSummary { tier: number; orders: number; revenue: number }
-interface ReturnsByChannelSummary { key: string; name: string; color: string; count: number; amount: number }
+interface ChannelAmountSummary { key: string; name: string; color: string; count: number; amount: number }
+interface StoreAmountRow { storeId: string; storeName: string; amount: number; symbol: string }
 
 function tierLabel(tier: number): string {
   if (tier === 0) return "No Discount";
@@ -642,47 +650,17 @@ function tierLabel(tier: number): string {
   return `${tier}%`;
 }
 
-// A CSS grid, not a flex row + separate arrow cells — flex-wrap on a row of
-// item+arrow+item+arrow... orphans arrows onto their own line the moment it
-// wraps (confirmed live, looked broken). A grid has no such failure mode:
-// each step is one self-contained cell, and the arrow lives inside it.
-function BridgeStep({ icon, iconBg, iconColor, label, value, valueClass, note, showArrow }: {
-  icon: ReactNode; iconBg: string; iconColor: string; label: string; value: string;
-  valueClass?: string; note?: string; showArrow?: boolean;
-}) {
-  return (
-    <div className="min-w-0">
-      <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
-        {showArrow && <ChevronRight size={12} className="text-muted-foreground/40 shrink-0 -ml-0.5" />}
-        <span className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ background: iconBg, color: iconColor }}>
-          {icon}
-        </span>
-        <span className="truncate">{label}</span>
-      </div>
-      <div className={cn("text-lg font-bold tabular-nums tracking-tight truncate", valueClass)}>{value}</div>
-      {note && <div className="text-[10px] text-muted-foreground mt-1">{note}</div>}
-    </div>
-  );
-}
-
-function SalesBridgeCard({
-  grossSales, discounts, netSales, shippingCollected, returnsAmount, orderCount, symbol, loading,
-  tiersExpanded, onToggleTiers, tiers, tiersLoading,
-  channelExpanded, onToggleChannel, channelBreakdown, channelLoading,
-}: {
-  grossSales: number; discounts: number; netSales: number; shippingCollected: number; returnsAmount: number;
-  orderCount: number; symbol: string; loading: boolean;
+function SalesBridgeCard({ grossSales, discounts, netSales, orderCount, symbol, loading, tiersExpanded, onToggleTiers, tiers, tiersLoading }: {
+  grossSales: number; discounts: number; netSales: number; orderCount: number; symbol: string; loading: boolean;
   tiersExpanded: boolean; onToggleTiers: () => void; tiers: DiscountTierSummary[]; tiersLoading: boolean;
-  channelExpanded: boolean; onToggleChannel: () => void; channelBreakdown: ReturnsByChannelSummary[]; channelLoading: boolean;
 }) {
   const discountPct = grossSales > 0 ? (discounts / grossSales) * 100 : 0;
-  const finalTotal = netSales + shippingCollected - returnsAmount;
   return (
     <Card className="h-full flex flex-col">
       <CardHeader className="pb-2 pt-4 px-4">
         <div className="flex items-center gap-2">
           <TrendingUp size={14} className="text-muted-foreground" />
-          <h3 className="text-sm font-semibold">Gross → Discounts → Net → Shipping → Returns</h3>
+          <h3 className="text-sm font-semibold">Gross → Discounts → Net</h3>
           {!loading && <span className="text-xs text-muted-foreground">{fmtNum(orderCount)} order{orderCount === 1 ? "" : "s"}</span>}
           <TooltipProvider delayDuration={100}>
             <UiTooltip>
@@ -691,9 +669,9 @@ function SalesBridgeCard({
                   <Info size={9} />
                 </button>
               </TooltipTrigger>
-              <TooltipContent side="top" className="max-w-[260px] p-2.5 text-left">
+              <TooltipContent side="top" className="max-w-[240px] p-2.5 text-left">
                 <p className="text-[10px] text-muted-foreground leading-snug">
-                  Gross Sales is derived as Net Sales + Discounts, so it always matches the Net Sales figure shown everywhere else on this page (Net Sales itself excludes shipping and isn't changed by this card). Shipping Collected is the same shipping already excluded from Net Sales, shown separately. Returns are counted in the month the refund actually happened, not the month of the original order — <b className="text-foreground">Final Total</b> = Net Sales + Shipping − Returns.
+                  Gross Sales is derived as Net Sales + Discounts, so it always matches the Net Sales figure shown elsewhere on this page. Shipping and Returns are shown in their own cards below, not chained into this figure.
                 </p>
               </TooltipContent>
             </UiTooltip>
@@ -704,58 +682,56 @@ function SalesBridgeCard({
         {loading ? (
           <div className="space-y-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}</div>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-x-4 gap-y-5">
-            <BridgeStep
-              icon={<TrendingUp size={11} strokeWidth={2.2} />} iconBg="#eef2ff" iconColor="#6366f1"
-              label="Gross Sales" value={fmtC(grossSales, symbol)}
-            />
-            <BridgeStep
-              icon={<Percent size={11} strokeWidth={2.2} />} iconBg="#fee2e2" iconColor="#dc2626"
-              label="Discounts" value={`−${fmtC(discounts, symbol)}`} valueClass="text-red-600 dark:text-red-400"
-              note={`${discountPct.toFixed(1)}% of gross`} showArrow
-            />
-            <BridgeStep
-              icon={<Coins size={11} strokeWidth={2.2} />} iconBg="#d1fae5" iconColor="#059669"
-              label="Net Sales" value={fmtC(netSales, symbol)} valueClass="text-emerald-600 dark:text-emerald-400"
-              showArrow
-            />
-            <BridgeStep
-              icon={<Truck size={11} strokeWidth={2.2} />} iconBg="#e0e7ff" iconColor="#4f46e5"
-              label="Shipping" value={`+${fmtC(shippingCollected, symbol)}`} valueClass="text-indigo-600 dark:text-indigo-400"
-              note="Collected from customers" showArrow
-            />
-            <BridgeStep
-              icon={<RotateCcw size={11} strokeWidth={2.2} />} iconBg="#ffedd5" iconColor="#ea580c"
-              label="Returns" value={`−${fmtC(returnsAmount, symbol)}`} valueClass="text-orange-600 dark:text-orange-400"
-              note="By refund date" showArrow
-            />
-            <BridgeStep
-              icon={<Wallet size={11} strokeWidth={2.2} />} iconBg="#cffafe" iconColor="#0891b2"
-              label="Final Total" value={fmtC(finalTotal, symbol)} valueClass="text-cyan-700 dark:text-cyan-400"
-              showArrow
-            />
+          <div className="flex items-stretch">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
+                <span className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ background: "#eef2ff", color: "#6366f1" }}>
+                  <TrendingUp size={11} strokeWidth={2.2} />
+                </span>
+                Gross Sales
+              </div>
+              <div className="text-lg font-bold tabular-nums tracking-tight truncate">{fmtC(grossSales, symbol)}</div>
+            </div>
+
+            <div className="flex items-center justify-center px-1.5 text-muted-foreground/30 shrink-0">
+              <ChevronRight size={16} />
+            </div>
+
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
+                <span className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ background: "#fee2e2", color: "#dc2626" }}>
+                  <Percent size={11} strokeWidth={2.2} />
+                </span>
+                Discounts
+              </div>
+              <div className="text-lg font-bold tabular-nums tracking-tight truncate text-red-600 dark:text-red-400">−{fmtC(discounts, symbol)}</div>
+              <div className="text-[10px] text-muted-foreground mt-1">{discountPct.toFixed(1)}% of gross</div>
+            </div>
+
+            <div className="flex items-center justify-center px-1.5 text-muted-foreground/30 shrink-0">
+              <ChevronRight size={16} />
+            </div>
+
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
+                <span className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ background: "#d1fae5", color: "#059669" }}>
+                  <Coins size={11} strokeWidth={2.2} />
+                </span>
+                Net Sales
+              </div>
+              <div className="text-lg font-bold tabular-nums tracking-tight truncate text-emerald-600 dark:text-emerald-400">{fmtC(netSales, symbol)}</div>
+            </div>
           </div>
         )}
-        <div className="flex items-center gap-4 mt-3 pt-2 border-t">
-          {!loading && (
-            <button
-              onClick={onToggleTiers}
-              className="flex items-center gap-1 text-[11px] font-medium text-primary hover:underline self-start"
-            >
-              <ChevronRight size={11} className={cn("transition-transform", tiersExpanded && "rotate-90")} />
-              {tiersExpanded ? "Hide" : "View"} by discount tier
-            </button>
-          )}
-          {!loading && (
-            <button
-              onClick={onToggleChannel}
-              className="flex items-center gap-1 text-[11px] font-medium text-primary hover:underline self-start"
-            >
-              <ChevronRight size={11} className={cn("transition-transform", channelExpanded && "rotate-90")} />
-              {channelExpanded ? "Hide" : "View"} returns by channel
-            </button>
-          )}
-        </div>
+        {!loading && (
+          <button
+            onClick={onToggleTiers}
+            className="flex items-center gap-1 text-[11px] font-medium text-primary hover:underline mt-3 pt-2 border-t self-start"
+          >
+            <ChevronRight size={11} className={cn("transition-transform", tiersExpanded && "rotate-90")} />
+            {tiersExpanded ? "Hide" : "View"} by discount tier
+          </button>
+        )}
         {tiersExpanded && (
           <div className="mt-2 pt-2 border-t">
             {tiersLoading ? (
@@ -784,39 +760,98 @@ function SalesBridgeCard({
             )}
           </div>
         )}
-        {channelExpanded && (
-          <div className="mt-2 pt-2 border-t">
-            {channelLoading ? (
-              <div className="space-y-1.5">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-5 w-full" />)}</div>
-            ) : channelBreakdown.length === 0 ? (
-              <p className="text-xs text-muted-foreground text-center py-2">No returns this period.</p>
-            ) : (
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="text-muted-foreground">
-                    <th className="text-left font-medium pb-1">Channel</th>
-                    <th className="text-right font-medium pb-1">Returns</th>
-                    <th className="text-right font-medium pb-1">Amount</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {channelBreakdown.map(c => (
-                    <tr key={c.key} className="border-t border-border/50">
-                      <td className="py-1.5">
-                        <span className="inline-flex items-center gap-1.5">
-                          <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: c.color }} />
-                          {c.name}
-                        </span>
-                      </td>
-                      <td className="py-1.5 text-right tabular-nums">{fmtNum(c.count)}</td>
-                      <td className="py-1.5 text-right tabular-nums font-semibold text-orange-600 dark:text-orange-400">−{fmtC(c.amount, symbol)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+      </CardContent>
+    </Card>
+  );
+}
+
+// Standalone revenue-line card — used for both "Shipping Collected" and
+// "Returns", each an independent fact (NOT chained to Net Sales, see note
+// above). All Stores mode shows a per-store breakdown inline (only 4 rows,
+// no need to hide it behind a toggle) plus an optional "View by channel"
+// table, same convention as the discount-tier breakdown.
+function ChannelAmountCard({
+  title, icon, iconBg, iconColor, total, symbol, loading, isAllStores, storeBreakdown,
+  channelExpanded, onToggleChannel, channelBreakdown, channelLoading, footnote, amountClass,
+}: {
+  title: string; icon: ReactNode; iconBg: string; iconColor: string; total: number; symbol: string; loading: boolean;
+  isAllStores: boolean; storeBreakdown: StoreAmountRow[];
+  channelExpanded: boolean; onToggleChannel: () => void; channelBreakdown: ChannelAmountSummary[]; channelLoading: boolean;
+  footnote?: string; amountClass?: string;
+}) {
+  return (
+    <Card className="h-full flex flex-col">
+      <CardHeader className="pb-2 pt-4 px-4">
+        <div className="flex items-center gap-2">
+          <span className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: iconBg, color: iconColor }}>
+            {icon}
+          </span>
+          <h3 className="text-sm font-semibold">{title}</h3>
+        </div>
+      </CardHeader>
+      <CardContent className="px-4 pb-4 pt-1 flex-1 flex flex-col">
+        {loading ? (
+          <Skeleton className="h-16 w-full" />
+        ) : (
+          <>
+            <div className={cn("text-2xl font-bold tabular-nums tracking-tight", amountClass)}>{fmtC(total, symbol)}</div>
+            {footnote && <p className="text-[11px] text-muted-foreground mt-1">{footnote}</p>}
+            {isAllStores && storeBreakdown.length > 0 && (
+              <div className="mt-3 pt-2 border-t space-y-1.5">
+                {storeBreakdown.map(s => (
+                  <div key={s.storeId} className="flex items-center justify-between text-xs">
+                    <span className="text-muted-foreground truncate">{s.storeName}</span>
+                    <span className="font-medium tabular-nums shrink-0">{fmtC(s.amount, s.symbol)}</span>
+                  </div>
+                ))}
+              </div>
             )}
-          </div>
+          </>
         )}
+        <div className="mt-auto pt-3">
+          {!loading && (
+            <button
+              onClick={onToggleChannel}
+              className="flex items-center gap-1 text-[11px] font-medium text-primary hover:underline pt-2 border-t w-full"
+            >
+              <ChevronRight size={11} className={cn("transition-transform", channelExpanded && "rotate-90")} />
+              {channelExpanded ? "Hide" : "View"} by channel
+            </button>
+          )}
+          {channelExpanded && (
+            <div className="mt-2 pt-2 border-t">
+              {channelLoading ? (
+                <div className="space-y-1.5">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-5 w-full" />)}</div>
+              ) : channelBreakdown.length === 0 ? (
+                <p className="text-xs text-muted-foreground text-center py-2">No data this period.</p>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-muted-foreground">
+                      <th className="text-left font-medium pb-1">Channel</th>
+                      <th className="text-right font-medium pb-1">Orders</th>
+                      <th className="text-right font-medium pb-1">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {channelBreakdown.map(c => (
+                      <tr key={c.key} className="border-t border-border/50">
+                        <td className="py-1.5">
+                          <span className="inline-flex items-center gap-1.5">
+                            <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: c.color }} />
+                            {c.name}
+                          </span>
+                        </td>
+                        <td className="py-1.5 text-right tabular-nums">{fmtNum(c.count)}</td>
+                        <td className={cn("py-1.5 text-right tabular-nums font-semibold", amountClass)}>{fmtC(c.amount, symbol)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
+        </div>
       </CardContent>
     </Card>
   );
@@ -1458,6 +1493,8 @@ export default function PnLDashboard() {
   const { data: discountTierRows = [], isLoading: discountTiersLoading } = useDiscountTiers(bounds, showDiscountTiers);
   const [showReturnsByChannel, setShowReturnsByChannel] = useState(false);
   const { data: returnsByChannelRows = [], isLoading: returnsByChannelLoading } = useReturnsByChannel(bounds, showReturnsByChannel);
+  const [showShippingByChannel, setShowShippingByChannel] = useState(false);
+  const { data: shippingByChannelRows = [], isLoading: shippingByChannelLoading } = useShippingByChannel(bounds, showShippingByChannel);
 
   const activeStores = stores.filter(s => s.is_active);
   const loading = revenueLoading || entriesLoading;
@@ -1841,7 +1878,7 @@ export default function PnLDashboard() {
   // scope/FX rules as the discount tier breakdown above, only fetched once
   // expanded. Channel name/color folding reuses normalizeKey()/CHANNEL_META,
   // the same convention as every other channel breakdown on the dashboard.
-  const returnsByChannelSummary: ReturnsByChannelSummary[] = useMemo(() => {
+  const returnsByChannelSummary: ChannelAmountSummary[] = useMemo(() => {
     const targetRows = isAllStores ? returnsByChannelRows : returnsByChannelRows.filter(r => r.storeId === selectedStoreId);
     const map = new Map<string, { count: number; amount: number }>();
     for (const row of targetRows) {
@@ -1859,6 +1896,47 @@ export default function PnLDashboard() {
       .map(([key, v]) => ({ key, name: (CHANNEL_META[key] ?? CHANNEL_META.unknown).name, color: (CHANNEL_META[key] ?? CHANNEL_META.unknown).color, count: v.count, amount: v.amount }))
       .sort((a, b) => b.amount - a.amount);
   }, [isAllStores, selectedStoreId, returnsByChannelRows, activeStores, fxRates]);
+
+  // Shipping by channel — same pattern as returns by channel above.
+  const shippingByChannelSummary: ChannelAmountSummary[] = useMemo(() => {
+    const targetRows = isAllStores ? shippingByChannelRows : shippingByChannelRows.filter(r => r.storeId === selectedStoreId);
+    const map = new Map<string, { count: number; amount: number }>();
+    for (const row of targetRows) {
+      const store = activeStores.find(s => s.id === row.storeId);
+      if (!store) continue;
+      const amount = isAllStores ? currencyToSar(row.shippingAmount, store.currency ?? "GBP", fxRates) : row.shippingAmount;
+      if (amount === null) continue;
+      const key = normalizeKey(row.sourceName);
+      if (!map.has(key)) map.set(key, { count: 0, amount: 0 });
+      const entry = map.get(key)!;
+      entry.count += row.orderCount;
+      entry.amount += amount;
+    }
+    return [...map.entries()]
+      .map(([key, v]) => ({ key, name: (CHANNEL_META[key] ?? CHANNEL_META.unknown).name, color: (CHANNEL_META[key] ?? CHANNEL_META.unknown).color, count: v.count, amount: v.amount }))
+      .sort((a, b) => b.amount - a.amount);
+  }, [isAllStores, selectedStoreId, shippingByChannelRows, activeStores, fxRates]);
+
+  // Per-store breakdown for the standalone Shipping/Returns cards — All
+  // Stores mode only, SAR-converted, reusing the same bridgeRows already
+  // fetched for the Sales Bridge card (no extra query needed).
+  const shippingByStoreSummary: StoreAmountRow[] = useMemo(() => {
+    if (!isAllStores) return [];
+    return activeStores.map(s => {
+      const b = bridgeByStore.get(s.id);
+      const amount = b ? currencyToSar(b.shippingCollected, s.currency ?? "GBP", fxRates) ?? 0 : 0;
+      return { storeId: s.id, storeName: s.store_name, amount, symbol: "SAR " };
+    }).filter(r => r.amount > 0).sort((a, b) => b.amount - a.amount);
+  }, [isAllStores, activeStores, bridgeRows, fxRates]);
+
+  const returnsByStoreSummary: StoreAmountRow[] = useMemo(() => {
+    if (!isAllStores) return [];
+    return activeStores.map(s => {
+      const b = bridgeByStore.get(s.id);
+      const amount = b ? currencyToSar(b.returnsAmount, s.currency ?? "GBP", fxRates) ?? 0 : 0;
+      return { storeId: s.id, storeName: s.store_name, amount, symbol: "SAR " };
+    }).filter(r => r.amount > 0).sort((a, b) => b.amount - a.amount);
+  }, [isAllStores, activeStores, bridgeRows, fxRates]);
 
   // Net Sales trend — indexed to 100 in All Stores mode (avoids needing an FX
   // rate for every past month just to draw a line chart), native currency
@@ -1979,8 +2057,6 @@ export default function PnLDashboard() {
               grossSales={bridgeSummary.grossSales}
               discounts={bridgeSummary.discounts}
               netSales={bridgeSummary.netSales}
-              shippingCollected={bridgeSummary.shippingCollected}
-              returnsAmount={bridgeSummary.returnsAmount}
               orderCount={bridgeSummary.orderCount}
               symbol={bridgeSummary.symbol}
               loading={loading}
@@ -1988,10 +2064,6 @@ export default function PnLDashboard() {
               onToggleTiers={() => setShowDiscountTiers(v => !v)}
               tiers={discountTierSummary}
               tiersLoading={discountTiersLoading}
-              channelExpanded={showReturnsByChannel}
-              onToggleChannel={() => setShowReturnsByChannel(v => !v)}
-              channelBreakdown={returnsByChannelSummary}
-              channelLoading={returnsByChannelLoading}
             />
           </div>
         </section>
@@ -2012,6 +2084,61 @@ export default function PnLDashboard() {
               symbol={isAllStores ? "SAR " : selectedStore?.currency_symbol ?? ""}
               subtitle={isAllStores ? "All stores combined, converted to SAR" : selectedStore?.store_name ?? ""}
               loading={loading}
+            />
+          </div>
+        </section>
+      </div>
+    ),
+
+    "shipping-returns": (
+      // Shipping Collected + Returns, side by side on wide screens — each its
+      // own independent fact, not chained to Net Sales (see SalesBridgeCard
+      // comment above for why).
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch">
+        <section className="flex flex-col">
+          <div className="flex items-center gap-2.5 mb-3">
+            <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-indigo-500/10 text-indigo-600 dark:text-indigo-400">Shipping</span>
+            <h2 className="text-base font-semibold">Shipping Collected</h2>
+          </div>
+          <div className="flex-1">
+            <ChannelAmountCard
+              title="This period"
+              footnote="Collected from customers"
+              icon={<Truck size={13} strokeWidth={2.2} />} iconBg="#e0e7ff" iconColor="#4f46e5"
+              total={bridgeSummary.shippingCollected}
+              symbol={bridgeSummary.symbol}
+              loading={loading}
+              isAllStores={isAllStores}
+              storeBreakdown={shippingByStoreSummary}
+              channelExpanded={showShippingByChannel}
+              onToggleChannel={() => setShowShippingByChannel(v => !v)}
+              channelBreakdown={shippingByChannelSummary}
+              channelLoading={shippingByChannelLoading}
+              amountClass="text-indigo-600 dark:text-indigo-400"
+            />
+          </div>
+        </section>
+
+        <section className="flex flex-col">
+          <div className="flex items-center gap-2.5 mb-3">
+            <span className="text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full bg-orange-500/10 text-orange-600 dark:text-orange-400">Returns</span>
+            <h2 className="text-base font-semibold">Returns</h2>
+          </div>
+          <div className="flex-1">
+            <ChannelAmountCard
+              title="This period"
+              footnote="By refund date, not order date"
+              icon={<RotateCcw size={13} strokeWidth={2.2} />} iconBg="#ffedd5" iconColor="#ea580c"
+              total={bridgeSummary.returnsAmount}
+              symbol={bridgeSummary.symbol}
+              loading={loading}
+              isAllStores={isAllStores}
+              storeBreakdown={returnsByStoreSummary}
+              channelExpanded={showReturnsByChannel}
+              onToggleChannel={() => setShowReturnsByChannel(v => !v)}
+              channelBreakdown={returnsByChannelSummary}
+              channelLoading={returnsByChannelLoading}
+              amountClass="text-orange-600 dark:text-orange-400"
             />
           </div>
         </section>
