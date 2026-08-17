@@ -642,27 +642,25 @@ function tierLabel(tier: number): string {
   return `${tier}%`;
 }
 
-function BridgeStep({ icon, iconBg, iconColor, label, value, valueClass, note }: {
-  icon: ReactNode; iconBg: string; iconColor: string; label: string; value: string; valueClass?: string; note?: string;
+// A CSS grid, not a flex row + separate arrow cells — flex-wrap on a row of
+// item+arrow+item+arrow... orphans arrows onto their own line the moment it
+// wraps (confirmed live, looked broken). A grid has no such failure mode:
+// each step is one self-contained cell, and the arrow lives inside it.
+function BridgeStep({ icon, iconBg, iconColor, label, value, valueClass, note, showArrow }: {
+  icon: ReactNode; iconBg: string; iconColor: string; label: string; value: string;
+  valueClass?: string; note?: string; showArrow?: boolean;
 }) {
   return (
-    <div className="flex-1 min-w-[110px]">
+    <div className="min-w-0">
       <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
+        {showArrow && <ChevronRight size={12} className="text-muted-foreground/40 shrink-0 -ml-0.5" />}
         <span className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ background: iconBg, color: iconColor }}>
           {icon}
         </span>
-        {label}
+        <span className="truncate">{label}</span>
       </div>
       <div className={cn("text-lg font-bold tabular-nums tracking-tight truncate", valueClass)}>{value}</div>
       {note && <div className="text-[10px] text-muted-foreground mt-1">{note}</div>}
-    </div>
-  );
-}
-
-function BridgeArrow() {
-  return (
-    <div className="flex items-center justify-center px-1.5 text-muted-foreground/30 shrink-0">
-      <ChevronRight size={16} />
     </div>
   );
 }
@@ -706,38 +704,35 @@ function SalesBridgeCard({
         {loading ? (
           <div className="space-y-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}</div>
         ) : (
-          <div className="flex items-stretch flex-wrap gap-y-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-x-4 gap-y-5">
             <BridgeStep
               icon={<TrendingUp size={11} strokeWidth={2.2} />} iconBg="#eef2ff" iconColor="#6366f1"
               label="Gross Sales" value={fmtC(grossSales, symbol)}
             />
-            <BridgeArrow />
             <BridgeStep
               icon={<Percent size={11} strokeWidth={2.2} />} iconBg="#fee2e2" iconColor="#dc2626"
               label="Discounts" value={`−${fmtC(discounts, symbol)}`} valueClass="text-red-600 dark:text-red-400"
-              note={`${discountPct.toFixed(1)}% of gross`}
+              note={`${discountPct.toFixed(1)}% of gross`} showArrow
             />
-            <BridgeArrow />
             <BridgeStep
               icon={<Coins size={11} strokeWidth={2.2} />} iconBg="#d1fae5" iconColor="#059669"
               label="Net Sales" value={fmtC(netSales, symbol)} valueClass="text-emerald-600 dark:text-emerald-400"
+              showArrow
             />
-            <BridgeArrow />
             <BridgeStep
               icon={<Truck size={11} strokeWidth={2.2} />} iconBg="#e0e7ff" iconColor="#4f46e5"
               label="Shipping" value={`+${fmtC(shippingCollected, symbol)}`} valueClass="text-indigo-600 dark:text-indigo-400"
-              note="Collected from customers"
+              note="Collected from customers" showArrow
             />
-            <BridgeArrow />
             <BridgeStep
               icon={<RotateCcw size={11} strokeWidth={2.2} />} iconBg="#ffedd5" iconColor="#ea580c"
               label="Returns" value={`−${fmtC(returnsAmount, symbol)}`} valueClass="text-orange-600 dark:text-orange-400"
-              note="By refund date"
+              note="By refund date" showArrow
             />
-            <BridgeArrow />
             <BridgeStep
               icon={<Wallet size={11} strokeWidth={2.2} />} iconBg="#cffafe" iconColor="#0891b2"
               label="Final Total" value={fmtC(finalTotal, symbol)} valueClass="text-cyan-700 dark:text-cyan-400"
+              showArrow
             />
           </div>
         )}
