@@ -945,6 +945,61 @@ async function backfillOrderRefunds(supabase: any): Promise<Record<string, unkno
   return results;
 }
 
+// One-time backfill for orders synced before current_total_price existed
+// (20260803000003) that have never been touched since (no webhook fired) —
+// found 2026-08-19 via a 100% accuracy audit: PK 60%, KSA 54%, UAE 71% of
+// orders still had current_total_price = NULL, which any SUM(current_total_price)
+// silently turns into 0 via COALESCE. Uses REST's `ids=` filter (up to 250 at
+// once) to fetch ONLY the orders actually missing the field, rather than a
+// full re-sync — then bulk-writes via the bulk_set_current_total_price RPC
+// (one round trip per batch instead of one UPDATE per order).
+async function backfillCurrentTotalPrice(supabase: any): Promise<Record<string, unknown>> {
+  const { data: connections, error: connErr } = await supabase
+    .from("shopify_connections")
+    .select("id, store_id, shop_domain, access_token")
+    .eq("is_active", true);
+  if (connErr) throw connErr;
+
+  const results: Record<string, unknown> = {};
+  for (const conn of connections ?? []) {
+    const domain = normalizeDomain(conn.shop_domain);
+    const { data: missing, error: missingErr } = await supabase
+      .from("orders")
+      .select("id, shopify_order_id")
+      .eq("store_id", conn.store_id)
+      .is("current_total_price", null);
+    if (missingErr) { results[conn.store_id] = `error: ${missingErr.message}`; continue; }
+    if (!missing?.length) { results[conn.store_id] = "0 missing"; continue; }
+
+    let updated = 0, notFound = 0;
+    const errors: string[] = [];
+    const IDBATCH = 200;
+    for (let i = 0; i < missing.length; i += IDBATCH) {
+      const batch = missing.slice(i, i + IDBATCH);
+      const idParam = batch.map((o: any) => o.shopify_order_id).join(",");
+      const res = await shopifyFetch(domain, conn.access_token, `/orders.json?ids=${idParam}&status=any&limit=250`);
+      if (!res.ok) { errors.push(`ids batch ${i}: ${res.status} ${await res.text()}`); continue; }
+      const data = await res.json();
+      const ctpByShopifyId = new Map<string, number | null>();
+      for (const o of data.orders ?? []) {
+        ctpByShopifyId.set(String(o.id), o.current_total_price != null ? Number(o.current_total_price) : null);
+      }
+      const pairs = batch
+        .map((o: any) => ({ id: o.id, ctp: ctpByShopifyId.get(o.shopify_order_id) }))
+        .filter((p: any) => p.ctp !== undefined && p.ctp !== null);
+      notFound += batch.length - pairs.length;
+      if (pairs.length) {
+        const { data: n, error: rpcErr } = await supabase.rpc("bulk_set_current_total_price", { p_pairs: pairs });
+        if (rpcErr) errors.push(`rpc batch ${i}: ${rpcErr.message}`);
+        else updated += Number(n ?? pairs.length);
+      }
+      await new Promise((r) => setTimeout(r, 400));
+    }
+    results[conn.store_id] = { totalMissing: missing.length, updated, notFound, errors: errors.slice(0, 10) };
+  }
+  return results;
+}
+
 // FIXED: single page per invocation (was: all pages in one invocation)
 async function syncOrders(supabase: any, conn: any, log: any, totalRef: { n: number }, syncSince: string | null): Promise<boolean> {
   const domain = normalizeDomain(conn.shop_domain);
@@ -1361,6 +1416,11 @@ Deno.serve(async (req) => {
 
     if (action === "backfill_order_refunds") {
       const results = await backfillOrderRefunds(supabase);
+      return json(200, { ok: true, results });
+    }
+
+    if (action === "backfill_current_total_price") {
+      const results = await backfillCurrentTotalPrice(supabase);
       return json(200, { ok: true, results });
     }
 
