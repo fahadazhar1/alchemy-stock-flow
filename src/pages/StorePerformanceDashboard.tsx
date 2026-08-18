@@ -75,7 +75,7 @@ function fmtC(value: number, sym: string, full = false): string {
     if (value >= 1_000_000) return `${sym}${(value / 1_000_000).toFixed(1)}M`;
     if (value >= 1_000)     return `${sym}${(value / 1_000).toFixed(1)}K`;
   }
-  return `${sym}${Math.round(value).toLocaleString("en-GB")}`;
+  return `${sym}${value.toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function fmtPct(n: number): string {
@@ -626,7 +626,7 @@ function ChannelSalesRow({ c, sym, fullNumbers }: { c: ChannelSalesStat; sym: st
       <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: c.color }} />
       <span className="text-xs font-medium truncate flex-1 min-w-0">{c.name}</span>
       <span className="text-[11px] text-muted-foreground tabular-nums w-9 text-right shrink-0">{fmtNum(c.orders)}</span>
-      <span className={cn("text-xs font-semibold tabular-nums text-right shrink-0", fullNumbers ? "w-24" : "w-16")}>{fmtC(c.revenue, sym, fullNumbers)}</span>
+      <span className={cn("text-xs font-semibold tabular-nums text-right shrink-0", fullNumbers ? "w-24" : "w-20")}>{fmtC(c.revenue, sym, fullNumbers)}</span>
       <span className="w-11 text-right shrink-0">
         <DeltaBadge value={c.revenueDelta} />
       </span>
