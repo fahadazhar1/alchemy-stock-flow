@@ -157,16 +157,19 @@ export function useKpiGa4History() {
   });
 }
 
-export function useDailyKpiEntriesHistory() {
+/** Generic date-range fetch for daily_kpi_entries — used for both the fixed
+ * 15-day History table and the MTD column (whose start date moves with the
+ * selected month). */
+export function useDailyKpiEntriesRange(fromDate: string, toDate: string) {
   return useQuery<DailyKpiEntry[]>({
-    queryKey: ["daily-kpi-entries-history", HISTORY_DAYS],
+    queryKey: ["daily-kpi-entries-range", fromDate, toDate],
     staleTime: 60_000,
     queryFn: async () => {
-      const cutoff = new Date(Date.now() - HISTORY_DAYS * 86_400_000).toISOString().slice(0, 10);
       const { data, error } = await (supabase as any)
         .from("daily_kpi_entries")
         .select("*")
-        .gte("entry_date", cutoff)
+        .gte("entry_date", fromDate)
+        .lte("entry_date", toDate)
         .order("entry_date", { ascending: false });
       if (error) throw error;
       return data ?? [];

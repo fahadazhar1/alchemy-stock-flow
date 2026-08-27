@@ -13,7 +13,7 @@ import { useStoreSalesPulse } from "@/hooks/useStoreSalesPulse";
 import { useGa4ChannelSummary } from "@/hooks/useGa4";
 import {
   useKpiConfig, useDailyKpiEntries, useUpsertKpiEntry, useUpdateKpiConfig, useSendKpiReport,
-  useKpiSalesHistory, useKpiGa4History, useDailyKpiEntriesHistory, useShopifySessions,
+  useKpiSalesHistory, useKpiGa4History, useDailyKpiEntriesRange, useShopifySessions,
   type KpiMetricConfig,
 } from "@/hooks/useKpiTracker";
 import { DateRangePicker, SalesPulseSection, applyChannelFilter } from "@/pages/StorePerformanceDashboard";
@@ -93,17 +93,20 @@ export default function ClickUpReports() {
 
   const { data: pulse = [], isLoading: pulseLoading, isFetching: pulseFetching, refetch: refetchPulse } = useStoreSalesPulse(bounds, excludeShipping);
 
-  // The KPI table's Sales row follows whatever the date filter bar above has
-  // selected — the "selected" slot is just `pulse` (already bounds-driven),
-  // and "MTD" is month-to-date up to the END of whatever's selected (e.g. if
-  // "25 Aug" is picked, MTD = 1–25 Aug), not always literal today's month.
+  // MTD = month-to-date up to the END of whatever's selected in the filter
+  // bar (e.g. if "25 Aug" is picked, MTD = 1–25 Aug) — a separate column from
+  // "Actual", summed from the same daily data (live RPCs for Sales/Organic/
+  // Bounce, plain sums of daily_kpi_entries for manual metrics), so it grows
+  // day by day as the team fills in the daily figures.
+  const monthStart = useMemo(() => {
+    const [y, m] = gaEnd.split("-").map(Number);
+    return `${y}-${String(m).padStart(2, "0")}-01`;
+  }, [gaEnd]);
   const salesMtdBounds = useMemo<DateBounds>(() => {
     const endDate = new Date(bounds.endISO);
-    const endKarachi = isoToKarachiDate(bounds.endISO); // "YYYY-MM-DD"
-    const [y, m] = endKarachi.split("-").map(Number);
-    const monthStart = new Date(Date.UTC(y, m - 1, 1, 12));
-    return getCustomDateBounds(monthStart, endDate);
-  }, [bounds.endISO]);
+    const monthStartDate = new Date(`${monthStart}T12:00:00Z`);
+    return getCustomDateBounds(monthStartDate, endDate);
+  }, [bounds.endISO, monthStart]);
   const { data: pulseMtdRaw = [] } = useStoreSalesPulse(salesMtdBounds, excludeShipping);
 
   // Same channel filter as the Sales Pulse cards above (controlled, lifted
@@ -112,13 +115,16 @@ export default function ClickUpReports() {
   const pulseSelected = useMemo(() => pulse.map(p => applyChannelFilter(p, channelFilter)), [pulse, channelFilter]);
   const pulseMtd = useMemo(() => pulseMtdRaw.map(p => applyChannelFilter(p, channelFilter)), [pulseMtdRaw, channelFilter]);
   const { data: channelRows = [], isFetching: channelFetching } = useGa4ChannelSummary(gaStart, gaEnd);
+  const { data: channelRowsMtd = [] } = useGa4ChannelSummary(monthStart, gaEnd);
   const { data: config = [], isLoading: configLoading } = useKpiConfig();
   const { data: entries = [], isLoading: entriesLoading } = useDailyKpiEntries(today);
   const { data: salesHistory = [] } = useKpiSalesHistory();
   const { data: ga4History = [] } = useKpiGa4History();
-  const { data: entriesHistory = [] } = useDailyKpiEntriesHistory();
-  const { data: shopifySessions = [], isFetching: sessionsFetching } = useShopifySessions();
   const historyDates = useMemo(() => last15Dates(), []);
+  const oldestHistoryDate = historyDates[historyDates.length - 1];
+  const { data: entriesHistory = [] } = useDailyKpiEntriesRange(oldestHistoryDate, today);
+  const { data: entriesMtd = [] } = useDailyKpiEntriesRange(monthStart, gaEnd);
+  const { data: shopifySessions = [], isFetching: sessionsFetching } = useShopifySessions();
 
   const upsertEntry = useUpsertKpiEntry();
   const updateConfig = useUpdateKpiConfig();
@@ -135,15 +141,33 @@ export default function ClickUpReports() {
     );
   }, [pulse]);
 
+  // Shared aggregator for "Bounce rate and CRO" — sum(bounces)/sum(sessions)
+  // and sum(conversions)/sum(sessions) across whatever date rows are passed
+  // in, not an average of daily rates. Used for both the Actual and MTD
+  // columns with different date windows.
+  const aggregateBounce = useCallback((storeId: string, fromDate: string, toDate: string): string => {
+    const storeRows = shopifySessions.filter(r => r.storeId === storeId);
+    const rows = storeRows.filter(r => r.date >= fromDate && r.date <= toDate);
+    if (rows.length === 0) return "No data yet";
+    const totalSessions = rows.reduce((s, r) => s + r.sessions, 0);
+    const totalBounces = rows.reduce((s, r) => s + r.bounces, 0);
+    const totalConversions = rows.reduce((s, r) => s + r.conversions, 0);
+    if (totalSessions === 0) return "No data yet";
+    const bounceRate = (totalBounces / totalSessions) * 100;
+    const cro = (totalConversions / totalSessions) * 100;
+    // shopify_sessions_daily only carries a rolling ~95-day window — flag it
+    // rather than silently showing a partial figure for a longer range
+    // (QTD/YTD) as if it covered the whole requested period.
+    const earliestAvailable = storeRows.reduce((min, r) => (r.date < min ? r.date : min), rows[0].date);
+    const partial = earliestAvailable > fromDate;
+    return `${bounceRate.toFixed(1)}% bounce · ${cro.toFixed(2)}% CRO${partial ? ` (from ${earliestAvailable})` : ""}`;
+  }, [shopifySessions]);
+
   const autoValue = useCallback((metricKey: string, storeId: string): string => {
     if (metricKey === "sales") {
       const t = pulseSelected.find(x => x.storeId === storeId);
-      const m = pulseMtd.find(x => x.storeId === storeId);
-      if (!t && !m) return "—";
-      const sym = t?.currencySymbol ?? m?.currencySymbol ?? "";
-      const selectedStr = t ? `${fmtCurrency(t.revenue, sym)} (${t.orders})` : "—";
-      const mtdStr = m ? `${fmtCurrency(m.revenue, sym)} (${m.orders})` : "—";
-      return `${bounds.label}: ${selectedStr} · MTD: ${mtdStr}`;
+      if (!t) return "—";
+      return `${fmtCurrency(t.revenue, t.currencySymbol)} (${t.orders})`;
     }
     if (metricKey === "organic_traffic") {
       const sessions = channelRows
@@ -151,28 +175,31 @@ export default function ClickUpReports() {
         .reduce((s, r) => s + r.sessions, 0);
       return `${sessions.toLocaleString()} sessions`;
     }
-    if (metricKey === "bounce_cro") {
-      // Follows the page's date-range filter bar (gaStart..gaEnd), same as
-      // Organic traffic above — aggregated as sum(bounces)/sum(sessions) and
-      // sum(conversions)/sum(sessions), not an average of daily rates.
-      const storeRows = shopifySessions.filter(r => r.storeId === storeId);
-      const rows = storeRows.filter(r => r.date >= gaStart && r.date <= gaEnd);
-      if (rows.length === 0) return "No data yet";
-      const totalSessions = rows.reduce((s, r) => s + r.sessions, 0);
-      const totalBounces = rows.reduce((s, r) => s + r.bounces, 0);
-      const totalConversions = rows.reduce((s, r) => s + r.conversions, 0);
-      if (totalSessions === 0) return "No data yet";
-      const bounceRate = (totalBounces / totalSessions) * 100;
-      const cro = (totalConversions / totalSessions) * 100;
-      // shopify_sessions_daily only carries a rolling ~95-day window — flag it
-      // rather than silently showing a partial figure for a longer range
-      // (QTD/YTD) as if it covered the whole requested period.
-      const earliestAvailable = storeRows.reduce((min, r) => (r.date < min ? r.date : min), rows[0].date);
-      const partial = earliestAvailable > gaStart;
-      return `${bounceRate.toFixed(1)}% bounce · ${cro.toFixed(2)}% CRO${partial ? ` (from ${earliestAvailable})` : ""}`;
-    }
+    if (metricKey === "bounce_cro") return aggregateBounce(storeId, gaStart, gaEnd);
     return "—";
-  }, [pulseSelected, pulseMtd, bounds.label, channelRows, shopifySessions, gaStart, gaEnd]);
+  }, [pulseSelected, channelRows, aggregateBounce, gaStart, gaEnd]);
+
+  const mtdValue = useCallback((metricKey: string, storeId: string, sym: string): string => {
+    if (metricKey === "sales") {
+      const m = pulseMtd.find(x => x.storeId === storeId);
+      return m ? `${fmtCurrency(m.revenue, sym)} (${m.orders})` : "—";
+    }
+    if (metricKey === "organic_traffic") {
+      const sessions = channelRowsMtd
+        .filter(r => r.storeId === storeId && r.channelGroup === "Organic Search")
+        .reduce((s, r) => s + r.sessions, 0);
+      return `${sessions.toLocaleString()} sessions`;
+    }
+    if (metricKey === "bounce_cro") return aggregateBounce(storeId, monthStart, gaEnd);
+    // Manual metrics — sum whatever numeric values were typed in this month
+    // (non-numeric daily entries, e.g. free-text notes, are skipped).
+    const nums = entriesMtd
+      .filter(e => e.store_id === storeId && e.metric_key === metricKey)
+      .map(e => parseFloat(e.value_text))
+      .filter(n => !Number.isNaN(n));
+    if (nums.length === 0) return "—";
+    return nums.reduce((s, n) => s + n, 0).toLocaleString();
+  }, [pulseMtd, channelRowsMtd, aggregateBounce, monthStart, gaEnd, entriesMtd]);
 
   const historyValue = useCallback((metricKey: string, storeId: string, date: string, sym: string): string => {
     if (metricKey === "sales") {
@@ -224,7 +251,7 @@ export default function ClickUpReports() {
             {isRefreshing && <Loader2 size={14} className="animate-spin text-muted-foreground" />}
           </div>
           <p className="text-sm text-muted-foreground">
-            Daily KPI tracker, store-wise · Sales/Organic traffic/Bounce/CRO follow <span className="font-medium">{bounds.label}</span> (Sales also shows MTD up to that date) · manual fields are for {today}
+            Daily KPI tracker, store-wise · Actual follows <span className="font-medium">{bounds.label}</span> · MTD sums 1st of the month through that date · manual fields are for {today}
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -281,11 +308,12 @@ export default function ClickUpReports() {
                   <table className="w-full text-xs">
                     <thead>
                       <tr className="border-b bg-muted/20 text-muted-foreground">
-                        <th className="text-left font-medium px-3 py-2 w-[26%]">Metric</th>
-                        <th className="text-left font-medium px-3 py-2 w-[14%]">Owner</th>
-                        <th className="text-left font-medium px-3 py-2 w-[14%]">Target</th>
-                        <th className="text-left font-medium px-3 py-2 w-[36%]">Actual</th>
-                        <th className="text-left font-medium px-3 py-2 w-[10%]">Reviewed</th>
+                        <th className="text-left font-medium px-3 py-2 w-[20%]">Metric</th>
+                        <th className="text-left font-medium px-3 py-2 w-[11%]">Owner</th>
+                        <th className="text-left font-medium px-3 py-2 w-[11%]">Target</th>
+                        <th className="text-left font-medium px-3 py-2 w-[27%]">Actual</th>
+                        <th className="text-left font-medium px-3 py-2 w-[23%]">MTD</th>
+                        <th className="text-left font-medium px-3 py-2 w-[8%]">Reviewed</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -320,6 +348,9 @@ export default function ClickUpReports() {
                                   })}
                                 />
                               )}
+                            </td>
+                            <td className="px-3 py-1.5 text-muted-foreground">
+                              {mtdValue(m.metric_key, store.storeId, store.currencySymbol)}
                             </td>
                             <td className="px-3 py-1.5 text-muted-foreground">Daily</td>
                           </tr>
