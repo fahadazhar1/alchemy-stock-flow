@@ -61,6 +61,7 @@ export function useUpsertKpiEntry() {
     },
     onSuccess: (_data, vars) => {
       queryClient.invalidateQueries({ queryKey: ["daily-kpi-entries", vars.entry_date] });
+      queryClient.invalidateQueries({ queryKey: ["daily-kpi-entries-range"] });
     },
   });
 }

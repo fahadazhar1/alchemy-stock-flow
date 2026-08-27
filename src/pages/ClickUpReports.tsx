@@ -39,10 +39,15 @@ function fmtCurrency(value: number, sym: string): string {
 
 const HISTORY_DAYS = 15;
 
+// Starts at YESTERDAY, not today — today's manual entry is already editable
+// in the main "Actual" row above. Rendering a second, independent editable
+// cell for the same (store, date, metric) row caused exactly the bug this
+// fixes: two out-of-sync local input states for one underlying entry, and
+// blurring the stale one silently overwrote a just-saved value with "".
 function last15Dates(): string[] {
   const today = todayKarachiDate();
   const out: string[] = [];
-  for (let i = 0; i < HISTORY_DAYS; i++) {
+  for (let i = 1; i <= HISTORY_DAYS; i++) {
     const d = new Date(`${today}T12:00:00Z`);
     d.setUTCDate(d.getUTCDate() - i);
     out.push(d.toISOString().slice(0, 10));
