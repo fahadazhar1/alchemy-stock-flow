@@ -642,7 +642,7 @@ function delta(cur: number, prev: number): number | null {
 // Collapse a store's per-channel breakdown down to the selected channel(s),
 // keeping the same shape so SalesPulseCard doesn't need to branch on filter state.
 // Empty set = no filter = every channel.
-function applyChannelFilter(p: StoreSalesPulse, selectedKeys: Set<string>): StoreSalesPulse {
+export function applyChannelFilter(p: StoreSalesPulse, selectedKeys: Set<string>): StoreSalesPulse {
   if (selectedKeys.size === 0) return p;
   const matched = p.channels.filter(ch => selectedKeys.has(ch.key));
   if (!matched.length) {
@@ -765,15 +765,24 @@ function ChannelMultiSelect({ options, selected, onChange }: {
   );
 }
 
-export function SalesPulseSection({ pulse, loading, bounds, range, excludeShipping, onExcludeShippingChange }: {
+export function SalesPulseSection({
+  pulse, loading, bounds, range, excludeShipping, onExcludeShippingChange,
+  channelFilter: channelFilterProp, onChannelFilterChange,
+}: {
   pulse: StoreSalesPulse[];
   loading: boolean;
   bounds: DateBounds;
   range: DateRangeKey;
   excludeShipping: boolean;
   onExcludeShippingChange: (value: boolean) => void;
+  /** Optional controlled channel filter — omit to keep this section's own
+   * uncontrolled internal state (the original Sales Pulse page's behavior). */
+  channelFilter?: Set<string>;
+  onChannelFilterChange?: (value: Set<string>) => void;
 }) {
-  const [channelFilter, setChannelFilter] = useState<Set<string>>(new Set());
+  const [internalChannelFilter, setInternalChannelFilter] = useState<Set<string>>(new Set());
+  const channelFilter = channelFilterProp ?? internalChannelFilter;
+  const setChannelFilter = onChannelFilterChange ?? setInternalChannelFilter;
   const [fullNumbers, setFullNumbers] = useState(false);
 
   const channelOptions = useMemo(() => {

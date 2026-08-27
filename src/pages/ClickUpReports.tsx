@@ -16,7 +16,7 @@ import {
   useKpiSalesHistory, useKpiGa4History, useDailyKpiEntriesHistory, useShopifySessions,
   type KpiMetricConfig,
 } from "@/hooks/useKpiTracker";
-import { DateRangePicker, SalesPulseSection } from "@/pages/StorePerformanceDashboard";
+import { DateRangePicker, SalesPulseSection, applyChannelFilter } from "@/pages/StorePerformanceDashboard";
 
 const STORE_SORT_ORDER: Record<string, number> = {
   darussalamuk: 1,
@@ -80,6 +80,7 @@ export default function ClickUpReports() {
   const [customFrom, setCustomFrom] = useState<Date | null>(null);
   const [customTo, setCustomTo] = useState<Date | null>(null);
   const [excludeShipping, setExcludeShipping] = useState(false);
+  const [channelFilter, setChannelFilter] = useState<Set<string>>(new Set());
 
   const bounds = useMemo<DateBounds>(() => {
     if (range === "Custom" && customFrom && customTo) return getCustomDateBounds(customFrom, customTo);
@@ -95,8 +96,13 @@ export default function ClickUpReports() {
   // Sales Pulse cards section, same as the Sales Pulse page itself).
   const todayBounds = useMemo(() => getDateBounds("Today"), []);
   const mtdBounds = useMemo(() => getDateBounds("MTD"), []);
-  const { data: pulseToday = [] } = useStoreSalesPulse(todayBounds, excludeShipping);
-  const { data: pulseMtd = [] } = useStoreSalesPulse(mtdBounds, excludeShipping);
+  const { data: pulseTodayRaw = [] } = useStoreSalesPulse(todayBounds, excludeShipping);
+  const { data: pulseMtdRaw = [] } = useStoreSalesPulse(mtdBounds, excludeShipping);
+  // Same channel filter as the Sales Pulse cards above (controlled, lifted
+  // into this page) — without this the KPI table's Sales row always summed
+  // ALL channels regardless of what the dropdown had selected.
+  const pulseToday = useMemo(() => pulseTodayRaw.map(p => applyChannelFilter(p, channelFilter)), [pulseTodayRaw, channelFilter]);
+  const pulseMtd = useMemo(() => pulseMtdRaw.map(p => applyChannelFilter(p, channelFilter)), [pulseMtdRaw, channelFilter]);
 
   const { data: pulse = [], isLoading: pulseLoading, isFetching: pulseFetching, refetch: refetchPulse } = useStoreSalesPulse(bounds, excludeShipping);
   const { data: channelRows = [], isFetching: channelFetching } = useGa4ChannelSummary(gaStart, gaEnd);
@@ -238,6 +244,8 @@ export default function ClickUpReports() {
           range={range}
           excludeShipping={excludeShipping}
           onExcludeShippingChange={setExcludeShipping}
+          channelFilter={channelFilter}
+          onChannelFilterChange={setChannelFilter}
         />
       </section>
 
