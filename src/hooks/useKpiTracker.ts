@@ -80,6 +80,70 @@ export function useUpdateKpiConfig() {
   });
 }
 
+export interface KpiSalesHistoryRow { storeId: string; day: string; revenue: number; orders: number }
+export interface Ga4DailyHistoryRow { storeId: string; day: string; sessions: number; bounceRate: number; conversions: number; organicSessions: number }
+
+const HISTORY_DAYS = 15;
+
+export function useKpiSalesHistory() {
+  return useQuery<KpiSalesHistoryRow[]>({
+    queryKey: ["kpi-sales-history", HISTORY_DAYS],
+    staleTime: 5 * 60_000,
+    queryFn: async () => {
+      const { data, error } = await (supabase as any).rpc("get_kpi_daily_sales_history", { p_days: HISTORY_DAYS });
+      if (error) throw error;
+      return (data ?? []).map((r: any) => ({
+        storeId: r.store_id, day: r.day, revenue: Number(r.revenue), orders: Number(r.orders),
+      }));
+    },
+  });
+}
+
+export function useKpiGa4History() {
+  return useQuery<Ga4DailyHistoryRow[]>({
+    queryKey: ["kpi-ga4-history", HISTORY_DAYS],
+    staleTime: 5 * 60_000,
+    queryFn: async () => {
+      const cutoff = new Date(Date.now() - HISTORY_DAYS * 86_400_000).toISOString().slice(0, 10);
+      const [{ data: daily, error: dailyErr }, { data: channel, error: channelErr }] = await Promise.all([
+        (supabase as any).from("ga4_daily_metrics").select("store_id, date, sessions, bounce_rate, conversions").gte("date", cutoff),
+        (supabase as any).from("ga4_channel_daily").select("store_id, date, channel_group, sessions").gte("date", cutoff).eq("channel_group", "Organic Search"),
+      ]);
+      if (dailyErr) throw dailyErr;
+      if (channelErr) throw channelErr;
+
+      const organicMap = new Map<string, number>();
+      for (const r of channel ?? []) organicMap.set(`${r.store_id}|${r.date}`, Number(r.sessions));
+
+      return (daily ?? []).map((r: any) => ({
+        storeId: r.store_id,
+        day: r.date,
+        sessions: Number(r.sessions),
+        bounceRate: Number(r.bounce_rate),
+        conversions: Number(r.conversions),
+        organicSessions: organicMap.get(`${r.store_id}|${r.date}`) ?? 0,
+      }));
+    },
+  });
+}
+
+export function useDailyKpiEntriesHistory() {
+  return useQuery<DailyKpiEntry[]>({
+    queryKey: ["daily-kpi-entries-history", HISTORY_DAYS],
+    staleTime: 60_000,
+    queryFn: async () => {
+      const cutoff = new Date(Date.now() - HISTORY_DAYS * 86_400_000).toISOString().slice(0, 10);
+      const { data, error } = await (supabase as any)
+        .from("daily_kpi_entries")
+        .select("*")
+        .gte("entry_date", cutoff)
+        .order("entry_date", { ascending: false });
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+}
+
 export function useSendKpiReport() {
   return useMutation({
     mutationFn: async (date: string) => {

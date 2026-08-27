@@ -13,6 +13,7 @@ import { useStoreSalesPulse } from "@/hooks/useStoreSalesPulse";
 import { useGa4ChannelSummary, useGa4MonthlySummary } from "@/hooks/useGa4";
 import {
   useKpiConfig, useDailyKpiEntries, useUpsertKpiEntry, useUpdateKpiConfig, useSendKpiReport,
+  useKpiSalesHistory, useKpiGa4History, useDailyKpiEntriesHistory,
   type KpiMetricConfig,
 } from "@/hooks/useKpiTracker";
 import { DateRangePicker, SalesPulseSection } from "@/pages/StorePerformanceDashboard";
@@ -34,6 +35,19 @@ function todayKarachiDate(): string {
 
 function fmtCurrency(value: number, sym: string): string {
   return `${sym}${value.toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+const HISTORY_DAYS = 15;
+
+function last15Dates(): string[] {
+  const today = todayKarachiDate();
+  const out: string[] = [];
+  for (let i = 0; i < HISTORY_DAYS; i++) {
+    const d = new Date(`${today}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() - i);
+    out.push(d.toISOString().slice(0, 10));
+  }
+  return out; // newest first
 }
 
 // ─── Editable cell — inline input, saves on blur if changed ────────────────
@@ -76,11 +90,23 @@ export default function ClickUpReports() {
   const gaEnd = isoToKarachiDate(bounds.endISO);
   const today = todayKarachiDate();
 
+  // The KPI table's "Sales (today and MTD)" row always shows both, independent
+  // of the page's date-range filter bar above (that filter only drives the
+  // Sales Pulse cards section, same as the Sales Pulse page itself).
+  const todayBounds = useMemo(() => getDateBounds("Today"), []);
+  const mtdBounds = useMemo(() => getDateBounds("MTD"), []);
+  const { data: pulseToday = [] } = useStoreSalesPulse(todayBounds, excludeShipping);
+  const { data: pulseMtd = [] } = useStoreSalesPulse(mtdBounds, excludeShipping);
+
   const { data: pulse = [], isLoading: pulseLoading, isFetching: pulseFetching, refetch: refetchPulse } = useStoreSalesPulse(bounds, excludeShipping);
   const { data: channelRows = [], isFetching: channelFetching } = useGa4ChannelSummary(gaStart, gaEnd);
   const { data: ga4Rows = [], isFetching: ga4Fetching } = useGa4MonthlySummary(gaStart, gaEnd);
   const { data: config = [], isLoading: configLoading } = useKpiConfig();
   const { data: entries = [], isLoading: entriesLoading } = useDailyKpiEntries(today);
+  const { data: salesHistory = [] } = useKpiSalesHistory();
+  const { data: ga4History = [] } = useKpiGa4History();
+  const { data: entriesHistory = [] } = useDailyKpiEntriesHistory();
+  const historyDates = useMemo(() => last15Dates(), []);
 
   const upsertEntry = useUpsertKpiEntry();
   const updateConfig = useUpdateKpiConfig();
@@ -99,9 +125,13 @@ export default function ClickUpReports() {
 
   const autoValue = useCallback((metricKey: string, storeId: string): string => {
     if (metricKey === "sales") {
-      const p = pulse.find(x => x.storeId === storeId);
-      if (!p) return "—";
-      return `${fmtCurrency(p.revenue, p.currencySymbol)} (${p.orders} orders)`;
+      const t = pulseToday.find(x => x.storeId === storeId);
+      const m = pulseMtd.find(x => x.storeId === storeId);
+      if (!t && !m) return "—";
+      const sym = t?.currencySymbol ?? m?.currencySymbol ?? "";
+      const todayStr = t ? `${fmtCurrency(t.revenue, sym)} (${t.orders})` : "—";
+      const mtdStr = m ? `${fmtCurrency(m.revenue, sym)} (${m.orders})` : "—";
+      return `Today: ${todayStr} · MTD: ${mtdStr}`;
     }
     if (metricKey === "organic_traffic") {
       const sessions = channelRows
@@ -116,7 +146,27 @@ export default function ClickUpReports() {
       return `${(g.avgBounceRate * 100).toFixed(1)}% bounce · ${cro.toFixed(2)}% CRO`;
     }
     return "—";
-  }, [pulse, channelRows, ga4Rows]);
+  }, [pulseToday, pulseMtd, channelRows, ga4Rows]);
+
+  const historyValue = useCallback((metricKey: string, storeId: string, date: string, sym: string): string => {
+    if (metricKey === "sales") {
+      const row = salesHistory.find(r => r.storeId === storeId && r.day === date);
+      if (!row) return "—";
+      return `${fmtCurrency(row.revenue, sym)} (${row.orders})`;
+    }
+    if (metricKey === "organic_traffic") {
+      const row = ga4History.find(r => r.storeId === storeId && r.day === date);
+      return row ? `${row.organicSessions.toLocaleString()}` : "—";
+    }
+    if (metricKey === "bounce_cro") {
+      const row = ga4History.find(r => r.storeId === storeId && r.day === date);
+      if (!row) return "—";
+      const cro = row.sessions > 0 ? (row.conversions / row.sessions) * 100 : 0;
+      return `${(row.bounceRate * 100).toFixed(1)}% / ${cro.toFixed(1)}%`;
+    }
+    const entry = entriesHistory.find(e => e.store_id === storeId && e.metric_key === metricKey && e.entry_date === date);
+    return entry?.value_text || "—";
+  }, [salesHistory, ga4History, entriesHistory]);
 
   const isRefreshing = pulseFetching || channelFetching || ga4Fetching;
   const loading = pulseLoading || configLoading || entriesLoading;
@@ -251,6 +301,35 @@ export default function ClickUpReports() {
                     </tbody>
                   </table>
                 </div>
+                <details className="border-t">
+                  <summary className="px-4 py-2 text-xs font-medium text-muted-foreground cursor-pointer hover:text-foreground select-none">
+                    History — last {HISTORY_DAYS} days
+                  </summary>
+                  <div className="overflow-x-auto px-1 pb-2">
+                    <table className="w-full text-[11px]">
+                      <thead>
+                        <tr className="border-b bg-muted/20 text-muted-foreground">
+                          <th className="text-left font-medium px-2 py-1.5 sticky left-0 bg-background">Date</th>
+                          {storeConfig.map(m => (
+                            <th key={m.id} className="text-left font-medium px-2 py-1.5 whitespace-nowrap">{m.metric_label}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {historyDates.map(date => (
+                          <tr key={date} className="border-b last:border-b-0">
+                            <td className="px-2 py-1 font-medium whitespace-nowrap sticky left-0 bg-background">{date}</td>
+                            {storeConfig.map(m => (
+                              <td key={m.id} className="px-2 py-1 whitespace-nowrap text-muted-foreground">
+                                {historyValue(m.metric_key, store.storeId, date, store.currencySymbol)}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </details>
               </Card>
             );
           })}
