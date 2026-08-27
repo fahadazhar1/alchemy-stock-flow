@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback } from "react";
-import { MessageSquare, Loader2, RefreshCw, Send } from "lucide-react";
+import { MessageSquare, Loader2, RefreshCw, Send, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,7 +12,7 @@ import {
 import { useStoreSalesPulse } from "@/hooks/useStoreSalesPulse";
 import { useGa4ChannelSummary } from "@/hooks/useGa4";
 import {
-  useKpiConfig, useDailyKpiEntries, useUpsertKpiEntry, useUpdateKpiConfig, useSendKpiReport,
+  useKpiConfig, useDailyKpiEntries, useUpsertKpiEntry, useDeleteKpiEntry, useUpdateKpiConfig, useSendKpiReport,
   useKpiSalesHistory, useKpiGa4History, useDailyKpiEntriesRange, useShopifySessions,
   type KpiMetricConfig,
 } from "@/hooks/useKpiTracker";
@@ -127,6 +127,7 @@ export default function ClickUpReports() {
   const { data: shopifySessions = [], isFetching: sessionsFetching } = useShopifySessions();
 
   const upsertEntry = useUpsertKpiEntry();
+  const deleteEntry = useDeleteKpiEntry();
   const updateConfig = useUpdateKpiConfig();
   const sendReport = useSendKpiReport();
   const [sendingStatus, setSendingStatus] = useState<string | null>(null);
@@ -343,13 +344,25 @@ export default function ClickUpReports() {
                               {m.is_auto ? (
                                 <span className="text-foreground">{autoValue(m.metric_key, store.storeId)}</span>
                               ) : (
-                                <EditableCell
-                                  value={entry?.value_text ?? ""}
-                                  placeholder="Type today's figure…"
-                                  onSave={(v) => upsertEntry.mutate({
-                                    store_id: store.storeId, entry_date: today, metric_key: m.metric_key, value_text: v,
-                                  })}
-                                />
+                                <div className="flex items-center gap-1">
+                                  <EditableCell
+                                    value={entry?.value_text ?? ""}
+                                    placeholder="Type today's figure…"
+                                    onSave={(v) => upsertEntry.mutate({
+                                      store_id: store.storeId, entry_date: today, metric_key: m.metric_key, value_text: v,
+                                    })}
+                                  />
+                                  {entry?.value_text && (
+                                    <button
+                                      type="button"
+                                      title="Delete this entry"
+                                      onClick={() => deleteEntry.mutate({ store_id: store.storeId, entry_date: today, metric_key: m.metric_key })}
+                                      className="shrink-0 p-1 text-muted-foreground hover:text-destructive"
+                                    >
+                                      <Trash2 size={12} />
+                                    </button>
+                                  )}
+                                </div>
                               )}
                             </td>
                             <td className="px-3 py-1.5 text-muted-foreground">
@@ -380,11 +393,41 @@ export default function ClickUpReports() {
                         {historyDates.map(date => (
                           <tr key={date} className="border-b last:border-b-0">
                             <td className="px-2 py-1 font-medium whitespace-nowrap sticky left-0 bg-background">{date}</td>
-                            {storeConfig.map(m => (
-                              <td key={m.id} className="px-2 py-1 whitespace-nowrap text-muted-foreground">
-                                {historyValue(m.metric_key, store.storeId, date, store.currencySymbol)}
-                              </td>
-                            ))}
+                            {storeConfig.map(m => {
+                              if (m.is_auto) {
+                                return (
+                                  <td key={m.id} className="px-2 py-1 whitespace-nowrap text-muted-foreground">
+                                    {historyValue(m.metric_key, store.storeId, date, store.currencySymbol)}
+                                  </td>
+                                );
+                              }
+                              const histEntry = entriesHistory.find(
+                                e => e.store_id === store.storeId && e.metric_key === m.metric_key && e.entry_date === date
+                              );
+                              return (
+                                <td key={m.id} className="px-1 py-0.5 whitespace-nowrap">
+                                  <div className="flex items-center gap-1">
+                                    <EditableCell
+                                      value={histEntry?.value_text ?? ""}
+                                      placeholder="—"
+                                      onSave={(v) => upsertEntry.mutate({
+                                        store_id: store.storeId, entry_date: date, metric_key: m.metric_key, value_text: v,
+                                      })}
+                                    />
+                                    {histEntry?.value_text && (
+                                      <button
+                                        type="button"
+                                        title="Delete this entry"
+                                        onClick={() => deleteEntry.mutate({ store_id: store.storeId, entry_date: date, metric_key: m.metric_key })}
+                                        className="shrink-0 p-1 text-muted-foreground hover:text-destructive"
+                                      >
+                                        <Trash2 size={11} />
+                                      </button>
+                                    )}
+                                  </div>
+                                </td>
+                              );
+                            })}
                           </tr>
                         ))}
                       </tbody>

@@ -65,6 +65,25 @@ export function useUpsertKpiEntry() {
   });
 }
 
+export function useDeleteKpiEntry() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { store_id: string; entry_date: string; metric_key: string }) => {
+      const { error } = await (supabase as any)
+        .from("daily_kpi_entries")
+        .delete()
+        .eq("store_id", input.store_id)
+        .eq("entry_date", input.entry_date)
+        .eq("metric_key", input.metric_key);
+      if (error) throw error;
+    },
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ["daily-kpi-entries", vars.entry_date] });
+      queryClient.invalidateQueries({ queryKey: ["daily-kpi-entries-range"] });
+    },
+  });
+}
+
 export function useUpdateKpiConfig() {
   const queryClient = useQueryClient();
   return useMutation({
