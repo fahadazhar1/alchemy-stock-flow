@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   type DateRangeKey, type DateBounds,
   getDateBounds, getCustomDateBounds,
@@ -38,6 +39,7 @@ function fmtCurrency(value: number, sym: string): string {
 }
 
 const HISTORY_DAYS = 15;
+const OWNER_NAMES = ["Fahad", "Nisar", "Saba", "Rabiya", "Rizwan"];
 
 // The last 15 calendar days before real today. The caller additionally
 // excludes whichever date is currently selected as "Actual" (gaEnd) — see
@@ -51,6 +53,23 @@ function last15Dates(): string[] {
     out.push(d.toISOString().slice(0, 10));
   }
   return out; // newest first
+}
+
+// ─── Owner cell — fixed-name dropdown, saves immediately on select (no
+// typing, no blur-to-save step to forget before a refresh) ─────────────────
+function OwnerCell({ value, onSave }: { value: string; onSave: (v: string) => void }) {
+  return (
+    <Select value={OWNER_NAMES.includes(value) ? value : undefined} onValueChange={onSave}>
+      <SelectTrigger className="h-7 text-xs border-transparent bg-transparent hover:border-input focus:border-input px-2">
+        <SelectValue placeholder="—" />
+      </SelectTrigger>
+      <SelectContent>
+        {OWNER_NAMES.map(name => (
+          <SelectItem key={name} value={name} className="text-xs">{name}</SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
 }
 
 // ─── Editable cell — inline input, saves on blur if changed ────────────────
@@ -338,9 +357,8 @@ export default function ClickUpReports() {
                           <tr key={m.id} className="border-b last:border-b-0">
                             <td className="px-3 py-1.5 font-medium">{m.metric_label}</td>
                             <td className="px-0.5 py-0.5">
-                              <EditableCell
+                              <OwnerCell
                                 value={m.owner}
-                                placeholder="—"
                                 onSave={(v) => updateConfig.mutate({ id: m.id, owner: v })}
                               />
                             </td>
