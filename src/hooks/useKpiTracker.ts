@@ -80,7 +80,12 @@ export function useUpdateKpiConfig() {
   });
 }
 
-export interface ShopifySessionRow { storeId: string; date: string; sessions: number; bounces: number; bounceRate: number; conversionRate: number }
+export interface ShopifySessionRow { storeId: string; date: string; sessions: number; bounces: number; conversions: number; bounceRate: number; conversionRate: number }
+
+// Wider than the 15-day History table window — needs to cover the page's
+// date-range filter bar (up to QTD, ~92 days) so "Bounce rate and CRO"
+// actually changes when the filter changes, not just the last 15 days.
+const SESSIONS_FETCH_DAYS = 95;
 
 /** Shopify's own first-party session/bounce-rate analytics (ShopifyQL) — the
  * KPI Tracker's bounce-rate source. GA4's bounceRate was found corrupted by a
@@ -88,18 +93,18 @@ export interface ShopifySessionRow { storeId: string; date: string; sessions: nu
  * shopify-sessions-sync and unaffected by that issue. */
 export function useShopifySessions() {
   return useQuery<ShopifySessionRow[]>({
-    queryKey: ["shopify-sessions-daily", HISTORY_DAYS],
+    queryKey: ["shopify-sessions-daily", SESSIONS_FETCH_DAYS],
     staleTime: 5 * 60_000,
     queryFn: async () => {
-      const cutoff = new Date(Date.now() - HISTORY_DAYS * 86_400_000).toISOString().slice(0, 10);
+      const cutoff = new Date(Date.now() - SESSIONS_FETCH_DAYS * 86_400_000).toISOString().slice(0, 10);
       const { data, error } = await (supabase as any)
         .from("shopify_sessions_daily")
-        .select("store_id, date, sessions, bounces, bounce_rate, conversion_rate")
+        .select("store_id, date, sessions, bounces, conversions, bounce_rate, conversion_rate")
         .gte("date", cutoff);
       if (error) throw error;
       return (data ?? []).map((r: any) => ({
-        storeId: r.store_id, date: r.date, sessions: Number(r.sessions),
-        bounces: Number(r.bounces), bounceRate: Number(r.bounce_rate), conversionRate: Number(r.conversion_rate),
+        storeId: r.store_id, date: r.date, sessions: Number(r.sessions), bounces: Number(r.bounces),
+        conversions: Number(r.conversions), bounceRate: Number(r.bounce_rate), conversionRate: Number(r.conversion_rate),
       }));
     },
   });

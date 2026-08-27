@@ -140,12 +140,21 @@ export default function ClickUpReports() {
       return `${sessions.toLocaleString()} sessions`;
     }
     if (metricKey === "bounce_cro") {
-      const s = shopifySessions.find(r => r.storeId === storeId && r.date === today);
-      if (!s) return "No data yet";
-      return `${(s.bounceRate * 100).toFixed(1)}% bounce · ${(s.conversionRate * 100).toFixed(2)}% CRO`;
+      // Follows the page's date-range filter bar (gaStart..gaEnd), same as
+      // Organic traffic above — aggregated as sum(bounces)/sum(sessions) and
+      // sum(conversions)/sum(sessions), not an average of daily rates.
+      const rows = shopifySessions.filter(r => r.storeId === storeId && r.date >= gaStart && r.date <= gaEnd);
+      if (rows.length === 0) return "No data yet";
+      const totalSessions = rows.reduce((s, r) => s + r.sessions, 0);
+      const totalBounces = rows.reduce((s, r) => s + r.bounces, 0);
+      const totalConversions = rows.reduce((s, r) => s + r.conversions, 0);
+      if (totalSessions === 0) return "No data yet";
+      const bounceRate = (totalBounces / totalSessions) * 100;
+      const cro = (totalConversions / totalSessions) * 100;
+      return `${bounceRate.toFixed(1)}% bounce · ${cro.toFixed(2)}% CRO`;
     }
     return "—";
-  }, [pulseToday, pulseMtd, channelRows, shopifySessions, today]);
+  }, [pulseToday, pulseMtd, channelRows, shopifySessions, gaStart, gaEnd]);
 
   const historyValue = useCallback((metricKey: string, storeId: string, date: string, sym: string): string => {
     if (metricKey === "sales") {

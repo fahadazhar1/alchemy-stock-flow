@@ -66,7 +66,7 @@ Deno.serve(async (req) => {
         const rows = await runShopifyQL(
           conn.shop_domain,
           conn.access_token,
-          `FROM sessions SHOW bounce_rate, bounces, sessions, conversion_rate TIMESERIES day SINCE ${since} UNTIL ${until}`
+          `FROM sessions SHOW bounce_rate, bounces, sessions, sessions_that_completed_checkout, conversion_rate TIMESERIES day SINCE ${since} UNTIL ${until}`
         );
         const upsertRows = rows.map((r: any) => ({
           store_id: conn.store_id,
@@ -74,6 +74,7 @@ Deno.serve(async (req) => {
           sessions: Math.round(Number(r.sessions ?? 0)),
           bounces: Math.round(Number(r.bounces ?? 0)),
           bounce_rate: Number(r.bounce_rate ?? 0),
+          conversions: Math.round(Number(r.sessions_that_completed_checkout ?? 0)),
           conversion_rate: Number(r.conversion_rate ?? 0),
           updated_at: new Date().toISOString(),
         }));
