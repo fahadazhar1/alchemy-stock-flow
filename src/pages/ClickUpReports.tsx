@@ -91,20 +91,26 @@ export default function ClickUpReports() {
   const gaEnd = isoToKarachiDate(bounds.endISO);
   const today = todayKarachiDate();
 
-  // The KPI table's "Sales (today and MTD)" row always shows both, independent
-  // of the page's date-range filter bar above (that filter only drives the
-  // Sales Pulse cards section, same as the Sales Pulse page itself).
-  const todayBounds = useMemo(() => getDateBounds("Today"), []);
-  const mtdBounds = useMemo(() => getDateBounds("MTD"), []);
-  const { data: pulseTodayRaw = [] } = useStoreSalesPulse(todayBounds, excludeShipping);
-  const { data: pulseMtdRaw = [] } = useStoreSalesPulse(mtdBounds, excludeShipping);
+  const { data: pulse = [], isLoading: pulseLoading, isFetching: pulseFetching, refetch: refetchPulse } = useStoreSalesPulse(bounds, excludeShipping);
+
+  // The KPI table's Sales row follows whatever the date filter bar above has
+  // selected — the "selected" slot is just `pulse` (already bounds-driven),
+  // and "MTD" is month-to-date up to the END of whatever's selected (e.g. if
+  // "25 Aug" is picked, MTD = 1–25 Aug), not always literal today's month.
+  const salesMtdBounds = useMemo<DateBounds>(() => {
+    const endDate = new Date(bounds.endISO);
+    const endKarachi = isoToKarachiDate(bounds.endISO); // "YYYY-MM-DD"
+    const [y, m] = endKarachi.split("-").map(Number);
+    const monthStart = new Date(Date.UTC(y, m - 1, 1, 12));
+    return getCustomDateBounds(monthStart, endDate);
+  }, [bounds.endISO]);
+  const { data: pulseMtdRaw = [] } = useStoreSalesPulse(salesMtdBounds, excludeShipping);
+
   // Same channel filter as the Sales Pulse cards above (controlled, lifted
   // into this page) — without this the KPI table's Sales row always summed
   // ALL channels regardless of what the dropdown had selected.
-  const pulseToday = useMemo(() => pulseTodayRaw.map(p => applyChannelFilter(p, channelFilter)), [pulseTodayRaw, channelFilter]);
+  const pulseSelected = useMemo(() => pulse.map(p => applyChannelFilter(p, channelFilter)), [pulse, channelFilter]);
   const pulseMtd = useMemo(() => pulseMtdRaw.map(p => applyChannelFilter(p, channelFilter)), [pulseMtdRaw, channelFilter]);
-
-  const { data: pulse = [], isLoading: pulseLoading, isFetching: pulseFetching, refetch: refetchPulse } = useStoreSalesPulse(bounds, excludeShipping);
   const { data: channelRows = [], isFetching: channelFetching } = useGa4ChannelSummary(gaStart, gaEnd);
   const { data: config = [], isLoading: configLoading } = useKpiConfig();
   const { data: entries = [], isLoading: entriesLoading } = useDailyKpiEntries(today);
@@ -131,13 +137,13 @@ export default function ClickUpReports() {
 
   const autoValue = useCallback((metricKey: string, storeId: string): string => {
     if (metricKey === "sales") {
-      const t = pulseToday.find(x => x.storeId === storeId);
+      const t = pulseSelected.find(x => x.storeId === storeId);
       const m = pulseMtd.find(x => x.storeId === storeId);
       if (!t && !m) return "—";
       const sym = t?.currencySymbol ?? m?.currencySymbol ?? "";
-      const todayStr = t ? `${fmtCurrency(t.revenue, sym)} (${t.orders})` : "—";
+      const selectedStr = t ? `${fmtCurrency(t.revenue, sym)} (${t.orders})` : "—";
       const mtdStr = m ? `${fmtCurrency(m.revenue, sym)} (${m.orders})` : "—";
-      return `Today: ${todayStr} · MTD: ${mtdStr}`;
+      return `${bounds.label}: ${selectedStr} · MTD: ${mtdStr}`;
     }
     if (metricKey === "organic_traffic") {
       const sessions = channelRows
@@ -166,7 +172,7 @@ export default function ClickUpReports() {
       return `${bounceRate.toFixed(1)}% bounce · ${cro.toFixed(2)}% CRO${partial ? ` (from ${earliestAvailable})` : ""}`;
     }
     return "—";
-  }, [pulseToday, pulseMtd, channelRows, shopifySessions, gaStart, gaEnd]);
+  }, [pulseSelected, pulseMtd, bounds.label, channelRows, shopifySessions, gaStart, gaEnd]);
 
   const historyValue = useCallback((metricKey: string, storeId: string, date: string, sym: string): string => {
     if (metricKey === "sales") {
@@ -218,7 +224,7 @@ export default function ClickUpReports() {
             {isRefreshing && <Loader2 size={14} className="animate-spin text-muted-foreground" />}
           </div>
           <p className="text-sm text-muted-foreground">
-            Daily KPI tracker, store-wise · Sales row always shows Today + MTD · Organic traffic/Bounce/CRO follow <span className="font-medium">{bounds.label}</span> below · manual fields are for {today}
+            Daily KPI tracker, store-wise · Sales/Organic traffic/Bounce/CRO follow <span className="font-medium">{bounds.label}</span> (Sales also shows MTD up to that date) · manual fields are for {today}
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -304,14 +310,7 @@ export default function ClickUpReports() {
                             </td>
                             <td className="px-3 py-1.5">
                               {m.is_auto ? (
-                                <div>
-                                  <span className="text-foreground">{autoValue(m.metric_key, store.storeId)}</span>
-                                  {m.metric_key === "sales" && (
-                                    <div className="text-[10px] text-muted-foreground mt-0.5">
-                                      Always literal Today ({today}) + this month — ignores the date filter above
-                                    </div>
-                                  )}
-                                </div>
+                                <span className="text-foreground">{autoValue(m.metric_key, store.storeId)}</span>
                               ) : (
                                 <EditableCell
                                   value={entry?.value_text ?? ""}
