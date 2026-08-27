@@ -95,20 +95,24 @@ Deno.serve(async (req) => {
         .filter((r: any) => r.store_id === store.id && r.channel_group === "Organic Search")
         .reduce((s: number, r: any) => s + Number(r.sessions), 0);
 
-      // Bounce rate + CRO — today, GA4 daily metrics.
-      const { data: ga4Rows } = await supabase.rpc("get_ga4_monthly_summary", {
-        p_start_date: date, p_end_date: date,
-      });
-      const ga4Today = (ga4Rows ?? []).find((r: any) => r.store_id === store.id);
-      const bounceRate = ga4Today ? Number(ga4Today.avg_bounce_rate) * 100 : null;
-      const cro = ga4Today && Number(ga4Today.sessions) > 0
-        ? (Number(ga4Today.conversions) / Number(ga4Today.sessions)) * 100 : null;
+      // Bounce rate + CRO — today, Shopify's own session analytics (ShopifyQL,
+      // synced via shopify-sessions-sync). NOT GA4 — GA4's bounceRate was
+      // found corrupted by a broken Web Pixel sandbox tag (near-100% bounce
+      // site-wide from 2026-08-25), traced via landing-page breakdown to
+      // phantom /web-pixels@.../sandbox/ sessions. Shopify's native tracking
+      // is unaffected by that tag issue.
+      const { data: sessionRow } = await supabase
+        .from("shopify_sessions_daily")
+        .select("bounce_rate, conversion_rate")
+        .eq("store_id", store.id).eq("date", date).maybeSingle();
+      const bounceRate = sessionRow ? Number(sessionRow.bounce_rate) * 100 : null;
+      const cro = sessionRow ? Number(sessionRow.conversion_rate) * 100 : null;
 
       const sym = store.currency_symbol ?? "";
       const autoValues: Record<string, string> = {
         sales: `Today: ${sym}${todayRevenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${todayOrders}) · MTD: ${sym}${mtdRevenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${mtdOrders})`,
         organic_traffic: `${organicToday} sessions`,
-        bounce_cro: bounceRate === null ? "No GA4 data" : `${bounceRate.toFixed(1)}% bounce · ${cro!.toFixed(2)}% CRO`,
+        bounce_cro: bounceRate === null ? "No data yet" : `${bounceRate.toFixed(1)}% bounce · ${cro!.toFixed(2)}% CRO`,
       };
 
       const storeConfig = (configRows ?? []).filter((c: any) => c.store_id === store.id);

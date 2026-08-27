@@ -10,10 +10,10 @@ import {
   getDateBounds, getCustomDateBounds,
 } from "@/lib/dateRanges";
 import { useStoreSalesPulse } from "@/hooks/useStoreSalesPulse";
-import { useGa4ChannelSummary, useGa4MonthlySummary } from "@/hooks/useGa4";
+import { useGa4ChannelSummary } from "@/hooks/useGa4";
 import {
   useKpiConfig, useDailyKpiEntries, useUpsertKpiEntry, useUpdateKpiConfig, useSendKpiReport,
-  useKpiSalesHistory, useKpiGa4History, useDailyKpiEntriesHistory,
+  useKpiSalesHistory, useKpiGa4History, useDailyKpiEntriesHistory, useShopifySessions,
   type KpiMetricConfig,
 } from "@/hooks/useKpiTracker";
 import { DateRangePicker, SalesPulseSection } from "@/pages/StorePerformanceDashboard";
@@ -100,12 +100,12 @@ export default function ClickUpReports() {
 
   const { data: pulse = [], isLoading: pulseLoading, isFetching: pulseFetching, refetch: refetchPulse } = useStoreSalesPulse(bounds, excludeShipping);
   const { data: channelRows = [], isFetching: channelFetching } = useGa4ChannelSummary(gaStart, gaEnd);
-  const { data: ga4Rows = [], isFetching: ga4Fetching } = useGa4MonthlySummary(gaStart, gaEnd);
   const { data: config = [], isLoading: configLoading } = useKpiConfig();
   const { data: entries = [], isLoading: entriesLoading } = useDailyKpiEntries(today);
   const { data: salesHistory = [] } = useKpiSalesHistory();
   const { data: ga4History = [] } = useKpiGa4History();
   const { data: entriesHistory = [] } = useDailyKpiEntriesHistory();
+  const { data: shopifySessions = [], isFetching: sessionsFetching } = useShopifySessions();
   const historyDates = useMemo(() => last15Dates(), []);
 
   const upsertEntry = useUpsertKpiEntry();
@@ -140,13 +140,12 @@ export default function ClickUpReports() {
       return `${sessions.toLocaleString()} sessions`;
     }
     if (metricKey === "bounce_cro") {
-      const g = ga4Rows.find(r => r.storeId === storeId);
-      if (!g || !g.hasSynced) return "No GA4 data";
-      const cro = g.sessions > 0 ? (g.conversions / g.sessions) * 100 : 0;
-      return `${(g.avgBounceRate * 100).toFixed(1)}% bounce · ${cro.toFixed(2)}% CRO`;
+      const s = shopifySessions.find(r => r.storeId === storeId && r.date === today);
+      if (!s) return "No data yet";
+      return `${(s.bounceRate * 100).toFixed(1)}% bounce · ${(s.conversionRate * 100).toFixed(2)}% CRO`;
     }
     return "—";
-  }, [pulseToday, pulseMtd, channelRows, ga4Rows]);
+  }, [pulseToday, pulseMtd, channelRows, shopifySessions, today]);
 
   const historyValue = useCallback((metricKey: string, storeId: string, date: string, sym: string): string => {
     if (metricKey === "sales") {
@@ -159,16 +158,15 @@ export default function ClickUpReports() {
       return row ? `${row.organicSessions.toLocaleString()}` : "—";
     }
     if (metricKey === "bounce_cro") {
-      const row = ga4History.find(r => r.storeId === storeId && r.day === date);
+      const row = shopifySessions.find(r => r.storeId === storeId && r.date === date);
       if (!row) return "—";
-      const cro = row.sessions > 0 ? (row.conversions / row.sessions) * 100 : 0;
-      return `${(row.bounceRate * 100).toFixed(1)}% / ${cro.toFixed(1)}%`;
+      return `${(row.bounceRate * 100).toFixed(1)}% / ${(row.conversionRate * 100).toFixed(2)}%`;
     }
     const entry = entriesHistory.find(e => e.store_id === storeId && e.metric_key === metricKey && e.entry_date === date);
     return entry?.value_text || "—";
-  }, [salesHistory, ga4History, entriesHistory]);
+  }, [salesHistory, ga4History, entriesHistory, shopifySessions]);
 
-  const isRefreshing = pulseFetching || channelFetching || ga4Fetching;
+  const isRefreshing = pulseFetching || channelFetching || sessionsFetching;
   const loading = pulseLoading || configLoading || entriesLoading;
 
   async function handleSend() {

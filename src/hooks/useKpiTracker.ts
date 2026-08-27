@@ -80,6 +80,31 @@ export function useUpdateKpiConfig() {
   });
 }
 
+export interface ShopifySessionRow { storeId: string; date: string; sessions: number; bounces: number; bounceRate: number; conversionRate: number }
+
+/** Shopify's own first-party session/bounce-rate analytics (ShopifyQL) — the
+ * KPI Tracker's bounce-rate source. GA4's bounceRate was found corrupted by a
+ * broken Web Pixel sandbox tag; this table is synced independently via
+ * shopify-sessions-sync and unaffected by that issue. */
+export function useShopifySessions() {
+  return useQuery<ShopifySessionRow[]>({
+    queryKey: ["shopify-sessions-daily", HISTORY_DAYS],
+    staleTime: 5 * 60_000,
+    queryFn: async () => {
+      const cutoff = new Date(Date.now() - HISTORY_DAYS * 86_400_000).toISOString().slice(0, 10);
+      const { data, error } = await (supabase as any)
+        .from("shopify_sessions_daily")
+        .select("store_id, date, sessions, bounces, bounce_rate, conversion_rate")
+        .gte("date", cutoff);
+      if (error) throw error;
+      return (data ?? []).map((r: any) => ({
+        storeId: r.store_id, date: r.date, sessions: Number(r.sessions),
+        bounces: Number(r.bounces), bounceRate: Number(r.bounce_rate), conversionRate: Number(r.conversion_rate),
+      }));
+    },
+  });
+}
+
 export interface KpiSalesHistoryRow { storeId: string; day: string; revenue: number; orders: number }
 export interface Ga4DailyHistoryRow { storeId: string; day: string; sessions: number; bounceRate: number; conversions: number; organicSessions: number }
 
