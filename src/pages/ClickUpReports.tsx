@@ -149,7 +149,8 @@ export default function ClickUpReports() {
       // Follows the page's date-range filter bar (gaStart..gaEnd), same as
       // Organic traffic above — aggregated as sum(bounces)/sum(sessions) and
       // sum(conversions)/sum(sessions), not an average of daily rates.
-      const rows = shopifySessions.filter(r => r.storeId === storeId && r.date >= gaStart && r.date <= gaEnd);
+      const storeRows = shopifySessions.filter(r => r.storeId === storeId);
+      const rows = storeRows.filter(r => r.date >= gaStart && r.date <= gaEnd);
       if (rows.length === 0) return "No data yet";
       const totalSessions = rows.reduce((s, r) => s + r.sessions, 0);
       const totalBounces = rows.reduce((s, r) => s + r.bounces, 0);
@@ -157,7 +158,12 @@ export default function ClickUpReports() {
       if (totalSessions === 0) return "No data yet";
       const bounceRate = (totalBounces / totalSessions) * 100;
       const cro = (totalConversions / totalSessions) * 100;
-      return `${bounceRate.toFixed(1)}% bounce · ${cro.toFixed(2)}% CRO`;
+      // shopify_sessions_daily only carries a rolling ~95-day window — flag it
+      // rather than silently showing a partial figure for a longer range
+      // (QTD/YTD) as if it covered the whole requested period.
+      const earliestAvailable = storeRows.reduce((min, r) => (r.date < min ? r.date : min), rows[0].date);
+      const partial = earliestAvailable > gaStart;
+      return `${bounceRate.toFixed(1)}% bounce · ${cro.toFixed(2)}% CRO${partial ? ` (from ${earliestAvailable})` : ""}`;
     }
     return "—";
   }, [pulseToday, pulseMtd, channelRows, shopifySessions, gaStart, gaEnd]);
@@ -212,7 +218,7 @@ export default function ClickUpReports() {
             {isRefreshing && <Loader2 size={14} className="animate-spin text-muted-foreground" />}
           </div>
           <p className="text-sm text-muted-foreground">
-            Daily KPI tracker, store-wise · <span className="font-medium">{bounds.label}</span> for Sales/Traffic · manual fields are for {today}
+            Daily KPI tracker, store-wise · Sales row always shows Today + MTD · Organic traffic/Bounce/CRO follow <span className="font-medium">{bounds.label}</span> below · manual fields are for {today}
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -298,7 +304,14 @@ export default function ClickUpReports() {
                             </td>
                             <td className="px-3 py-1.5">
                               {m.is_auto ? (
-                                <span className="text-foreground">{autoValue(m.metric_key, store.storeId)}</span>
+                                <div>
+                                  <span className="text-foreground">{autoValue(m.metric_key, store.storeId)}</span>
+                                  {m.metric_key === "sales" && (
+                                    <div className="text-[10px] text-muted-foreground mt-0.5">
+                                      Always literal Today ({today}) + this month — ignores the date filter above
+                                    </div>
+                                  )}
+                                </div>
                               ) : (
                                 <EditableCell
                                   value={entry?.value_text ?? ""}
