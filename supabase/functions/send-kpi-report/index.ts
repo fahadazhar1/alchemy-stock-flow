@@ -2,10 +2,15 @@
 // DM, one message per store, sent sequentially with a delay (ClickUp's chat API
 // rate-limits back-to-back sends — see project_clickup_daily_report memory).
 //
-// Sales / Organic traffic / Bounce rate+CRO are computed live here (same source
-// tables the Sales Pulse / P&L GA4 section already use) — never read back from
-// daily_kpi_entries, so there's nothing that can drift out of sync. Every other
-// metric is whatever the team typed into daily_kpi_entries for the given date.
+// `date` is whatever date is selected in the frontend's date filter bar (the
+// page passes its own gaEnd, not necessarily literal "today") — the report's
+// title and every "Actual" figure are for that single day; "MTD" is always
+// month-start through that same date. Sales / Organic traffic / Bounce
+// rate+CRO are computed live here (same source tables the Sales Pulse / P&L
+// GA4 section already use) — never read back from daily_kpi_entries, so
+// there's nothing that can drift out of sync. Every other metric is whatever
+// the team typed into daily_kpi_entries for the given date (Actual) or summed
+// across the month (MTD).
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 
 const corsHeaders = {
@@ -35,9 +40,25 @@ function dayBoundsUTC(dateStr: string, offsetHours: number) {
   return { startISO: start.toISOString(), endISO: end.toISOString() };
 }
 
+function monthStartDateStr(dateStr: string): string {
+  return `${dateStr.slice(0, 7)}-01`;
+}
+
 function monthStartUTC(dateStr: string, offsetHours: number) {
-  const monthStartLocal = `${dateStr.slice(0, 7)}-01`;
-  return dayBoundsUTC(monthStartLocal, offsetHours).startISO;
+  return dayBoundsUTC(monthStartDateStr(dateStr), offsetHours).startISO;
+}
+
+function fmtMoney(sym: string, n: number): string {
+  return `${sym}${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function aggregateBounce(rows: any[]): string {
+  if (rows.length === 0) return "No data yet";
+  const sessions = rows.reduce((s, r) => s + Number(r.sessions), 0);
+  const bounces = rows.reduce((s, r) => s + Number(r.bounces), 0);
+  const conversions = rows.reduce((s, r) => s + Number(r.conversions), 0);
+  if (sessions === 0) return "No data yet";
+  return `${((bounces / sessions) * 100).toFixed(1)}% bounce · ${((conversions / sessions) * 100).toFixed(2)}% CRO`;
 }
 
 async function sleep(ms: number) {
@@ -48,10 +69,11 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const { date } = await req.json(); // "YYYY-MM-DD", the local calendar date being reported
+    const { date } = await req.json(); // "YYYY-MM-DD" — the date selected in the page's filter bar
     if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return new Response(JSON.stringify({ error: "date must be YYYY-MM-DD" }), { status: 400, headers: corsHeaders });
     }
+    const mtdStartDate = monthStartDateStr(date);
 
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE);
 
@@ -67,6 +89,19 @@ Deno.serve(async (req) => {
       .from("daily_kpi_entries").select("*").eq("entry_date", date);
     if (entryErr) throw entryErr;
 
+    const { data: entryMtdRows, error: entryMtdErr } = await supabase
+      .from("daily_kpi_entries").select("*").gte("entry_date", mtdStartDate).lte("entry_date", date);
+    if (entryMtdErr) throw entryMtdErr;
+
+    const { data: sessionMtdRows, error: sessionMtdErr } = await supabase
+      .from("shopify_sessions_daily").select("store_id, sessions, bounces, conversions")
+      .gte("date", mtdStartDate).lte("date", date);
+    if (sessionMtdErr) throw sessionMtdErr;
+
+    const { data: channelMtdRows } = await supabase.rpc("get_ga4_channel_summary", {
+      p_start_date: mtdStartDate, p_end_date: date,
+    });
+
     const results: Record<string, unknown> = {};
 
     for (const store of stores ?? []) {
@@ -74,28 +109,32 @@ Deno.serve(async (req) => {
       const today = dayBoundsUTC(date, offset);
       const mtdStart = monthStartUTC(date, offset);
 
-      // Sales — today + MTD, all channels, shipping included (matches the Sales
-      // Pulse card's default toggle state: "Exclude shipping" off).
+      // Sales — the selected day + MTD, all channels, shipping included
+      // (matches the Sales Pulse card's default toggle state: "Exclude
+      // shipping" off).
       const { data: salesRows } = await supabase.rpc("get_store_period_channel_sales", {
         p_start_iso: today.startISO, p_end_iso: today.endISO,
         p_prev_start_iso: mtdStart, p_prev_end_iso: today.endISO,
       });
-      let todayRevenue = 0, todayOrders = 0, mtdRevenue = 0, mtdOrders = 0;
+      let dayRevenue = 0, dayOrders = 0, mtdRevenue = 0, mtdOrders = 0;
       for (const r of salesRows ?? []) {
         if (r.store_id !== store.id) continue;
-        if (r.bucket === "cur") { todayRevenue += Number(r.revenue); todayOrders += Number(r.orders); }
+        if (r.bucket === "cur") { dayRevenue += Number(r.revenue); dayOrders += Number(r.orders); }
         if (r.bucket === "prev") { mtdRevenue += Number(r.revenue); mtdOrders += Number(r.orders); }
       }
 
-      // Organic traffic — today, GA4 "Organic Search" channel.
+      // Organic traffic — selected day, GA4 "Organic Search" channel.
       const { data: channelRows } = await supabase.rpc("get_ga4_channel_summary", {
         p_start_date: date, p_end_date: date,
       });
-      const organicToday = (channelRows ?? [])
+      const organicDay = (channelRows ?? [])
+        .filter((r: any) => r.store_id === store.id && r.channel_group === "Organic Search")
+        .reduce((s: number, r: any) => s + Number(r.sessions), 0);
+      const organicMtd = (channelMtdRows ?? [])
         .filter((r: any) => r.store_id === store.id && r.channel_group === "Organic Search")
         .reduce((s: number, r: any) => s + Number(r.sessions), 0);
 
-      // Bounce rate + CRO — today, Shopify's own session analytics (ShopifyQL,
+      // Bounce rate + CRO — Shopify's own session analytics (ShopifyQL,
       // synced via shopify-sessions-sync). NOT GA4 — GA4's bounceRate was
       // found corrupted by a broken Web Pixel sandbox tag (near-100% bounce
       // site-wide from 2026-08-25), traced via landing-page breakdown to
@@ -103,28 +142,47 @@ Deno.serve(async (req) => {
       // is unaffected by that tag issue.
       const { data: sessionRow } = await supabase
         .from("shopify_sessions_daily")
-        .select("bounce_rate, conversion_rate")
+        .select("sessions, bounces, conversions")
         .eq("store_id", store.id).eq("date", date).maybeSingle();
-      const bounceRate = sessionRow ? Number(sessionRow.bounce_rate) * 100 : null;
-      const cro = sessionRow ? Number(sessionRow.conversion_rate) * 100 : null;
+      const bounceDay = sessionRow ? aggregateBounce([sessionRow]) : "No data yet";
+      const bounceMtd = aggregateBounce((sessionMtdRows ?? []).filter((r: any) => r.store_id === store.id));
 
       const sym = store.currency_symbol ?? "";
-      const autoValues: Record<string, string> = {
-        sales: `Today: ${sym}${todayRevenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${todayOrders}) · MTD: ${sym}${mtdRevenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${mtdOrders})`,
-        organic_traffic: `${organicToday} sessions`,
-        bounce_cro: bounceRate === null ? "No data yet" : `${bounceRate.toFixed(1)}% bounce · ${cro!.toFixed(2)}% CRO`,
+      const actualValues: Record<string, string> = {
+        sales: `${fmtMoney(sym, dayRevenue)} (${dayOrders})`,
+        organic_traffic: `${organicDay} sessions`,
+        bounce_cro: bounceDay,
+      };
+      const mtdValues: Record<string, string> = {
+        sales: `${fmtMoney(sym, mtdRevenue)} (${mtdOrders})`,
+        organic_traffic: `${organicMtd} sessions`,
+        bounce_cro: bounceMtd,
       };
 
       const storeConfig = (configRows ?? []).filter((c: any) => c.store_id === store.id);
       const storeEntries = new Map(
         (entryRows ?? []).filter((e: any) => e.store_id === store.id).map((e: any) => [e.metric_key, e.value_text])
       );
+      const storeMtdEntries = (entryMtdRows ?? []).filter((e: any) => e.store_id === store.id);
 
       let msg = `## ${store.store_name} — Daily KPI Report (${date})\n\n`;
-      msg += `| Metric | Owner | Target | Actual | Reviewed |\n|---|---|---|---|---|\n`;
+      msg += `| Metric | Owner | Target | Actual | MTD | Reviewed |\n`;
+      msg += `|---|---|---|---|---|---|\n`;
       for (const c of storeConfig) {
-        const actual = c.is_auto ? (autoValues[c.metric_key] ?? "—") : (storeEntries.get(c.metric_key) || "—");
-        msg += `| ${c.metric_label} | ${c.owner || "—"} | ${c.target || "—"} | ${actual} | Daily |\n`;
+        let actual: string;
+        let mtd: string;
+        if (c.is_auto) {
+          actual = actualValues[c.metric_key] ?? "—";
+          mtd = mtdValues[c.metric_key] ?? "—";
+        } else {
+          actual = storeEntries.get(c.metric_key) || "—";
+          const nums = storeMtdEntries
+            .filter((e: any) => e.metric_key === c.metric_key)
+            .map((e: any) => parseFloat(e.value_text))
+            .filter((n: number) => !Number.isNaN(n));
+          mtd = nums.length > 0 ? nums.reduce((s: number, n: number) => s + n, 0).toLocaleString() : "—";
+        }
+        msg += `| ${c.metric_label} | ${c.owner || "—"} | ${c.target || "—"} | ${actual} | ${mtd} | Daily |\n`;
       }
 
       const res = await fetch(`https://api.clickup.com/api/v3/workspaces/9015071612/chat/channels/${CLICKUP_CHANNEL_ID}/messages`, {

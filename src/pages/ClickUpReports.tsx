@@ -226,12 +226,15 @@ export default function ClickUpReports() {
   async function handleSend() {
     setSendingStatus("sending");
     try {
-      const result: any = await sendReport.mutateAsync(today);
+      // Sends the currently-selected date (gaEnd), not always literal today —
+      // the ClickUp report's title/Actual column reflect whatever's picked in
+      // the filter bar above, same as the on-page Actual column.
+      const result: any = await sendReport.mutateAsync(gaEnd);
       const failed = Object.entries(result?.results ?? {}).filter(([, v]: any) => !v.sent);
       if (failed.length > 0) {
         toast.error(`Sent with ${failed.length} failure(s) — check ClickUp`);
       } else {
-        toast.success("KPI report sent to ClickUp");
+        toast.success(`KPI report for ${gaEnd} sent to ClickUp`);
       }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to send report");
