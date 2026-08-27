@@ -3,6 +3,7 @@ import {
   BarChart3, Truck, CheckSquare, FlaskConical, Clock, Settings, BookOpen, Store,
   ShoppingCart, BarChart2, ListOrdered, Activity, LogOut, ChevronRight, History,
   PackageCheck, ClipboardList, Tag, Archive, PackageOpen, PackagePlus, Search, Globe2, Gift, Wallet,
+  MessageSquare,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
@@ -20,6 +21,7 @@ const navItems = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
   { title: "Store Performance - WIP", url: "/store-performance", icon: Globe2 },
   { title: "P&L", url: "/pnl", icon: Wallet },
+  { title: "ClickUp Reports", url: "/clickup-reports", icon: MessageSquare },
   { title: "Orders",    url: "/orders",    icon: ShoppingCart },
   { title: "Reports",   url: "/reports",   icon: BarChart2 },
   {

@@ -225,7 +225,7 @@ const RANGE_OPTS: { key: DateRangeKey; label: string }[] = [
   { key: "YTD",    label: "YTD" },
 ];
 
-function DateRangePicker({ range, onRangeChange, customFrom, customTo, onCustomChange }: {
+export function DateRangePicker({ range, onRangeChange, customFrom, customTo, onCustomChange }: {
   range: DateRangeKey;
   onRangeChange: (r: DateRangeKey) => void;
   customFrom: Date | null;
@@ -765,7 +765,7 @@ function ChannelMultiSelect({ options, selected, onChange }: {
   );
 }
 
-function SalesPulseSection({ pulse, loading, bounds, range, excludeShipping, onExcludeShippingChange }: {
+export function SalesPulseSection({ pulse, loading, bounds, range, excludeShipping, onExcludeShippingChange }: {
   pulse: StoreSalesPulse[];
   loading: boolean;
   bounds: DateBounds;

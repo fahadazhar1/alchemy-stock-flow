@@ -34,6 +34,7 @@ import BundleBuilder from "@/pages/BundleBuilder";
 import SEOAudit from "@/pages/SEOAudit";
 import StorePerformanceDashboard from "@/pages/StorePerformanceDashboard";
 import PnLDashboard from "@/pages/PnLDashboard";
+import ClickUpReports from "@/pages/ClickUpReports";
 import FbtBundleSettings from "@/pages/FbtBundleSettings";
 import Login from "@/pages/Login";
 import NotFound from "@/pages/NotFound";
@@ -107,6 +108,7 @@ function AppRoutes() {
           <Route path="/seo-audit" element={<SEOAudit />} />
           <Route path="/store-performance" element={<StorePerformanceDashboard />} />
           <Route path="/pnl" element={<PnLDashboard />} />
+          <Route path="/clickup-reports" element={<ClickUpReports />} />
         </Route>
       </Route>
       <Route path="*" element={<NotFound />} />
