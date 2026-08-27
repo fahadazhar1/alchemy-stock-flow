@@ -12,12 +12,15 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
-import { formatCurrency } from "@/lib/timezone";
+import { useCurrency } from "@/hooks/useCurrency";
 import { exportToCSV } from "@/lib/export";
 import { toast } from "sonner";
-import { Download, RotateCcw, Search, ExternalLink, XCircle, Warehouse, PackagePlus, Pencil, Check, X } from "lucide-react";
+import { Download, RotateCcw, Search, ExternalLink, XCircle, Warehouse, PackagePlus, Pencil, Check, X, RefreshCw } from "lucide-react";
+import { Progress } from "@/components/ui/progress";
+import { useCollectionRefresh } from "@/hooks/useCollectionRefresh";
 import { DateRangeFilter, matchesDateFilter } from "@/components/DateRangeFilter";
 import { useStoreFilter } from "@/hooks/useStoreFilter";
+import { useAuth } from "@/contexts/AuthContext";
 
 const PAGE_SIZE = 20;
 
@@ -43,13 +46,17 @@ interface PriceEditData {
 }
 
 export default function ProductMaster() {
+  const { formatCurrency } = useCurrency();
   const { storeId } = useStoreFilter();
+  const { user } = useAuth();
   const [page, setPage] = useState(0);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [collectionFilter, setCollectionFilter] = useState("all");
   const [vendorFilter, setVendorFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [inventoryFilter, setInventoryFilter] = useState("all");
   const [filterDates, setFilterDates] = useState<Date[]>([]);
   const [filterMonths, setFilterMonths] = useState<number[]>([]);
   const [filterYears, setFilterYears] = useState<number[]>([]);
@@ -65,6 +72,9 @@ export default function ProductMaster() {
   const [adjustLocations, setAdjustLocations] = useState<Array<{ id: string; name: string }>>([]);
   const [adjustError, setAdjustError] = useState("");
   const [adjustLoading, setAdjustLoading] = useState(false);
+  const [resyncing, setResyncing] = useState(false);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [exportingFull, setExportingFull] = useState(false);
 
   // Price edit state
   const [priceEditData, setPriceEditData] = useState<PriceEditData | null>(null);
@@ -81,56 +91,74 @@ export default function ProductMaster() {
   }, [priceEditData?.productId]);
 
   const { data: collections } = useQuery({
-    queryKey: ["filter-collections"],
+    queryKey: ["filter-collections", storeId],
     queryFn: async () => {
-      const { data } = await supabase.from("collections").select("id, name").order("name");
-      return data ?? [];
+      if (!storeId) return [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data } = await (supabase as any).rpc("get_store_collections", { p_store_id: storeId });
+      return ((data ?? []) as { name: string }[]).map(c => ({ name: c.name }));
     },
   });
+
+  const { progress: collRefreshProgress, isRefreshing: isRefreshingCollections, label: collRefreshLabel, refresh: refreshCollections } =
+    useCollectionRefresh(storeId, [["filter-collections", storeId]]);
 
   const { data: vendors } = useQuery({
-    queryKey: ["filter-vendors"],
+    queryKey: ["filter-vendors", storeId],
     queryFn: async () => {
-      const { data } = await supabase.from("vendors").select("id, name").order("name");
-      return data ?? [];
-    },
-  });
-
-  const { data: storeProductIds } = useQuery({
-    queryKey: ["store-product-ids", storeId],
-    enabled: !!storeId,
-    queryFn: async () => {
-      const { data } = await supabase.from("products").select("id").eq("store_id", storeId!);
-      return new Set((data ?? []).map(p => p.id));
+      let q = supabase.from("v_product_inventory_summary").select("vendor_name");
+      if (storeId) q = q.eq("store_id", storeId);
+      const { data } = await q;
+      const names = [...new Set((data ?? []).map(d => d.vendor_name).filter(Boolean))].sort() as string[];
+      return names.map(name => ({ name }));
     },
   });
 
   const { data: productTypes } = useQuery({
-    queryKey: ["filter-product-types"],
+    queryKey: ["filter-product-types", storeId],
     queryFn: async () => {
-      const { data } = await supabase.from("v_product_inventory_summary").select("product_type");
+      let q = supabase.from("v_product_inventory_summary").select("product_type");
+      if (storeId) q = q.eq("store_id", storeId);
+      const { data } = await q;
       const types = [...new Set((data ?? []).map(d => d.product_type).filter(Boolean))];
       return types.sort();
     },
   });
 
   const { data, isLoading } = useQuery({
-    queryKey: ["products", page, search, collectionFilter, vendorFilter, typeFilter, storeId],
+    queryKey: ["products", page, search, collectionFilter, vendorFilter, typeFilter, statusFilter, inventoryFilter, storeId],
     queryFn: async () => {
       try {
+        let collectionProductIds: string[] | null = null;
+        if (collectionFilter !== "all" && storeId) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { data: ids } = await (supabase as any).rpc("get_collection_product_ids", {
+            p_collection_name: collectionFilter,
+            p_store_id: storeId,
+          });
+          collectionProductIds = ((ids ?? []) as { product_id: string }[]).map(r => r.product_id);
+        }
+
         let q = supabase.from("v_product_inventory_summary").select("*", { count: "exact" });
+        if (storeId) q = q.eq("store_id", storeId);
+        q = q
+          .or('collection_name.is.null,collection_name.neq.Trending Now')
+          .or('collection_name.is.null,collection_name.neq.Top Selling');
         if (search) q = q.or(`product_name.ilike.%${search}%,sku.ilike.%${search}%`);
-        if (collectionFilter !== "all") q = q.eq("collection_name", collectionFilter);
+        if (collectionProductIds !== null) {
+          if (!collectionProductIds.length) return { data: [], count: 0 };
+          q = q.in("product_id", collectionProductIds);
+        }
         if (vendorFilter !== "all") q = q.eq("vendor_name", vendorFilter);
         if (typeFilter !== "all") q = q.eq("product_type", typeFilter);
+        if (statusFilter !== "all") q = q.eq("product_status", statusFilter);
+        if (inventoryFilter === "in_stock") q = q.gt("total_inventory", 0);
+        else if (inventoryFilter === "out_of_stock") q = q.lte("total_inventory", 0);
+        else if (inventoryFilter === "low_stock") q = q.gt("total_inventory", 0).lte("total_inventory", 10);
         q = q.order("created_at", { ascending: false }).range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
         const { data, error, count } = await q;
         if (error) throw error;
-        let filtered = data ?? [];
-        if (storeId && storeProductIds) {
-          filtered = filtered.filter(p => p.product_id && storeProductIds.has(p.product_id));
-        }
-        return { data: filtered, count: storeId && storeProductIds ? filtered.length : (count ?? 0) };
+        return { data: data ?? [], count: count ?? 0 };
       } catch (e) {
         toast.error("Failed to load products");
         return { data: [], count: 0 };
@@ -203,58 +231,143 @@ export default function ProductMaster() {
 
   const handleRevert = async (productId: string) => {
     try {
-      const { data: variants } = await supabase.from("variants").select("id").eq("product_id", productId);
-      const variantIds = (variants ?? []).map((v: any) => v.id);
-      const { data: campaignItem } = await supabase.from("pricing_campaign_items").select("campaign_id")
-        .in("variant_id", variantIds).eq("action_status", "applied").limit(1).maybeSingle();
+      if (!shopifyConn?.id) { toast.error("No active Shopify connection"); return; }
+
       const { error: revertErr } = await supabase.rpc("revert_variant_pricing", { p_product_id: productId });
       if (revertErr) throw revertErr;
-      if (campaignItem?.campaign_id) {
+
+      // Push the now-reverted price straight to Shopify for every variant on this product —
+      // no campaign required. This is the fix: previously this only ran if an "applied"
+      // campaign item existed, so a revert with no active/linked campaign silently never
+      // reached Shopify while still showing a success toast.
+      const { data: variants, error: fetchErr } = await supabase
+        .from("variants")
+        .select("shopify_variant_id, price")
+        .eq("product_id", productId);
+      if (fetchErr) throw fetchErr;
+
+      const targets = (variants ?? []).filter((v: any) => v.shopify_variant_id);
+      let failed = 0;
+      for (const v of targets) {
         const { data: syncResult, error: syncErr } = await supabase.functions.invoke("shopify-sync", {
-          body: { action: "revert_prices", campaign_id: campaignItem.campaign_id }
+          body: {
+            action: "edit_price",
+            connection_id: shopifyConn.id,
+            shopify_variant_id: v.shopify_variant_id,
+            new_price: v.price,
+            new_compare_at_price: null,
+          },
         });
-        if (syncErr) throw syncErr;
-        if (!syncResult?.ok) throw new Error(syncResult?.error || "Shopify revert failed");
-      } else {
-        console.warn("No active campaign found for product — DB reverted but Shopify not updated");
+        if (syncErr || !syncResult?.ok) failed++;
       }
+
       await queryClient.invalidateQueries();
-      toast.success("Price reverted successfully on Shopify");
+      if (targets.length === 0) {
+        toast.error("Reverted in dashboard, but no Shopify variant is linked — could not sync");
+      } else if (failed > 0) {
+        toast.error(`Reverted in dashboard, but ${failed} of ${targets.length} variant(s) failed to sync to Shopify`);
+      } else {
+        toast.success("Price reverted and synced to Shopify");
+      }
     } catch (e: any) { toast.error(e?.message || "Revert failed"); }
   };
 
   const handleBulkRemoveDiscount = async () => {
     if (selected.size === 0) return;
     try {
+      if (!shopifyConn?.id) { toast.error("No active Shopify connection"); return; }
       const ids = Array.from(selected);
-      const { data: variants } = await supabase.from("variants").select("id").in("product_id", ids);
-      const variantIds = (variants ?? []).map((v: any) => v.id);
-      const { data: campaignItems } = await supabase.from("pricing_campaign_items").select("campaign_id")
-        .in("variant_id", variantIds).eq("action_status", "applied");
-      const campaignIds = [...new Set((campaignItems ?? []).map((i: any) => i.campaign_id))];
+
       const { data: result, error: revertErr } = await supabase.rpc("revert_variant_pricing", { p_product_ids: ids });
       if (revertErr) throw revertErr;
-      for (const campaignId of campaignIds) {
+
+      // Push every reverted variant straight to Shopify — same fix as handleRevert:
+      // don't gate the Shopify push on an "applied" campaign item existing.
+      const { data: variants, error: fetchErr } = await supabase
+        .from("variants")
+        .select("shopify_variant_id, price")
+        .in("product_id", ids);
+      if (fetchErr) throw fetchErr;
+
+      const targets = (variants ?? []).filter((v: any) => v.shopify_variant_id);
+      let failed = 0;
+      for (const v of targets) {
         const { data: syncResult, error: syncErr } = await supabase.functions.invoke("shopify-sync", {
-          body: { action: "revert_prices", campaign_id: campaignId }
+          body: {
+            action: "edit_price",
+            connection_id: shopifyConn.id,
+            shopify_variant_id: v.shopify_variant_id,
+            new_price: v.price,
+            new_compare_at_price: null,
+          },
         });
-        if (syncErr) console.error("Shopify revert error", campaignId, syncErr);
-        if (!syncResult?.ok) console.error("Shopify revert failed", campaignId, syncResult?.error);
+        if (syncErr || !syncResult?.ok) failed++;
       }
+
       const r = result as Record<string, unknown>;
       await queryClient.invalidateQueries();
-      toast.success(`Discount removed from ${Number(r.affected_count || 0)} variants and pushed to Shopify`);
+      if (failed > 0) {
+        toast.error(`Reverted ${Number(r.affected_count || 0)} variant(s) in dashboard, but ${failed} failed to sync to Shopify`);
+      } else {
+        toast.success(`Discount removed from ${Number(r.affected_count || 0)} variants and pushed to Shopify`);
+      }
       setSelected(new Set());
     } catch (e: any) { toast.error(e?.message || "Bulk remove discount failed"); }
   };
 
-  const handleExport = () => {
+  const toExportRow = (p: any) => ({
+    Name: p.product_name, SKU: p.sku, Vendor: p.vendor_name, Collection: p.collection_name,
+    ProductType: p.product_type, Inventory: p.total_inventory, Price: p.min_current_price,
+    OriginalPrice: p.max_compare_at_price, DaysOld: p.days_old, Status: p.discount_status,
+    Campaign: p.campaign_name, Expiry: p.near_expiry_status,
+  });
+
+  const handleExportPage = () => {
     if (!filteredData.data.length) return;
-    exportToCSV(filteredData.data.map(p => ({
-      Name: p.product_name, SKU: p.sku, Vendor: p.vendor_name, Collection: p.collection_name,
-      Inventory: p.total_inventory, Price: p.min_current_price, OriginalPrice: p.max_compare_at_price,
-      DaysOld: p.days_old, Status: p.discount_status, Campaign: p.campaign_name, Expiry: p.near_expiry_status,
-    })), "product-master");
+    exportToCSV(filteredData.data.map(toExportRow), "product-master-page");
+    setExportDialogOpen(false);
+  };
+
+  const handleExportFull = async () => {
+    setExportingFull(true);
+    try {
+      let collectionProductIds: string[] | null = null;
+      if (collectionFilter !== "all" && storeId) {
+        const { data: ids } = await (supabase as any).rpc("get_collection_product_ids", {
+          p_collection_name: collectionFilter,
+          p_store_id: storeId,
+        });
+        collectionProductIds = ((ids ?? []) as { product_id: string }[]).map(r => r.product_id);
+        if (!collectionProductIds.length) { toast.info("No products found for this collection"); return; }
+      }
+
+      let q = supabase.from("v_product_inventory_summary").select("*");
+      if (storeId) q = q.eq("store_id", storeId);
+      q = q
+        .or('collection_name.is.null,collection_name.neq.Trending Now')
+        .or('collection_name.is.null,collection_name.neq.Top Selling');
+      if (search) q = q.or(`product_name.ilike.%${search}%,sku.ilike.%${search}%`);
+      if (collectionProductIds !== null) q = q.in("product_id", collectionProductIds);
+      if (vendorFilter !== "all") q = q.eq("vendor_name", vendorFilter);
+      if (typeFilter !== "all") q = q.eq("product_type", typeFilter);
+      q = q.order("created_at", { ascending: false }).limit(10000);
+
+      const { data: allRows, error } = await q;
+      if (error) throw error;
+
+      const rows = hasDateFilter
+        ? (allRows ?? []).filter((p: any) => matchesDateFilter(p.created_at, filterDates, filterMonths, filterYears))
+        : (allRows ?? []);
+
+      if (!rows.length) { toast.info("No products to export"); return; }
+      exportToCSV(rows.map(toExportRow), "product-master-full");
+      toast.success(`Exported ${rows.length} products`);
+      setExportDialogOpen(false);
+    } catch (e: any) {
+      toast.error(e?.message || "Export failed");
+    } finally {
+      setExportingFull(false);
+    }
   };
 
   const makeShopifyLink = (name: string) => {
@@ -269,6 +382,22 @@ export default function ProductMaster() {
   };
 
   const resetDateFilter = () => { setFilterDates([]); setFilterMonths([]); setFilterYears([]); };
+
+  const handleForceResync = async () => {
+    if (!shopifyConn?.id) { toast.error("No active Shopify connection"); return; }
+    setResyncing(true);
+    try {
+      const { data: result } = await supabase.functions.invoke("shopify-sync", {
+        body: { action: "force_resync", connection_id: shopifyConn.id },
+      });
+      if (!result?.ok) throw new Error(result?.error || "Resync failed");
+      toast.success("Full re-sync started — collections and products will update in a few minutes");
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to start re-sync");
+    } finally {
+      setResyncing(false);
+    }
+  };
 
   // ── Adjust Stock ──────────────────────────────────────────────────────────
 
@@ -285,13 +414,26 @@ export default function ProductMaster() {
       return;
     }
 
-    const { data: locResult } = await supabase.functions.invoke("shopify-sync", {
+    const { data: locResult, error: locError } = await supabase.functions.invoke("shopify-sync", {
       body: { action: "get_locations", connection_id: shopifyConn.id },
     });
+    if (locError || locResult?.ok === false) {
+      let detail = locResult?.error ?? locError?.message ?? "unknown error";
+      const ctx = (locError as any)?.context;
+      if (ctx?.json) {
+        try { detail = (await ctx.json())?.error ?? detail; } catch { /* body already consumed or not JSON */ }
+      }
+      toast.error(`Could not load Shopify locations — ${detail}`);
+      return;
+    }
     const locs: Array<{ id: string; name: string }> = (locResult?.locations ?? []).map((l: any) => ({
       id: String(l.id),
       name: l.name,
     }));
+    if (locs.length === 0) {
+      toast.error("No Shopify locations found — cannot adjust stock");
+      return;
+    }
 
     setAdjustLocations(locs);
     setAdjustLocationId(locs[0]?.id ?? "");
@@ -357,6 +499,19 @@ export default function ProductMaster() {
       await supabase.from("inventory_sync_logs").insert({
         action_type: "inventory_adjustment", campaign_name: null, items_affected: 1, status: "success",
         metadata: { sku: adjustRow.sku, adjustment, location_id: adjustLocationId, new_quantity: newQty },
+      });
+
+      await (supabase as any).from("stock_adjustment_history").insert({
+        variant_id: adjustRow.variantId,
+        product_id: adjustRow.productId,
+        store_id: storeId ?? null,
+        variant_sku: adjustRow.sku,
+        product_name: adjustRow.productName,
+        adjustment,
+        quantity_before: adjustRow.currentStock,
+        quantity_after: newQty,
+        location_name: adjustLocations.find((l) => l.id === adjustLocationId)?.name ?? null,
+        adjusted_by: user?.email ?? null,
       });
 
       toast.success(`Stock updated — ${adjustRow.sku} adjusted by ${adjustment > 0 ? "+" : ""}${adjustment} units`);
@@ -483,7 +638,7 @@ export default function ProductMaster() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
           <h1 className="text-2xl font-bold">Product Master</h1>
           <p className="text-sm text-muted-foreground">Complete inventory ledger with pricing actions</p>
@@ -494,7 +649,24 @@ export default function ProductMaster() {
               <XCircle className="h-4 w-4 mr-1" /> Remove Discount ({selected.size})
             </Button>
           )}
-          <Button variant="outline" size="sm" onClick={handleExport}><Download className="h-4 w-4 mr-1" />Export CSV</Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleForceResync}
+                disabled={resyncing}
+                className="border-amber-300 text-amber-700 hover:bg-amber-50 hover:border-amber-400 dark:border-amber-700 dark:text-amber-400 dark:hover:bg-amber-950/30"
+              >
+                <RotateCcw className={`h-4 w-4 mr-1 ${resyncing ? "animate-spin" : ""}`} />
+                {resyncing ? "Re-syncing…" : "Full Re-sync"}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="max-w-[220px] text-center">
+              Wipes sync history and re-pulls everything from Shopify from scratch. Use when data looks wrong or missing.
+            </TooltipContent>
+          </Tooltip>
+          <Button variant="outline" size="sm" onClick={() => setExportDialogOpen(true)}><Download className="h-4 w-4 mr-1" />Export CSV</Button>
         </div>
       </div>
 
@@ -503,18 +675,43 @@ export default function ProductMaster() {
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input placeholder="Search name or SKU..." className="pl-8" value={search} onChange={e => { setSearch(e.target.value); setPage(0); }} />
         </div>
-        <Select value={collectionFilter} onValueChange={v => { setCollectionFilter(v); setPage(0); }}>
-          <SelectTrigger className="w-[160px]"><SelectValue placeholder="Collection" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Collections</SelectItem>
-            {collections?.map(c => <SelectItem key={c.id} value={c.name}>{c.name}</SelectItem>)}
-          </SelectContent>
-        </Select>
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-1">
+            <Select value={collectionFilter} onValueChange={v => { setCollectionFilter(v); setPage(0); }}>
+              <SelectTrigger className="w-[160px]"><SelectValue placeholder="Collection" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Collections</SelectItem>
+                {collections?.filter(c => !["trending now", "top selling"].includes(c.name.toLowerCase())).map(c => <SelectItem key={c.name} value={c.name}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 px-2 text-xs gap-1 text-muted-foreground shrink-0"
+                  onClick={refreshCollections}
+                  disabled={isRefreshingCollections}
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${isRefreshingCollections ? "animate-spin" : ""}`} />
+                  {isRefreshingCollections ? "Refreshing…" : "Refresh Collections"}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Pull latest collection names from Shopify</TooltipContent>
+            </Tooltip>
+          </div>
+          {isRefreshingCollections && (
+            <div className="w-full space-y-0.5">
+              <Progress value={collRefreshProgress.percent} className="h-1.5" />
+              <p className="text-[10px] text-muted-foreground truncate">{collRefreshLabel}</p>
+            </div>
+          )}
+        </div>
         <Select value={vendorFilter} onValueChange={v => { setVendorFilter(v); setPage(0); }}>
           <SelectTrigger className="w-[160px]"><SelectValue placeholder="Vendor" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Vendors</SelectItem>
-            {vendors?.map(v => <SelectItem key={v.id} value={v.name}>{v.name}</SelectItem>)}
+            {vendors?.map(v => <SelectItem key={v.name} value={v.name}>{v.name}</SelectItem>)}
           </SelectContent>
         </Select>
         <Select value={typeFilter} onValueChange={v => { setTypeFilter(v); setPage(0); }}>
@@ -522,6 +719,23 @@ export default function ProductMaster() {
           <SelectContent>
             <SelectItem value="all">All Types</SelectItem>
             {productTypes?.map(t => <SelectItem key={t} value={t!}>{t}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Select value={statusFilter} onValueChange={v => { setStatusFilter(v); setPage(0); }}>
+          <SelectTrigger className="w-[140px]"><SelectValue placeholder="Status" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Statuses</SelectItem>
+            <SelectItem value="active">Active</SelectItem>
+            <SelectItem value="draft">Draft</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={inventoryFilter} onValueChange={v => { setInventoryFilter(v); setPage(0); }}>
+          <SelectTrigger className="w-[150px]"><SelectValue placeholder="Inventory" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Inventory</SelectItem>
+            <SelectItem value="in_stock">In Stock</SelectItem>
+            <SelectItem value="low_stock">Low Stock (≤10)</SelectItem>
+            <SelectItem value="out_of_stock">Out of Stock</SelectItem>
           </SelectContent>
         </Select>
         <DateRangeFilter
@@ -541,7 +755,7 @@ export default function ProductMaster() {
         <div className="space-y-2">{Array.from({ length: 10 }).map((_, i) => <Skeleton key={i} className="h-12" />)}</div>
       ) : (
         <>
-          <div className="rounded-md border">
+          <div className="rounded-md border overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -670,6 +884,38 @@ export default function ProductMaster() {
           </div>
         </>
       )}
+
+      {/* ── Export choice dialog ───────────────────────────────────────── */}
+      <Dialog open={exportDialogOpen} onOpenChange={open => { if (!exportingFull) setExportDialogOpen(open); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Export CSV</DialogTitle>
+            <DialogDescription>Choose what to include in the export.</DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-3 py-2">
+            <Button variant="outline" className="justify-start h-auto py-3 px-4" onClick={handleExportPage} disabled={exportingFull}>
+              <div className="text-left">
+                <div className="font-medium">Current page</div>
+                <div className="text-xs text-muted-foreground mt-0.5">{filteredData.data.length} products visible on this page</div>
+              </div>
+            </Button>
+            <Button variant="outline" className="justify-start h-auto py-3 px-4" onClick={handleExportFull} disabled={exportingFull}>
+              <div className="text-left">
+                <div className="font-medium flex items-center gap-2">
+                  Full catalog
+                  {exportingFull && <span className="text-xs text-muted-foreground">(fetching…)</span>}
+                </div>
+                <div className="text-xs text-muted-foreground mt-0.5">
+                  {filteredData.count} products matching current filters
+                </div>
+              </div>
+            </Button>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={() => setExportDialogOpen(false)} disabled={exportingFull}>Cancel</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* ── Adjust Stock Dialog ─────────────────────────────────────────── */}
       <Dialog open={adjustOpen} onOpenChange={open => { if (!open && !adjustLoading) setAdjustOpen(false); }}>

@@ -18,19 +18,11 @@ export default function ExpiryMonitoring() {
   const [filter, setFilter] = useState("all");
   const [page, setPage] = useState(0);
 
-  const { data: storeProductIds } = useQuery({
-    queryKey: ["store-product-ids-expiry", storeId],
-    enabled: !!storeId,
-    queryFn: async () => {
-      const { data } = await supabase.from("products").select("id").eq("store_id", storeId!);
-      return new Set((data ?? []).map(p => p.id));
-    },
-  });
-
   const { data, isLoading } = useQuery({
     queryKey: ["expiry", filter, page, storeId],
     queryFn: async () => {
       let q = supabase.from("v_product_inventory_summary").select("*", { count: "exact" });
+      if (storeId) q = q.eq("store_id", storeId);
       if (filter === "expired") q = q.eq("near_expiry_status", "Expired");
       else if (filter === "expiring") q = q.eq("near_expiry_status", "Expiring Soon");
       else if (filter === "healthy") q = q.eq("near_expiry_status", "Healthy Shelf Life");
@@ -38,11 +30,7 @@ export default function ExpiryMonitoring() {
       q = q.order("created_at", { ascending: false }).range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
       const { data, error, count } = await q;
       if (error) throw error;
-      let filtered = data ?? [];
-      if (storeId && storeProductIds) {
-        filtered = filtered.filter(p => p.product_id && storeProductIds.has(p.product_id));
-      }
-      return { data: filtered, count: storeId && storeProductIds ? filtered.length : (count ?? 0) };
+      return { data: data ?? [], count: count ?? 0 };
     },
   });
 

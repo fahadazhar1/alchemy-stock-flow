@@ -13,6 +13,9 @@ export interface Store {
   connected_at: string | null;
   created_at: string | null;
   updated_at: string | null;
+  currency: string | null;
+  currency_symbol: string | null;
+  timezone: string | null;
 }
 
 interface StoreContextType {

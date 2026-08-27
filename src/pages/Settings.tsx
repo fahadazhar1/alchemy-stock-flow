@@ -3,23 +3,52 @@ import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useRole } from "@/hooks/useRole";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { Settings as SettingsIcon, Store as StoreIcon, RefreshCw } from "lucide-react";
+import { Settings as SettingsIcon, Store as StoreIcon, RefreshCw, Eye } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useStore } from "@/contexts/StoreContext";
 import { format } from "date-fns";
+import { usePageVisibility } from "@/hooks/usePageVisibility";
+import { UserManagement } from "@/components/settings/UserManagement";
+
+const VIEWER_PAGES = [
+  { title: "Store Performance", url: "/store-performance" },
+  { title: "Orders", url: "/orders" },
+  { title: "Reports", url: "/reports" },
+  { title: "Product Master", url: "/products" },
+  { title: "Sales Campaign", url: "/manual-sync" },
+  { title: "AI Co-Pilot", url: "/ai-copilot" },
+  { title: "Auto-Pilot", url: "/auto-pilot" },
+  { title: "Approval Queue", url: "/approvals" },
+  { title: "Campaigns", url: "/campaigns" },
+  { title: "Simulation", url: "/simulation" },
+  { title: "Replenishment", url: "/replenishment" },
+  { title: "Product Velocity", url: "/product-velocity" },
+  { title: "Expiry Monitor", url: "/expiry" },
+  { title: "Audit Logs", url: "/audit-logs" },
+  { title: "Collection Sort", url: "/collection-sort" },
+  { title: "Fulfillment", url: "/fulfillment" },
+  { title: "Draft PO", url: "/draft-po" },
+  { title: "Discount Performance", url: "/discount-performance" },
+  { title: "Dead Stock", url: "/dead-stock" },
+  { title: "Bundle Finder", url: "/bundle-finder" },
+  { title: "SEO Audit", url: "/seo-audit" },
+  { title: "Stores", url: "/stores" },
+];
 
 export default function Settings() {
+  const { canEdit, isAdmin } = useRole();
   const queryClient = useQueryClient();
   const { data: settings } = useQuery({
     queryKey: ["app-settings"],
     queryFn: async () => {
-      const { data } = await supabase.from("app_settings").select("*").eq("setting_key", "pricing_config").single();
+      const { data } = await supabase.from("app_settings").select("*").eq("setting_key", "pricing_config").maybeSingle();
       return (data?.setting_value ?? {}) as Record<string, unknown>;
     },
   });
@@ -35,6 +64,21 @@ export default function Settings() {
   };
 
   const update = (key: string, value: unknown) => setForm(prev => ({ ...prev, [key]: value }));
+
+  // ---- Viewer page visibility ----
+  const { visibilityMap, saveVisibility } = usePageVisibility();
+  const [pageViz, setPageViz] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    const init: Record<string, boolean> = {};
+    VIEWER_PAGES.forEach(p => { init[p.url] = visibilityMap[p.url] !== false; });
+    setPageViz(init);
+  }, [visibilityMap]);
+
+  const handleSaveVisibility = async () => {
+    const ok = await saveVisibility(pageViz);
+    if (ok) toast.success("Page access saved");
+    else toast.error("Save failed");
+  };
 
   // ---- Shopify connection state ----
   const { selectedStoreId, selectedStore } = useStore();
@@ -57,6 +101,28 @@ export default function Settings() {
       return data as Record<string, unknown> | null;
     },
     enabled: !!selectedStoreId,
+    refetchInterval: (query) =>
+      (query.state.data as Record<string, unknown> | null)?.last_sync_status === "in_progress" ? 180_000 : false,
+  });
+
+  const { data: currentSyncLog } = useQuery({
+    queryKey: ["shopify-sync-log", (connection as Record<string, unknown> | null)?.id],
+    queryFn: async () => {
+      const connId = (connection as Record<string, unknown> | null)?.id;
+      if (!connId) return null;
+      const { data } = await supabase
+        .from("shopify_sync_logs" as never)
+        .select("sync_time, status, current_stage, records_synced")
+        .eq("connection_id", connId)
+        .eq("status", "in_progress")
+        .order("sync_time", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      return data as { sync_time: string; status: string; current_stage: string; records_synced: number } | null;
+    },
+    enabled: !!(connection as Record<string, unknown> | null)?.id &&
+      (connection as Record<string, unknown> | null)?.last_sync_status === "in_progress",
+    refetchInterval: 180_000,
   });
 
   const isConnected = !!connection;
@@ -105,6 +171,18 @@ export default function Settings() {
       await refetchConn();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Sync failed");
+    } finally { setBusy(false); }
+  };
+
+  const handleForceResync = async () => {
+    if (!connection) return;
+    setBusy(true);
+    try {
+      await callShopify({ action: "force_resync", connection_id: connection.id });
+      toast.success("Full re-sync started — this may take a few minutes");
+      await refetchConn();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Re-sync failed");
     } finally { setBusy(false); }
   };
 
@@ -183,7 +261,7 @@ export default function Settings() {
                 <Label>Admin API Access Token</Label>
                 <Input type="password" placeholder="shpat_..." value={accessToken} onChange={e => setAccessToken(e.target.value)} />
               </div>
-              <Button onClick={handleConnect} disabled={busy} className="w-full">
+              <Button onClick={handleConnect} disabled={busy || !canEdit} className="w-full">
                 {busy ? "Connecting..." : "Connect Store"}
               </Button>
             </>
@@ -195,7 +273,7 @@ export default function Settings() {
                 <div><span className="text-muted-foreground">Domain:</span> {String(connection.shop_domain)}</div>
                 <div><span className="text-muted-foreground">Connected:</span> {connection.connected_at ? format(new Date(connection.connected_at as string), "PPpp") : "—"}</div>
               </div>
-              <Button variant="destructive" onClick={handleDisconnect} disabled={busy}>Disconnect</Button>
+              <Button variant="destructive" onClick={handleDisconnect} disabled={busy || !canEdit}>Disconnect</Button>
 
               <Separator />
 
@@ -221,22 +299,84 @@ export default function Settings() {
                 </Select>
               </div>
 
-              <Button onClick={handleSyncNow} disabled={busy} className="w-full">
-                <RefreshCw className={`h-4 w-4 mr-2 ${busy ? "animate-spin" : ""}`} />
-                Sync Now
-              </Button>
+              <div className="flex gap-2">
+                <Button onClick={handleSyncNow} disabled={busy || !canEdit} className="flex-1">
+                  <RefreshCw className={`h-4 w-4 mr-2 ${busy ? "animate-spin" : ""}`} />
+                  Sync Now
+                </Button>
+                <Button onClick={handleForceResync} disabled={busy || !canEdit} variant="outline" className="flex-1">
+                  <RefreshCw className={`h-4 w-4 mr-2 ${busy ? "animate-spin" : ""}`} />
+                  Force Full Re-sync
+                </Button>
+              </div>
 
               <div className="text-xs text-muted-foreground border-t pt-3 space-y-1">
-                <div>Last sync: {connection.last_sync_at ? format(new Date(connection.last_sync_at as string), "PPpp") : "Never"}</div>
-                <div>Status: {(connection.last_sync_status as string) ?? "—"}</div>
-                <div>Records synced: {(connection.last_sync_records as number) ?? 0}</div>
+                {connection.last_sync_status === "in_progress" ? (
+                  <>
+                    <div>
+                      <span className="text-muted-foreground">Sync started: </span>
+                      {currentSyncLog?.sync_time
+                        ? format(new Date(currentSyncLog.sync_time), "PPpp")
+                        : "just now"}
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Stage: </span>
+                      {currentSyncLog?.current_stage ?? "—"}
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Records so far: </span>
+                      {currentSyncLog?.records_synced ?? 0}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div>
+                      <span className="text-muted-foreground">Last sync completed: </span>
+                      {connection.last_sync_at ? format(new Date(connection.last_sync_at as string), "PPpp") : "Never"}
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Status: </span>
+                      {(connection.last_sync_status as string) ?? "—"}
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Records synced: </span>
+                      {(connection.last_sync_records as number) ?? 0}
+                    </div>
+                  </>
+                )}
               </div>
             </>
           )}
         </CardContent>
       </Card>
 
-      <Button onClick={handleSave} className="w-full">Save Settings</Button>
+      {isAdmin && <UserManagement />}
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Eye className="h-4 w-4" /> Viewer Page Access
+          </CardTitle>
+          <p className="text-xs text-muted-foreground">Toggle which pages viewers can see. Dashboard is always visible.</p>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {VIEWER_PAGES.map(page => (
+            <div key={page.url} className="flex items-center justify-between">
+              <Label className="font-normal">{page.title}</Label>
+              <Switch
+                checked={pageViz[page.url] !== false}
+                onCheckedChange={v => setPageViz(prev => ({ ...prev, [page.url]: v }))}
+                disabled={!canEdit}
+              />
+            </div>
+          ))}
+          <Button onClick={handleSaveVisibility} className="w-full mt-2" disabled={!canEdit}>
+            Save Page Access
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Button onClick={handleSave} className="w-full" disabled={!canEdit}>Save Settings</Button>
     </div>
   );
 }
