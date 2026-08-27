@@ -39,11 +39,9 @@ function fmtCurrency(value: number, sym: string): string {
 
 const HISTORY_DAYS = 15;
 
-// Starts at YESTERDAY, not today — today's manual entry is already editable
-// in the main "Actual" row above. Rendering a second, independent editable
-// cell for the same (store, date, metric) row caused exactly the bug this
-// fixes: two out-of-sync local input states for one underlying entry, and
-// blurring the stale one silently overwrote a just-saved value with "".
+// The last 15 calendar days before real today. The caller additionally
+// excludes whichever date is currently selected as "Actual" (gaEnd) — see
+// the clobbering-bug note where this is filtered.
 function last15Dates(): string[] {
   const today = todayKarachiDate();
   const out: string[] = [];
@@ -122,10 +120,18 @@ export default function ClickUpReports() {
   const { data: channelRows = [], isFetching: channelFetching } = useGa4ChannelSummary(gaStart, gaEnd);
   const { data: channelRowsMtd = [] } = useGa4ChannelSummary(monthStart, gaEnd);
   const { data: config = [], isLoading: configLoading } = useKpiConfig();
-  const { data: entries = [], isLoading: entriesLoading } = useDailyKpiEntries(today);
+  // Manual metrics' "Actual" is for whatever date is selected in the filter
+  // bar (gaEnd), NOT always literal today — matches Sales/Organic/Bounce,
+  // which already follow the filter. Previously this was hardcoded to
+  // todayKarachiDate(), so typing a value while a past/custom date was
+  // selected silently saved it under today's date instead.
+  const { data: entries = [], isLoading: entriesLoading } = useDailyKpiEntries(gaEnd);
   const { data: salesHistory = [] } = useKpiSalesHistory();
   const { data: ga4History = [] } = useKpiGa4History();
-  const historyDates = useMemo(() => last15Dates(), []);
+  // Exclude gaEnd from History — it's already editable in the Actual row
+  // above; showing it twice reintroduces the two-independent-inputs
+  // clobbering bug fixed earlier (see project memory).
+  const historyDates = useMemo(() => last15Dates().filter(d => d !== gaEnd), [gaEnd]);
   const oldestHistoryDate = historyDates[historyDates.length - 1];
   const { data: entriesHistory = [] } = useDailyKpiEntriesRange(oldestHistoryDate, today);
   const { data: entriesMtd = [] } = useDailyKpiEntriesRange(monthStart, gaEnd);
@@ -260,7 +266,7 @@ export default function ClickUpReports() {
             {isRefreshing && <Loader2 size={14} className="animate-spin text-muted-foreground" />}
           </div>
           <p className="text-sm text-muted-foreground">
-            Daily KPI tracker, store-wise · Actual follows <span className="font-medium">{bounds.label}</span> · MTD sums 1st of the month through that date · manual fields are for {today}
+            Daily KPI tracker, store-wise · Actual follows <span className="font-medium">{bounds.label}</span> · MTD sums 1st of the month through that date · manual fields are for {gaEnd}
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -352,16 +358,16 @@ export default function ClickUpReports() {
                                 <div className="flex items-center gap-1">
                                   <EditableCell
                                     value={entry?.value_text ?? ""}
-                                    placeholder="Type today's figure…"
+                                    placeholder={`Type figure for ${gaEnd}…`}
                                     onSave={(v) => upsertEntry.mutate({
-                                      store_id: store.storeId, entry_date: today, metric_key: m.metric_key, value_text: v,
+                                      store_id: store.storeId, entry_date: gaEnd, metric_key: m.metric_key, value_text: v,
                                     })}
                                   />
                                   {entry?.value_text && (
                                     <button
                                       type="button"
                                       title="Delete this entry"
-                                      onClick={() => deleteEntry.mutate({ store_id: store.storeId, entry_date: today, metric_key: m.metric_key })}
+                                      onClick={() => deleteEntry.mutate({ store_id: store.storeId, entry_date: gaEnd, metric_key: m.metric_key })}
                                       className="shrink-0 p-1 text-muted-foreground hover:text-destructive"
                                     >
                                       <Trash2 size={12} />
