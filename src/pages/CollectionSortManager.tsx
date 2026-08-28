@@ -457,22 +457,11 @@ export default function CollectionSortManager() {
     { id: "date-1", type: "date", value: "newest_first" },
   ]);
 
-  // Publisher (Shopify vendor) list for the selected store, for the
-  // "Prioritize Publisher" filter shared by every sort module.
-  const { data: publishers = [], isLoading: loadingPublishers } = useQuery({
-    queryKey: ["collection-sort-publishers", selectedStoreId],
-    queryFn: async () => {
-      if (!selectedStoreId) return [] as string[];
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data } = await (supabase as any)
-        .from("v_product_inventory_summary")
-        .select("vendor_name")
-        .eq("store_id", selectedStoreId);
-      return [...new Set((data ?? []).map((d: { vendor_name: string }) => d.vendor_name).filter(Boolean))].sort() as string[];
-    },
-    enabled: !!selectedStoreId,
-    staleTime: 5 * 60_000,
-  });
+  // Publisher (book's actual publisher — custom.publisher metafield, NOT
+  // Shopify's vendor field) list for the selected store, for the "Prioritize
+  // Publisher" filter shared by every sort module.
+  const [availablePublishers, setAvailablePublishers] = useState<string[]>([]);
+  const [loadingPublishers, setLoadingPublishers] = useState(false);
 
   // Publisher filter — one enabled flag + value per module
   const [pubFilterEnabled, setPubFilterEnabled] = useState(false);
@@ -638,12 +627,29 @@ export default function CollectionSortManager() {
     }
   }, []);
 
+  // ── Fetch publishers when store changes ─────────────────────────────────────
+  const fetchPublishers = useCallback(async (storeId: string) => {
+    setLoadingPublishers(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("collection-sort-manager", {
+        body: { action: "get_publishers", storeId },
+      });
+      if (error) throw error;
+      setAvailablePublishers(data?.publishers ?? []);
+    } catch {
+      setAvailablePublishers([]);
+    } finally {
+      setLoadingPublishers(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (selectedStoreId) {
       fetchCollections(selectedStoreId);
       fetchLanguages(selectedStoreId);
+      fetchPublishers(selectedStoreId);
     }
-  }, [selectedStoreId, fetchCollections, fetchLanguages]);
+  }, [selectedStoreId, fetchCollections, fetchLanguages, fetchPublishers]);
 
   // Sync per-module collection selectors whenever allCollections changes
   useEffect(() => {
@@ -1440,7 +1446,7 @@ export default function CollectionSortManager() {
             onEnabledChange={setPubFilterEnabled}
             value={pubFilterValue}
             onValueChange={setPubFilterValue}
-            publishers={publishers}
+            publishers={availablePublishers}
             loading={loadingPublishers}
           />
 
@@ -1686,7 +1692,7 @@ export default function CollectionSortManager() {
             onEnabledChange={setSpPubFilterEnabled}
             value={spPubFilterValue}
             onValueChange={setSpPubFilterValue}
-            publishers={publishers}
+            publishers={availablePublishers}
             loading={loadingPublishers}
           />
 
@@ -1899,7 +1905,7 @@ export default function CollectionSortManager() {
             onEnabledChange={setDcPubFilterEnabled}
             value={dcPubFilterValue}
             onValueChange={setDcPubFilterValue}
-            publishers={publishers}
+            publishers={availablePublishers}
             loading={loadingPublishers}
           />
 
@@ -2138,7 +2144,7 @@ export default function CollectionSortManager() {
             onEnabledChange={setInvPubFilterEnabled}
             value={invPubFilterValue}
             onValueChange={setInvPubFilterValue}
-            publishers={publishers}
+            publishers={availablePublishers}
             loading={loadingPublishers}
           />
 

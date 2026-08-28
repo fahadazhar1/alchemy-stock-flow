@@ -204,6 +204,47 @@ async function fetchLanguages(domain: string, token: string): Promise<string[]> 
   return Array.from(langs).sort();
 }
 
+// ── Fetch distinct publisher values from product metafields ──────────────────
+// "Publisher" is the book's actual publisher (custom.publisher metafield) —
+// NOT Shopify's vendor field, which on this store is just the selling
+// storefront (e.g. "Darussalam UK") and is unrelated to who published the book.
+
+async function fetchPublishers(domain: string, token: string): Promise<string[]> {
+  const pubs = new Set<string>();
+  let cursor: string | null = null;
+  let pagesFetched = 0;
+  const MAX_PAGES = 20; // cap at ~5000 products to avoid timeout
+
+  const query = `
+    query GetProductPublishers($first: Int!, $after: String) {
+      products(first: $first, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          metafield(namespace: "custom", key: "publisher") { value }
+        }
+      }
+    }
+  `;
+
+  do {
+    const res = await shopifyGQL(domain, token, query, { first: 250, after: cursor ?? undefined });
+    if (!res.ok) break;
+    const json = await res.json();
+    const page = json.data?.products;
+    if (!page) break;
+
+    for (const p of page.nodes) {
+      const v = p.metafield?.value?.trim();
+      if (v) pubs.add(v);
+    }
+
+    cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+    pagesFetched++;
+  } while (cursor && pagesFetched < MAX_PAGES);
+
+  return Array.from(pubs).sort();
+}
+
 // ── Fetch all products in a collection ───────────────────────────────────────
 
 interface CollectionProduct {
@@ -213,7 +254,7 @@ interface CollectionProduct {
   publishedAt: string | null;
   language: string | null;
   availableForSale: boolean;
-  vendor: string | null;
+  publisher: string | null;
 }
 
 async function fetchCollectionProducts(
@@ -233,8 +274,9 @@ async function fetchCollectionProducts(
         products(first: $first, after: $after) {
           pageInfo { hasNextPage endCursor }
           nodes {
-            id title handle publishedAt vendor
+            id title handle publishedAt
             metafield(namespace: "custom", key: "language") { value }
+            publisherMeta: metafield(namespace: "custom", key: "publisher") { value }
             variants(first: 1) { nodes { availableForSale } }
           }
         }
@@ -266,7 +308,7 @@ async function fetchCollectionProducts(
         publishedAt: p.publishedAt ?? null,
         language: p.metafield?.value?.trim() || null,
         availableForSale: p.variants?.nodes?.[0]?.availableForSale ?? false,
-        vendor: p.vendor?.trim() || null,
+        publisher: p.publisherMeta?.value?.trim() || null,
       });
     }
 
@@ -305,12 +347,13 @@ function getLanguageGroup(
 }
 
 // Publisher priority tier, shared by every sort module — 0 when the product's
-// vendor matches the selected publisher (or no filter is set), 1 otherwise.
-// Always checked FIRST, ahead of language/stock/sales/etc., since the intent
-// is "push this publisher's products to the top", not a tiebreaker.
-function publisherRank(vendor: string | null, publisherFilter: string | null | undefined): number {
+// publisher (custom.publisher metafield — the book's actual publisher, NOT
+// Shopify's vendor field) matches the selected publisher (or no filter is
+// set), 1 otherwise. Always checked FIRST, ahead of language/stock/sales/etc.,
+// since the intent is "push this publisher's products to the top", not a tiebreaker.
+function publisherRank(publisher: string | null, publisherFilter: string | null | undefined): number {
   if (!publisherFilter) return 0;
-  return vendor && vendor.toLowerCase() === publisherFilter.toLowerCase() ? 0 : 1;
+  return publisher && publisher.toLowerCase() === publisherFilter.toLowerCase() ? 0 : 1;
 }
 
 function sortProducts(products: CollectionProduct[], sortRules: SortRule[], publisherFilter?: string | null): CollectionProduct[] {
@@ -326,8 +369,8 @@ function sortProducts(products: CollectionProduct[], sortRules: SortRule[], publ
 
   return [...products].sort((a, b) => {
     // 0. Publisher priority
-    const pubA = publisherRank(a.vendor, publisherFilter);
-    const pubB = publisherRank(b.vendor, publisherFilter);
+    const pubA = publisherRank(a.publisher, publisherFilter);
+    const pubB = publisherRank(b.publisher, publisherFilter);
     if (pubA !== pubB) return pubA - pubB;
 
     // 1. Language group
@@ -417,7 +460,7 @@ interface CollectionProductWithPricing {
   price: number;
   compareAtPrice: number | null;
   availableForSale: boolean;
-  vendor: string | null;
+  publisher: string | null;
 }
 
 async function fetchCollectionProductsWithPricing(
@@ -437,7 +480,8 @@ async function fetchCollectionProductsWithPricing(
         products(first: $first, after: $after) {
           pageInfo { hasNextPage endCursor }
           nodes {
-            id title vendor
+            id title
+            publisherMeta: metafield(namespace: "custom", key: "publisher") { value }
             variants(first: 1) { nodes { price compareAtPrice availableForSale } }
           }
         }
@@ -461,7 +505,7 @@ async function fetchCollectionProductsWithPricing(
         price: parseFloat(v?.price ?? "0"),
         compareAtPrice: v?.compareAtPrice ? parseFloat(v.compareAtPrice) : null,
         availableForSale: v?.availableForSale ?? false,
-        vendor: p.vendor?.trim() || null,
+        publisher: p.publisherMeta?.value?.trim() || null,
       });
     }
     cursor = collection.products.pageInfo.hasNextPage ? collection.products.pageInfo.endCursor : null;
@@ -478,7 +522,7 @@ interface CollectionProductWithInventory {
   title: string;
   inventoryQuantity: number;
   availableForSale: boolean;
-  vendor: string | null;
+  publisher: string | null;
 }
 
 async function fetchCollectionProductsWithInventory(
@@ -498,7 +542,8 @@ async function fetchCollectionProductsWithInventory(
         products(first: $first, after: $after) {
           pageInfo { hasNextPage endCursor }
           nodes {
-            id title vendor
+            id title
+            publisherMeta: metafield(namespace: "custom", key: "publisher") { value }
             variants(first: 250) { nodes { inventoryQuantity availableForSale } }
           }
         }
@@ -518,7 +563,7 @@ async function fetchCollectionProductsWithInventory(
       const variantNodes = (p.variants?.nodes ?? []) as Array<{ inventoryQuantity: number | null; availableForSale: boolean }>;
       const totalQty = variantNodes.reduce((sum, v) => sum + (v.inventoryQuantity ?? 0), 0);
       const availableForSale = variantNodes.some((v) => v.availableForSale);
-      products.push({ id: p.id, title: p.title, inventoryQuantity: totalQty, availableForSale, vendor: p.vendor?.trim() || null });
+      products.push({ id: p.id, title: p.title, inventoryQuantity: totalQty, availableForSale, publisher: p.publisherMeta?.value?.trim() || null });
     }
     cursor = collection.products.pageInfo.hasNextPage ? collection.products.pageInfo.endCursor : null;
     pagesFetched++;
@@ -574,8 +619,8 @@ function sortProductsByDiscount(
   publisherFilter?: string | null,
 ): CollectionProductWithPricing[] {
   return [...products].sort((a, b) => {
-    const pubA = publisherRank(a.vendor, publisherFilter);
-    const pubB = publisherRank(b.vendor, publisherFilter);
+    const pubA = publisherRank(a.publisher, publisherFilter);
+    const pubB = publisherRank(b.publisher, publisherFilter);
     if (pubA !== pubB) return pubA - pubB;
 
     // Stock tier: separate in-stock from out-of-stock first
@@ -608,8 +653,8 @@ function sortProductsByInventory(
 ): CollectionProductWithInventory[] {
   if (sortRule === "low_stock_first") {
     return [...products].sort((a, b) => {
-      const pubA = publisherRank(a.vendor, publisherFilter);
-      const pubB = publisherRank(b.vendor, publisherFilter);
+      const pubA = publisherRank(a.publisher, publisherFilter);
+      const pubB = publisherRank(b.publisher, publisherFilter);
       if (pubA !== pubB) return pubA - pubB;
 
       // Stock tier first
@@ -626,8 +671,8 @@ function sortProductsByInventory(
   }
   // overstock_first
   return [...products].sort((a, b) => {
-    const pubA = publisherRank(a.vendor, publisherFilter);
-    const pubB = publisherRank(b.vendor, publisherFilter);
+    const pubA = publisherRank(a.publisher, publisherFilter);
+    const pubB = publisherRank(b.publisher, publisherFilter);
     if (pubA !== pubB) return pubA - pubB;
 
     // Stock tier first
@@ -827,6 +872,22 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  // ── GET PUBLISHERS ────────────────────────────────────────────────────────
+  if (action === "get_publishers") {
+    try {
+      const pubs = await fetchPublishers(domain, conn.access_token);
+      return new Response(JSON.stringify({ ok: true, publishers: pubs }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return new Response(JSON.stringify({ ok: false, error: msg }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+  }
+
   // ── RUN SORT (streaming NDJSON) ──────────────────────────────────────────
   if (action === "run_sort") {
     if (!collections?.length || !sortRules?.length) {
@@ -889,8 +950,8 @@ Deno.serve(async (req: Request) => {
       },
       (products) => {
         const sorted = [...products].sort((a, b) => {
-          const pubA = publisherRank(a.vendor, publisherFilter);
-          const pubB = publisherRank(b.vendor, publisherFilter);
+          const pubA = publisherRank(a.publisher, publisherFilter);
+          const pubB = publisherRank(b.publisher, publisherFilter);
           if (pubA !== pubB) return pubA - pubB;
 
           // Stock tier first
