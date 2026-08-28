@@ -65,6 +65,43 @@ const CANONICAL_LANGUAGES = [
 
 const AUTO_EXCLUDE_PATTERNS = ["best-sellers", "best_sellers", "trending-now", "trending_now"];
 
+// ── Publisher filter row — checkbox + dropdown, reused by all 4 sort modules ──
+// "Publisher" here is the Shopify product's vendor field. Enabling it pushes
+// that publisher's products to the very top, ahead of every other tier
+// (language/stock/sales/discount/inventory) — see publisherRank() in the
+// collection-sort-manager edge function.
+function PublisherFilterRow({
+  enabled, onEnabledChange, value, onValueChange, publishers, loading,
+}: {
+  enabled: boolean;
+  onEnabledChange: (v: boolean) => void;
+  value: string;
+  onValueChange: (v: string) => void;
+  publishers: string[];
+  loading: boolean;
+}) {
+  return (
+    <div className="flex items-center justify-between">
+      <div className="flex items-center gap-2">
+        <Checkbox checked={enabled} onCheckedChange={(v) => onEnabledChange(!!v)} id="pub-filter" />
+        <Label htmlFor="pub-filter" className="text-sm font-medium cursor-pointer">
+          Prioritize Publisher
+        </Label>
+      </div>
+      <Select value={value || undefined} onValueChange={onValueChange} disabled={!enabled}>
+        <SelectTrigger className="w-[240px] h-8 text-xs">
+          <SelectValue placeholder={loading ? "Loading publishers…" : "Select publisher…"} />
+        </SelectTrigger>
+        <SelectContent>
+          {publishers.map((p) => (
+            <SelectItem key={p} value={p} className="text-xs">{p}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
 function shouldAutoExclude(handle: string): boolean {
   const h = handle.toLowerCase();
   return AUTO_EXCLUDE_PATTERNS.some((p) => h.includes(p));
@@ -419,6 +456,33 @@ export default function CollectionSortManager() {
     { id: "stock-1", type: "stock", value: "in_stock_first" },
     { id: "date-1", type: "date", value: "newest_first" },
   ]);
+
+  // Publisher (Shopify vendor) list for the selected store, for the
+  // "Prioritize Publisher" filter shared by every sort module.
+  const { data: publishers = [], isLoading: loadingPublishers } = useQuery({
+    queryKey: ["collection-sort-publishers", selectedStoreId],
+    queryFn: async () => {
+      if (!selectedStoreId) return [] as string[];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data } = await (supabase as any)
+        .from("v_product_inventory_summary")
+        .select("vendor_name")
+        .eq("store_id", selectedStoreId);
+      return [...new Set((data ?? []).map((d: { vendor_name: string }) => d.vendor_name).filter(Boolean))].sort() as string[];
+    },
+    enabled: !!selectedStoreId,
+    staleTime: 5 * 60_000,
+  });
+
+  // Publisher filter — one enabled flag + value per module
+  const [pubFilterEnabled, setPubFilterEnabled] = useState(false);
+  const [pubFilterValue, setPubFilterValue] = useState("");
+  const [spPubFilterEnabled, setSpPubFilterEnabled] = useState(false);
+  const [spPubFilterValue, setSpPubFilterValue] = useState("");
+  const [dcPubFilterEnabled, setDcPubFilterEnabled] = useState(false);
+  const [dcPubFilterValue, setDcPubFilterValue] = useState("");
+  const [invPubFilterEnabled, setInvPubFilterEnabled] = useState(false);
+  const [invPubFilterValue, setInvPubFilterValue] = useState("");
 
   // Drag state for language rules
   const [dragIndex, setDragIndex] = useState<number | null>(null);
@@ -916,7 +980,10 @@ export default function CollectionSortManager() {
     try {
       await runSortBatches(
         sortableCollections,
-        (batchIds) => ({ action: "run_sort", storeId: selectedStoreId, collections: batchIds, sortRules: rulesPayload }),
+        (batchIds) => ({
+          action: "run_sort", storeId: selectedStoreId, collections: batchIds, sortRules: rulesPayload,
+          publisherFilter: pubFilterEnabled && pubFilterValue ? pubFilterValue : null,
+        }),
         setCollectionProgress,
         setRunSummary,
         () => queryClient.invalidateQueries({ queryKey: ["collection-sort-all-runs"] }),
@@ -965,6 +1032,7 @@ export default function CollectionSortManager() {
           sortRule: spSortRule,
           inStockFirst: spInStockFirst,
           salesWindowDays: spSalesWindow,
+          publisherFilter: spPubFilterEnabled && spPubFilterValue ? spPubFilterValue : null,
         }),
         setSpCollectionProgress,
         setSpRunSummary,
@@ -1006,6 +1074,7 @@ export default function CollectionSortManager() {
           collections: batchIds,
           sortRule: dcSortRule,
           inStockFirst: dcInStockFirst,
+          publisherFilter: dcPubFilterEnabled && dcPubFilterValue ? dcPubFilterValue : null,
         }),
         setDcCollectionProgress,
         setDcRunSummary,
@@ -1049,6 +1118,7 @@ export default function CollectionSortManager() {
           lowStockThreshold,
           overstockThreshold,
           inStockFirst: invInStockFirst,
+          publisherFilter: invPubFilterEnabled && invPubFilterValue ? invPubFilterValue : null,
         }),
         setInvCollectionProgress,
         setInvRunSummary,
@@ -1364,6 +1434,16 @@ export default function CollectionSortManager() {
             </div>
           </div>
 
+          {/* Publisher filter */}
+          <PublisherFilterRow
+            enabled={pubFilterEnabled}
+            onEnabledChange={setPubFilterEnabled}
+            value={pubFilterValue}
+            onValueChange={setPubFilterValue}
+            publishers={publishers}
+            loading={loadingPublishers}
+          />
+
           {/* Date rule */}
           <div className="flex items-center justify-between">
             <div>
@@ -1600,6 +1680,16 @@ export default function CollectionSortManager() {
             </div>
           </div>
 
+          {/* Publisher filter */}
+          <PublisherFilterRow
+            enabled={spPubFilterEnabled}
+            onEnabledChange={setSpPubFilterEnabled}
+            value={spPubFilterValue}
+            onValueChange={setSpPubFilterValue}
+            publishers={publishers}
+            loading={loadingPublishers}
+          />
+
           {/* Two-panel collection selector */}
           <div className="grid grid-cols-2 gap-4">
             <div className="border rounded-md flex flex-col">
@@ -1802,6 +1892,16 @@ export default function CollectionSortManager() {
               <span className={`text-xs ${dcInStockFirst ? "text-foreground font-medium" : "text-muted-foreground"}`}>In-Stock First</span>
             </div>
           </div>
+
+          {/* Publisher filter */}
+          <PublisherFilterRow
+            enabled={dcPubFilterEnabled}
+            onEnabledChange={setDcPubFilterEnabled}
+            value={dcPubFilterValue}
+            onValueChange={setDcPubFilterValue}
+            publishers={publishers}
+            loading={loadingPublishers}
+          />
 
           {/* Two-panel collection selector */}
           <div className="grid grid-cols-2 gap-4">
@@ -2031,6 +2131,16 @@ export default function CollectionSortManager() {
               <span className={`text-xs ${invInStockFirst ? "text-foreground font-medium" : "text-muted-foreground"}`}>In-Stock First</span>
             </div>
           </div>
+
+          {/* Publisher filter */}
+          <PublisherFilterRow
+            enabled={invPubFilterEnabled}
+            onEnabledChange={setInvPubFilterEnabled}
+            value={invPubFilterValue}
+            onValueChange={setInvPubFilterValue}
+            publishers={publishers}
+            loading={loadingPublishers}
+          />
 
           {/* Two-panel collection selector */}
           <div className="grid grid-cols-2 gap-4">

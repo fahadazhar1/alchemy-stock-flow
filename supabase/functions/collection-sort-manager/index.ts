@@ -213,6 +213,7 @@ interface CollectionProduct {
   publishedAt: string | null;
   language: string | null;
   availableForSale: boolean;
+  vendor: string | null;
 }
 
 async function fetchCollectionProducts(
@@ -232,7 +233,7 @@ async function fetchCollectionProducts(
         products(first: $first, after: $after) {
           pageInfo { hasNextPage endCursor }
           nodes {
-            id title handle publishedAt
+            id title handle publishedAt vendor
             metafield(namespace: "custom", key: "language") { value }
             variants(first: 1) { nodes { availableForSale } }
           }
@@ -265,6 +266,7 @@ async function fetchCollectionProducts(
         publishedAt: p.publishedAt ?? null,
         language: p.metafield?.value?.trim() || null,
         availableForSale: p.variants?.nodes?.[0]?.availableForSale ?? false,
+        vendor: p.vendor?.trim() || null,
       });
     }
 
@@ -278,7 +280,7 @@ async function fetchCollectionProducts(
 // ── Sort logic ───────────────────────────────────────────────────────────────
 
 interface SortRule {
-  type: "language" | "stock" | "date";
+  type: "language" | "stock" | "date" | "publisher";
   value: string;
   priority?: number;
 }
@@ -302,7 +304,16 @@ function getLanguageGroup(
   return languageRules.length; // "other languages" bucket
 }
 
-function sortProducts(products: CollectionProduct[], sortRules: SortRule[]): CollectionProduct[] {
+// Publisher priority tier, shared by every sort module — 0 when the product's
+// vendor matches the selected publisher (or no filter is set), 1 otherwise.
+// Always checked FIRST, ahead of language/stock/sales/etc., since the intent
+// is "push this publisher's products to the top", not a tiebreaker.
+function publisherRank(vendor: string | null, publisherFilter: string | null | undefined): number {
+  if (!publisherFilter) return 0;
+  return vendor && vendor.toLowerCase() === publisherFilter.toLowerCase() ? 0 : 1;
+}
+
+function sortProducts(products: CollectionProduct[], sortRules: SortRule[], publisherFilter?: string | null): CollectionProduct[] {
   const languageRules = sortRules
     .filter((r) => r.type === "language")
     .sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0));
@@ -314,6 +325,11 @@ function sortProducts(products: CollectionProduct[], sortRules: SortRule[]): Col
   const newestFirst = !dateRule || dateRule.value === "newest_first";
 
   return [...products].sort((a, b) => {
+    // 0. Publisher priority
+    const pubA = publisherRank(a.vendor, publisherFilter);
+    const pubB = publisherRank(b.vendor, publisherFilter);
+    if (pubA !== pubB) return pubA - pubB;
+
     // 1. Language group
     const groupA = getLanguageGroup(a.language, languageRules);
     const groupB = getLanguageGroup(b.language, languageRules);
@@ -401,6 +417,7 @@ interface CollectionProductWithPricing {
   price: number;
   compareAtPrice: number | null;
   availableForSale: boolean;
+  vendor: string | null;
 }
 
 async function fetchCollectionProductsWithPricing(
@@ -420,7 +437,7 @@ async function fetchCollectionProductsWithPricing(
         products(first: $first, after: $after) {
           pageInfo { hasNextPage endCursor }
           nodes {
-            id title
+            id title vendor
             variants(first: 1) { nodes { price compareAtPrice availableForSale } }
           }
         }
@@ -444,6 +461,7 @@ async function fetchCollectionProductsWithPricing(
         price: parseFloat(v?.price ?? "0"),
         compareAtPrice: v?.compareAtPrice ? parseFloat(v.compareAtPrice) : null,
         availableForSale: v?.availableForSale ?? false,
+        vendor: p.vendor?.trim() || null,
       });
     }
     cursor = collection.products.pageInfo.hasNextPage ? collection.products.pageInfo.endCursor : null;
@@ -460,6 +478,7 @@ interface CollectionProductWithInventory {
   title: string;
   inventoryQuantity: number;
   availableForSale: boolean;
+  vendor: string | null;
 }
 
 async function fetchCollectionProductsWithInventory(
@@ -479,7 +498,7 @@ async function fetchCollectionProductsWithInventory(
         products(first: $first, after: $after) {
           pageInfo { hasNextPage endCursor }
           nodes {
-            id title
+            id title vendor
             variants(first: 250) { nodes { inventoryQuantity availableForSale } }
           }
         }
@@ -499,7 +518,7 @@ async function fetchCollectionProductsWithInventory(
       const variantNodes = (p.variants?.nodes ?? []) as Array<{ inventoryQuantity: number | null; availableForSale: boolean }>;
       const totalQty = variantNodes.reduce((sum, v) => sum + (v.inventoryQuantity ?? 0), 0);
       const availableForSale = variantNodes.some((v) => v.availableForSale);
-      products.push({ id: p.id, title: p.title, inventoryQuantity: totalQty, availableForSale });
+      products.push({ id: p.id, title: p.title, inventoryQuantity: totalQty, availableForSale, vendor: p.vendor?.trim() || null });
     }
     cursor = collection.products.pageInfo.hasNextPage ? collection.products.pageInfo.endCursor : null;
     pagesFetched++;
@@ -552,8 +571,13 @@ function sortProductsByDiscount(
   products: CollectionProductWithPricing[],
   sortRule: string,
   inStockFirst: boolean,
+  publisherFilter?: string | null,
 ): CollectionProductWithPricing[] {
   return [...products].sort((a, b) => {
+    const pubA = publisherRank(a.vendor, publisherFilter);
+    const pubB = publisherRank(b.vendor, publisherFilter);
+    if (pubA !== pubB) return pubA - pubB;
+
     // Stock tier: separate in-stock from out-of-stock first
     if (a.availableForSale !== b.availableForSale) {
       return inStockFirst
@@ -580,9 +604,14 @@ function sortProductsByInventory(
   lowStockThreshold: number,
   overstockThreshold: number,
   inStockFirst: boolean,
+  publisherFilter?: string | null,
 ): CollectionProductWithInventory[] {
   if (sortRule === "low_stock_first") {
     return [...products].sort((a, b) => {
+      const pubA = publisherRank(a.vendor, publisherFilter);
+      const pubB = publisherRank(b.vendor, publisherFilter);
+      if (pubA !== pubB) return pubA - pubB;
+
       // Stock tier first
       if (a.availableForSale !== b.availableForSale) {
         return inStockFirst
@@ -597,6 +626,10 @@ function sortProductsByInventory(
   }
   // overstock_first
   return [...products].sort((a, b) => {
+    const pubA = publisherRank(a.vendor, publisherFilter);
+    const pubB = publisherRank(b.vendor, publisherFilter);
+    if (pubA !== pubB) return pubA - pubB;
+
     // Stock tier first
     if (a.availableForSale !== b.availableForSale) {
       return inStockFirst
@@ -715,11 +748,12 @@ Deno.serve(async (req: Request) => {
     });
   }
 
-  const { action, storeId, collections, sortRules, sortRule, lowStockThreshold, overstockThreshold, inStockFirst, salesWindowDays } = body as {
+  const { action, storeId, collections, sortRules, sortRule, lowStockThreshold, overstockThreshold, inStockFirst, salesWindowDays, publisherFilter } = body as {
     action: string;
     storeId: string;
     collections?: string[];
     sortRules?: SortRule[];
+    publisherFilter?: string | null;
     sortRule?: string;
     lowStockThreshold?: number;
     overstockThreshold?: number;
@@ -805,8 +839,8 @@ Deno.serve(async (req: Request) => {
     return runStreamingSort(
       supabase, storeId, collections, domain, conn.access_token,
       fetchCollectionProducts,
-      (products) => sortProducts(products, sortRules),
-      sortRules,
+      (products) => sortProducts(products, sortRules, publisherFilter),
+      publisherFilter ? [...sortRules, { type: "publisher", value: publisherFilter }] : sortRules,
     );
   }
 
@@ -855,6 +889,10 @@ Deno.serve(async (req: Request) => {
       },
       (products) => {
         const sorted = [...products].sort((a, b) => {
+          const pubA = publisherRank(a.vendor, publisherFilter);
+          const pubB = publisherRank(b.vendor, publisherFilter);
+          if (pubA !== pubB) return pubA - pubB;
+
           // Stock tier first
           if (a.availableForSale !== b.availableForSale) {
             return stockFirst
@@ -876,7 +914,7 @@ Deno.serve(async (req: Request) => {
         ));
         return sorted;
       },
-      [{ type: rule, salesWindowDays: windowDays, inStockFirst: stockFirst }],
+      [{ type: rule, salesWindowDays: windowDays, inStockFirst: stockFirst, publisherFilter: publisherFilter ?? null }],
     );
   }
 
@@ -892,8 +930,8 @@ Deno.serve(async (req: Request) => {
     return runStreamingSort(
       supabase, storeId, collections, domain, conn.access_token,
       fetchCollectionProductsWithPricing,
-      (products) => sortProductsByDiscount(products, rule, inStockFirst !== false),
-      [{ type: rule, inStockFirst: inStockFirst !== false }],
+      (products) => sortProductsByDiscount(products, rule, inStockFirst !== false, publisherFilter),
+      [{ type: rule, inStockFirst: inStockFirst !== false, publisherFilter: publisherFilter ?? null }],
     );
   }
 
@@ -911,8 +949,8 @@ Deno.serve(async (req: Request) => {
     return runStreamingSort(
       supabase, storeId, collections, domain, conn.access_token,
       fetchCollectionProductsWithInventory,
-      (products) => sortProductsByInventory(products, rule, lowThreshold, highThreshold, inStockFirst !== false),
-      [{ type: rule, lowStockThreshold: lowThreshold, overstockThreshold: highThreshold, inStockFirst: inStockFirst !== false }],
+      (products) => sortProductsByInventory(products, rule, lowThreshold, highThreshold, inStockFirst !== false, publisherFilter),
+      [{ type: rule, lowStockThreshold: lowThreshold, overstockThreshold: highThreshold, inStockFirst: inStockFirst !== false, publisherFilter: publisherFilter ?? null }],
     );
   }
 
