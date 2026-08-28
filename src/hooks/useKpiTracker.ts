@@ -199,8 +199,8 @@ export function useDailyKpiEntriesRange(fromDate: string, toDate: string) {
 
 export function useSendKpiReport() {
   return useMutation({
-    mutationFn: async (date: string) => {
-      const { data, error } = await supabase.functions.invoke("send-kpi-report", { body: { date } });
+    mutationFn: async (input: { date: string; includeMtd: boolean }) => {
+      const { data, error } = await supabase.functions.invoke("send-kpi-report", { body: input });
       if (error) throw error;
       return data;
     },

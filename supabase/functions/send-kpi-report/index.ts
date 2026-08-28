@@ -69,7 +69,7 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const { date } = await req.json(); // "YYYY-MM-DD" — the date selected in the page's filter bar
+    const { date, includeMtd = true } = await req.json(); // date: "YYYY-MM-DD" selected in the page's filter bar; includeMtd: page's "MTD in ClickUp" toggle, applies to every store's message
     if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return new Response(JSON.stringify({ error: "date must be YYYY-MM-DD" }), { status: 400, headers: corsHeaders });
     }
@@ -166,8 +166,9 @@ Deno.serve(async (req) => {
       const storeMtdEntries = (entryMtdRows ?? []).filter((e: any) => e.store_id === store.id);
 
       let msg = `## ${store.store_name} — Daily KPI Report (${date})\n\n`;
-      msg += `| Metric | Owner | Target | Actual | MTD | Reviewed |\n`;
-      msg += `|---|---|---|---|---|---|\n`;
+      msg += includeMtd
+        ? `| Metric | Owner | Target | Actual | MTD | Reviewed |\n|---|---|---|---|---|---|\n`
+        : `| Metric | Owner | Target | Actual | Reviewed |\n|---|---|---|---|---|\n`;
       for (const c of storeConfig) {
         let actual: string;
         let mtd: string;
@@ -182,7 +183,9 @@ Deno.serve(async (req) => {
             .filter((n: number) => !Number.isNaN(n));
           mtd = nums.length > 0 ? nums.reduce((s: number, n: number) => s + n, 0).toLocaleString() : "—";
         }
-        msg += `| ${c.metric_label} | ${c.owner || "—"} | ${c.target || "—"} | ${actual} | ${mtd} | Daily |\n`;
+        msg += includeMtd
+          ? `| ${c.metric_label} | ${c.owner || "—"} | ${c.target || "—"} | ${actual} | ${mtd} | Daily |\n`
+          : `| ${c.metric_label} | ${c.owner || "—"} | ${c.target || "—"} | ${actual} | Daily |\n`;
       }
 
       const res = await fetch(`https://api.clickup.com/api/v3/workspaces/9015071612/chat/channels/${CLICKUP_CHANNEL_ID}/messages`, {
