@@ -52,6 +52,53 @@ function fmtMoney(sym: string, n: number): string {
   return `${sym}${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+// Ported from src/hooks/useChannelPerformance.ts normalizeKey() — must stay
+// in sync so a channel filter selected on the page maps to the same rows
+// here as it does client-side.
+function normalizeKey(source: string | null): string {
+  const k = (source ?? "").toLowerCase().trim();
+  if (k === "" || k === "null") return "admin";
+  if (k === "web" || k.includes("online_store") || k.includes("online store")) return "web";
+  if (k === "pos" || k.includes("point_of_sale") || k.includes("point of sale")) return "pos";
+  if (k === "android" || k === "iphone" || k === "shop") return "shop";
+  if (k.includes("amazon")) return "amazon";
+  if (k.includes("ebay")) return "ebay";
+  if (k.includes("google")) return "google";
+  if (k.includes("facebook") || k === "fb") return "facebook";
+  if (k.includes("instagram") || k === "ig") return "instagram";
+  if (k.includes("tiktok") || k.includes("tik_tok") || k.includes("tik tok")) return "tiktok";
+  if (k.includes("etsy")) return "etsy";
+  if (k.includes("walmart")) return "walmart";
+  if (k.includes("wholesale")) return "wholesale";
+  if (k.includes("subscription")) return "subscription";
+  if (k.includes("draft")) return "shopify_draft_orders";
+  return "unknown";
+}
+
+// Sums a set of get_store_period_channel_sales rows for one store+bucket,
+// applying the same channel filter and shipping-exclusion the page's Sales
+// Pulse cards use (useStoreSalesPulse) — without this the report always
+// summed every channel with shipping included, ignoring the page's filters.
+function sumSalesRows(
+  rows: any[],
+  storeId: string,
+  bucket: "cur" | "prev",
+  channelFilter: string[],
+  excludeShipping: boolean,
+): { revenue: number; orders: number } {
+  let revenue = 0;
+  let orders = 0;
+  for (const r of rows) {
+    if (r.store_id !== storeId || r.bucket !== bucket) continue;
+    if (channelFilter.length > 0 && !channelFilter.includes(normalizeKey(r.source_name))) continue;
+    let netRevenue = Number(r.revenue ?? 0);
+    if (excludeShipping) netRevenue -= Number(r.shipping_revenue ?? 0);
+    revenue += netRevenue;
+    orders += Number(r.orders ?? 0);
+  }
+  return { revenue, orders };
+}
+
 function aggregateBounce(rows: any[]): string {
   if (rows.length === 0) return "No data yet";
   const sessions = rows.reduce((s, r) => s + Number(r.sessions), 0);
@@ -69,7 +116,11 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const { date, includeMtd = true } = await req.json(); // date: "YYYY-MM-DD" selected in the page's filter bar; includeMtd: page's "MTD in ClickUp" toggle, applies to every store's message
+    // date: "YYYY-MM-DD" selected in the page's filter bar. includeMtd: page's
+    // "MTD in ClickUp" toggle. channelFilter/excludeShipping: same Sales Pulse
+    // filters shown on the page — must be applied here too, or the report's
+    // Sales figure silently diverges from what's on screen.
+    const { date, includeMtd = true, channelFilter = [], excludeShipping = false } = await req.json();
     if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return new Response(JSON.stringify({ error: "date must be YYYY-MM-DD" }), { status: 400, headers: corsHeaders });
     }
@@ -109,19 +160,14 @@ Deno.serve(async (req) => {
       const today = dayBoundsUTC(date, offset);
       const mtdStart = monthStartUTC(date, offset);
 
-      // Sales — the selected day + MTD, all channels, shipping included
-      // (matches the Sales Pulse card's default toggle state: "Exclude
-      // shipping" off).
+      // Sales — the selected day + MTD, filtered to whatever channel(s) and
+      // shipping-inclusion the page's Sales Pulse filter bar has selected.
       const { data: salesRows } = await supabase.rpc("get_store_period_channel_sales", {
         p_start_iso: today.startISO, p_end_iso: today.endISO,
         p_prev_start_iso: mtdStart, p_prev_end_iso: today.endISO,
       });
-      let dayRevenue = 0, dayOrders = 0, mtdRevenue = 0, mtdOrders = 0;
-      for (const r of salesRows ?? []) {
-        if (r.store_id !== store.id) continue;
-        if (r.bucket === "cur") { dayRevenue += Number(r.revenue); dayOrders += Number(r.orders); }
-        if (r.bucket === "prev") { mtdRevenue += Number(r.revenue); mtdOrders += Number(r.orders); }
-      }
+      const { revenue: dayRevenue, orders: dayOrders } = sumSalesRows(salesRows ?? [], store.id, "cur", channelFilter, excludeShipping);
+      const { revenue: mtdRevenue, orders: mtdOrders } = sumSalesRows(salesRows ?? [], store.id, "prev", channelFilter, excludeShipping);
 
       // Organic traffic — selected day, GA4 "Organic Search" channel.
       const { data: channelRows } = await supabase.rpc("get_ga4_channel_summary", {
