@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import { Card } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
@@ -161,6 +162,7 @@ export default function ClickUpReports() {
   const updateConfig = useUpdateKpiConfig();
   const sendReport = useSendKpiReport();
   const [sendingStatus, setSendingStatus] = useState<string | null>(null);
+  const [includeMtdInReport, setIncludeMtdInReport] = useState(true);
 
   const storesInOrder = useMemo(() => {
     const byStore = new Map<string, { storeId: string; storeName: string; storeCode: string; currencySymbol: string }>();
@@ -260,7 +262,7 @@ export default function ClickUpReports() {
       // Sends the currently-selected date (gaEnd), not always literal today —
       // the ClickUp report's title/Actual column reflect whatever's picked in
       // the filter bar above, same as the on-page Actual column.
-      const result: any = await sendReport.mutateAsync(gaEnd);
+      const result: any = await sendReport.mutateAsync({ date: gaEnd, includeMtd: includeMtdInReport });
       const failed = Object.entries(result?.results ?? {}).filter(([, v]: any) => !v.sent);
       if (failed.length > 0) {
         toast.error(`Sent with ${failed.length} failure(s) — check ClickUp`);
@@ -301,6 +303,10 @@ export default function ClickUpReports() {
             {isRefreshing ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
             Refresh
           </Button>
+          <div className="flex items-center gap-1.5 h-8 px-2 rounded-md border">
+            <Switch checked={includeMtdInReport} onCheckedChange={setIncludeMtdInReport} className="scale-90" />
+            <span className="text-xs text-muted-foreground whitespace-nowrap">MTD in ClickUp</span>
+          </div>
           <Button size="sm" className="h-8 text-xs gap-1.5" onClick={handleSend} disabled={sendingStatus === "sending"}>
             {sendingStatus === "sending" ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}
             Send to ClickUp
