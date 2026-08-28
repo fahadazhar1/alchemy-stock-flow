@@ -262,7 +262,10 @@ export default function ClickUpReports() {
       // Sends the currently-selected date (gaEnd), not always literal today —
       // the ClickUp report's title/Actual column reflect whatever's picked in
       // the filter bar above, same as the on-page Actual column.
-      const result: any = await sendReport.mutateAsync({ date: gaEnd, includeMtd: includeMtdInReport });
+      const result: any = await sendReport.mutateAsync({
+        date: gaEnd, includeMtd: includeMtdInReport,
+        channelFilter: Array.from(channelFilter), excludeShipping,
+      });
       const failed = Object.entries(result?.results ?? {}).filter(([, v]: any) => !v.sent);
       if (failed.length > 0) {
         toast.error(`Sent with ${failed.length} failure(s) — check ClickUp`);
