@@ -11,7 +11,10 @@ import { cn } from "@/lib/utils";
 
 type ReplenRow = {
   product_id: string;
+  variant_id: string;
   product_name: string;
+  variant_title: string | null;
+  variant_count: number;
   sku: string;
   available_units: number;
   velocity: number;
@@ -60,7 +63,7 @@ export default function Replenishment() {
     queryKey: ["replenishment-page", storeId],
     queryFn: async () => {
       let q = (supabase as any)
-        .from("v_replenishment_candidates")
+        .from("v_replenishment_variant_candidates")
         .select("*")
         .order("days_of_stock", { ascending: true })
         .limit(100);
@@ -98,7 +101,7 @@ export default function Replenishment() {
             <Truck className="h-6 w-6" /> Replenishment
           </h1>
           <p className="text-sm text-muted-foreground">
-            High-velocity products running low — order before stockout
+            High-velocity products and variants running low — order before stockout
           </p>
         </div>
         <Button
@@ -107,6 +110,7 @@ export default function Replenishment() {
           onClick={() => data && exportToCSV(
             data.map(r => ({
               Name: r.product_name,
+              Variant: r.variant_count > 1 ? r.variant_title ?? "" : "",
               SKU: r.sku,
               "Available Units": r.available_units,
               "Days of Stock": r.days_of_stock,
@@ -176,7 +180,7 @@ export default function Replenishment() {
             const suggested = Math.max(0, Math.round(r.velocity * 2 - r.available_units));
 
             return (
-              <Card key={r.product_id} className={cn("border", cfg.bgClass)}>
+              <Card key={r.variant_id} className={cn("border", cfg.bgClass)}>
                 <CardContent className="p-4 space-y-3">
 
                   {/* Status + days left */}
@@ -198,6 +202,11 @@ export default function Replenishment() {
                       <div className="font-semibold text-sm leading-snug line-clamp-2">
                         {r.product_name}
                       </div>
+                      {r.variant_count > 1 && r.variant_title && (
+                        <Badge variant="secondary" className="mt-1 text-[11px] font-medium">
+                          {r.variant_title}
+                        </Badge>
+                      )}
                       <div className="font-mono text-[11px] text-muted-foreground mt-0.5">
                         {r.sku}
                       </div>
