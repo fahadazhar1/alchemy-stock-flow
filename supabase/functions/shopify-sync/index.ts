@@ -1864,6 +1864,80 @@ Deno.serve(async (req) => {
       return json(200, { ok: true, locations: data.locations ?? [] });
     }
 
+    // Move stock between two locations of the same store in ONE atomic Shopify call
+    // (-qty at source, +qty at destination). Checks live source stock first, then logs both
+    // legs to stock_adjustment_history and refreshes inventory_levels immediately.
+    if (action === "transfer_inventory") {
+      const { store_id, variant_id, from_location_id, to_location_id, quantity, adjusted_by } = body;
+      const qty = Math.floor(Number(quantity));
+      if (!store_id || !variant_id || !from_location_id || !to_location_id || !(qty > 0) || from_location_id === to_location_id) {
+        return json(400, { ok: false, error: "Missing or invalid transfer fields" });
+      }
+      const { data: conn } = await supabase.from("shopify_connections")
+        .select("shop_domain, access_token, store_id").eq("store_id", String(store_id)).eq("is_active", true).maybeSingle();
+      if (!conn?.access_token) return json(404, { ok: false, error: "No active Shopify connection for this store" });
+      const { data: variant } = await supabase.from("variants")
+        .select("id, product_id, variant_sku, shopify_inventory_item_id, products(name)")
+        .eq("id", String(variant_id)).eq("store_id", String(store_id)).maybeSingle();
+      if (!variant?.shopify_inventory_item_id) return json(404, { ok: false, error: "Variant not linked to Shopify inventory" });
+
+      const domain = normalizeDomain(conn.shop_domain);
+      const iid = String(variant.shopify_inventory_item_id);
+      const lvlRes = await shopifyFetch(domain, conn.access_token, `/inventory_levels.json?inventory_item_ids=${iid}&limit=250`);
+      if (!lvlRes.ok) return json(502, { ok: false, error: `Shopify error ${lvlRes.status}` });
+      const levels = (await lvlRes.json()).inventory_levels ?? [];
+      const src = levels.find((l: any) => String(l.location_id) === String(from_location_id));
+      const dst = levels.find((l: any) => String(l.location_id) === String(to_location_id));
+      const srcAvail = Number(src?.available ?? 0);
+      if (!src || srcAvail < qty) {
+        return json(409, { ok: false, error: `Only ${srcAvail} available at the source location right now` });
+      }
+      const itemGid = `gid://shopify/InventoryItem/${iid}`;
+      const gql = async (query: string, variables: Record<string, unknown>) => {
+        const r = await fetch(`https://${domain}/admin/api/2025-07/graphql.json`, {
+          method: "POST",
+          headers: { "X-Shopify-Access-Token": conn.access_token, "Content-Type": "application/json" },
+          body: JSON.stringify({ query, variables }),
+        });
+        return r.json();
+      };
+      if (!dst) {
+        const act = await gql(`mutation($i:ID!,$l:ID!){inventoryActivate(inventoryItemId:$i,locationId:$l){userErrors{message}}}`,
+          { i: itemGid, l: `gid://shopify/Location/${to_location_id}` });
+        const errs = act?.data?.inventoryActivate?.userErrors ?? act?.errors;
+        if (errs?.length) return json(400, { ok: false, error: `Could not stock item at destination: ${JSON.stringify(errs).slice(0, 200)}` });
+      }
+      const mv = await gql(`mutation($in:InventoryAdjustQuantitiesInput!){inventoryAdjustQuantities(input:$in){userErrors{message}}}`, {
+        in: {
+          name: "available", reason: "movement_created",
+          changes: [
+            { inventoryItemId: itemGid, locationId: `gid://shopify/Location/${from_location_id}`, delta: -qty },
+            { inventoryItemId: itemGid, locationId: `gid://shopify/Location/${to_location_id}`, delta: qty },
+          ],
+        },
+      });
+      const mvErrs = mv?.data?.inventoryAdjustQuantities?.userErrors ?? mv?.errors;
+      if (!mv?.data || mvErrs?.length) return json(400, { ok: false, error: JSON.stringify(mvErrs ?? mv).slice(0, 300) });
+
+      // Refresh local per-location rows + total from Shopify (the webhook will also arrive)
+      const after = await shopifyFetch(domain, conn.access_token, `/inventory_levels.json?inventory_item_ids=${iid}&limit=250`);
+      const afterLevels = after.ok ? ((await after.json()).inventory_levels ?? []) : [];
+      if (afterLevels.length) {
+        const total = afterLevels.reduce((s: number, l: any) => s + Number(l.available ?? 0), 0);
+        await supabase.from("variants").update({ inventory_quantity: total }).eq("id", variant.id);
+        await writeLocationLevels(supabase, conn, [iid], afterLevels);
+      }
+      const names = await getLocationNames(domain, conn.access_token);
+      const dstBefore = Number(dst?.available ?? 0);
+      await supabase.from("stock_adjustment_history").insert([
+        { variant_id: variant.id, product_id: variant.product_id, store_id, variant_sku: variant.variant_sku, product_name: (variant as any).products?.name ?? null,
+          adjustment: -qty, quantity_before: srcAvail, quantity_after: srcAvail - qty, location_name: `${names[String(from_location_id)] ?? from_location_id} (transfer out)`, adjusted_by: adjusted_by ?? null },
+        { variant_id: variant.id, product_id: variant.product_id, store_id, variant_sku: variant.variant_sku, product_name: (variant as any).products?.name ?? null,
+          adjustment: qty, quantity_before: dstBefore, quantity_after: dstBefore + qty, location_name: `${names[String(to_location_id)] ?? to_location_id} (transfer in)`, adjusted_by: adjusted_by ?? null },
+      ]);
+      return json(200, { ok: true, moved: qty });
+    }
+
     if (action === "adjust_inventory") {
       const { connection_id, inventory_item_id, location_id, adjustment } = body;
       if (!connection_id || !inventory_item_id || !location_id || adjustment === undefined) {

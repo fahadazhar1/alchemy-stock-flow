@@ -29,6 +29,7 @@ import OrderFulfillment from "@/pages/OrderFulfillment";
 import DraftPO from "@/pages/DraftPO";
 import DiscountPerformance from "@/pages/DiscountPerformance";
 import DeadStock from "@/pages/DeadStock";
+import LocationReport from "@/pages/LocationReport";
 import BundleOpportunity from "@/pages/BundleOpportunity";
 import BundleBuilder from "@/pages/BundleBuilder";
 import SEOAudit from "@/pages/SEOAudit";
@@ -102,6 +103,7 @@ function AppRoutes() {
           <Route path="/draft-po" element={<DraftPO />} />
           <Route path="/discount-performance" element={<DiscountPerformance />} />
           <Route path="/dead-stock" element={<DeadStock />} />
+          <Route path="/location-report" element={<LocationReport />} />
           <Route path="/bundle-finder" element={<BundleOpportunity />} />
           <Route path="/bundle-builder" element={<BundleBuilder />} />
           <Route path="/fbt-bundle-discount" element={<FbtBundleSettings />} />
