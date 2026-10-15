@@ -8,7 +8,6 @@ import { exportToCSV } from "@/lib/export";
 import { Truck, Download, AlertTriangle, Clock, TrendingUp, Package } from "lucide-react";
 import { useStoreFilter } from "@/hooks/useStoreFilter";
 import { cn } from "@/lib/utils";
-import { TransferSuggestions } from "@/components/TransferSuggestions";
 
 type ReplenRow = {
   product_id: string;
@@ -125,8 +124,6 @@ export default function Replenishment() {
           <Download className="h-4 w-4 mr-1" /> Export
         </Button>
       </div>
-
-      <TransferSuggestions storeId={storeId} />
 
       {/* Summary Stats */}
       {totalAtRisk > 0 && (

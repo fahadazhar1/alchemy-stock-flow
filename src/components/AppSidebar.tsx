@@ -3,7 +3,7 @@ import {
   BarChart3, Truck, CheckSquare, FlaskConical, Clock, Settings, BookOpen, Store,
   ShoppingCart, BarChart2, ListOrdered, Activity, LogOut, ChevronRight, History,
   PackageCheck, ClipboardList, Tag, Archive, PackageOpen, PackagePlus, Search, Globe2, Gift, Wallet,
-  MessageSquare, MapPin,
+  MessageSquare, MapPin, ArrowLeftRight,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
@@ -37,7 +37,13 @@ const navItems = [
   { title: "Approval Queue", url: "/approvals", icon: CheckSquare },
   { title: "Campaigns", url: "/campaigns", icon: BarChart3 },
   { title: "Simulation", url: "/simulation", icon: FlaskConical },
-  { title: "Replenishment", url: "/replenishment", icon: Truck },
+  {
+    title: "Replenishment", url: "/replenishment", icon: Truck,
+    children: [
+      { title: "Replenishment", url: "/replenishment", icon: Truck },
+      { title: "Stock Transfers", url: "/replenishment/transfers", icon: ArrowLeftRight },
+    ],
+  },
   { title: "Location Report", url: "/location-report", icon: MapPin },
   { title: "Product Velocity", url: "/product-velocity", icon: Activity },
   { title: "Expiry Monitor", url: "/expiry", icon: Clock },

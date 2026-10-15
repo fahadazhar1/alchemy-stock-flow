@@ -60,7 +60,13 @@ export function TransferSuggestions({ storeId }: { storeId: string | null }) {
     },
   });
 
-  if (!data?.length) return null;
+  if (!data?.length) return (
+    <div className="text-center py-16 text-muted-foreground">
+      <ArrowLeftRight className="h-10 w-10 mx-auto mb-2 opacity-40" />
+      <p className="font-medium">No transfers needed</p>
+      <p className="text-xs mt-1">Every location has enough stock for what it sells, or no other location has spare</p>
+    </div>
+  );
 
   const open = (s: Suggestion) => { setActive(s); setQty(String(s.suggested_qty)); };
 

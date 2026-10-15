@@ -30,6 +30,7 @@ import DraftPO from "@/pages/DraftPO";
 import DiscountPerformance from "@/pages/DiscountPerformance";
 import DeadStock from "@/pages/DeadStock";
 import LocationReport from "@/pages/LocationReport";
+import StockTransfers from "@/pages/StockTransfers";
 import BundleOpportunity from "@/pages/BundleOpportunity";
 import BundleBuilder from "@/pages/BundleBuilder";
 import SEOAudit from "@/pages/SEOAudit";
@@ -92,6 +93,7 @@ function AppRoutes() {
           <Route path="/audit-logs" element={<AuditLogs />} />
           <Route path="/campaigns" element={<CampaignPerformance />} />
           <Route path="/replenishment" element={<Replenishment />} />
+          <Route path="/replenishment/transfers" element={<StockTransfers />} />
           <Route path="/product-velocity" element={<ProductVelocity />} />
           <Route path="/approvals" element={<ApprovalQueue />} />
           <Route path="/simulation" element={<Simulation />} />
