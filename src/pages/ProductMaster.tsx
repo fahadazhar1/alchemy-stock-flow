@@ -15,12 +15,13 @@ import { Label } from "@/components/ui/label";
 import { useCurrency } from "@/hooks/useCurrency";
 import { exportToCSV } from "@/lib/export";
 import { toast } from "sonner";
-import { Download, RotateCcw, Search, ExternalLink, XCircle, Warehouse, PackagePlus, Pencil, Check, X, RefreshCw } from "lucide-react";
+import { Download, RotateCcw, Search, ExternalLink, XCircle, MapPin, PackagePlus, Pencil, Check, X, RefreshCw } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { useCollectionRefresh } from "@/hooks/useCollectionRefresh";
 import { DateRangeFilter, matchesDateFilter } from "@/components/DateRangeFilter";
 import { useStoreFilter } from "@/hooks/useStoreFilter";
 import { useAuth } from "@/contexts/AuthContext";
+import { getTrend, TREND_CONFIG, DEAD_STOCK_CLS } from "@/lib/productTrend";
 
 const PAGE_SIZE = 20;
 
@@ -57,6 +58,7 @@ export default function ProductMaster() {
   const [typeFilter, setTypeFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [inventoryFilter, setInventoryFilter] = useState("all");
+  const [locationFilter, setLocationFilter] = useState("all");
   const [filterDates, setFilterDates] = useState<Date[]>([]);
   const [filterMonths, setFilterMonths] = useState<number[]>([]);
   const [filterYears, setFilterYears] = useState<number[]>([]);
@@ -125,8 +127,20 @@ export default function ProductMaster() {
     },
   });
 
+  // Shopify locations that hold stock rows for this store (per-location stock is kept live by the inventory webhook)
+  const { data: locations } = useQuery({
+    queryKey: ["store-locations", storeId],
+    staleTime: 5 * 60 * 1000,
+    queryFn: async () => {
+      if (!storeId) return [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data } = await (supabase as any).rpc("get_store_locations", { p_store_id: storeId });
+      return (data ?? []) as { shopify_location_id: string; location_name: string }[];
+    },
+  });
+
   const { data, isLoading } = useQuery({
-    queryKey: ["products", page, search, collectionFilter, vendorFilter, typeFilter, statusFilter, inventoryFilter, storeId],
+    queryKey: ["products", page, search, collectionFilter, vendorFilter, typeFilter, statusFilter, inventoryFilter, locationFilter, storeId],
     queryFn: async () => {
       try {
         let collectionProductIds: string[] | null = null;
@@ -139,6 +153,16 @@ export default function ProductMaster() {
           collectionProductIds = ((ids ?? []) as { product_id: string }[]).map(r => r.product_id);
         }
 
+        let locationProductIds: string[] | null = null;
+        if (locationFilter !== "all" && storeId) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { data: ids } = await (supabase as any).rpc("get_location_product_ids", {
+            p_store_id: storeId,
+            p_location_id: locationFilter,
+          });
+          locationProductIds = ((ids ?? []) as { product_id: string }[]).map(r => r.product_id);
+        }
+
         let q = supabase.from("v_product_inventory_summary").select("*", { count: "exact" });
         if (storeId) q = q.eq("store_id", storeId);
         q = q
@@ -148,6 +172,10 @@ export default function ProductMaster() {
         if (collectionProductIds !== null) {
           if (!collectionProductIds.length) return { data: [], count: 0 };
           q = q.in("product_id", collectionProductIds);
+        }
+        if (locationProductIds !== null) {
+          if (!locationProductIds.length) return { data: [], count: 0 };
+          q = q.in("product_id", locationProductIds);
         }
         if (vendorFilter !== "all") q = q.eq("vendor_name", vendorFilter);
         if (typeFilter !== "all") q = q.eq("product_type", typeFilter);
@@ -166,21 +194,34 @@ export default function ProductMaster() {
     },
   });
 
-  const { data: centralStockMap } = useQuery({
-    queryKey: ["central-stock-map"],
+  // Per-page signals: stock split by location, sales trend (same rule as Product Velocity)
+  // and dead-stock status (same view as Dead Stock). Scoped to the visible page's product ids.
+  const pageProductIds = useMemo(() => (data?.data ?? []).map(p => p.product_id!).filter(Boolean), [data]);
+  const { data: pageSignals } = useQuery({
+    queryKey: ["product-master-signals", pageProductIds],
+    enabled: pageProductIds.length > 0,
     queryFn: async () => {
-      const { data } = await supabase
-        .from("v_central_inventory" as any)
-        .select("sku, available_quantity, linked_stores_count");
-      const map = new Map<string, { centralStock: number; linkedStores: number }>();
-      ((data ?? []) as any[]).forEach((r: any) => {
-        const baseSku = r.sku?.split('-').slice(0, 2).join('-');
-        const existing = map.get(baseSku) || { centralStock: 0, linkedStores: 0 };
-        existing.centralStock += r.available_quantity || 0;
-        existing.linkedStores = Math.max(existing.linkedStores, r.linked_stores_count || 0);
-        map.set(baseSku, existing);
-      });
-      return map;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const db = supabase as any;
+      const [loc, vel, dead] = await Promise.all([
+        db.rpc("get_product_location_stock", { p_product_ids: pageProductIds }),
+        db.from("v_product_velocity_live").select("product_id, units_sold_7d, units_sold_30d").in("product_id", pageProductIds),
+        db.from("v_dead_stock").select("product_id, dead_stock_status").in("product_id", pageProductIds),
+      ]);
+      const byLocation = new Map<string, { id: string; name: string; available: number }[]>();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const r of (loc.data ?? []) as any[]) {
+        const list = byLocation.get(r.product_id) ?? [];
+        list.push({ id: r.shopify_location_id, name: r.location_name ?? "Unknown", available: Number(r.available ?? 0) });
+        byLocation.set(r.product_id, list);
+      }
+      const velocity = new Map<string, { units_sold_7d: number; units_sold_30d: number }>();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const r of (vel.data ?? []) as any[]) velocity.set(r.product_id, { units_sold_7d: Number(r.units_sold_7d ?? 0), units_sold_30d: Number(r.units_sold_30d ?? 0) });
+      const deadStatus = new Map<string, string>();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const r of (dead.data ?? []) as any[]) deadStatus.set(r.product_id, r.dead_stock_status);
+      return { byLocation, velocity, deadStatus };
     },
   });
 
@@ -373,12 +414,6 @@ export default function ProductMaster() {
   const makeShopifyLink = (name: string) => {
     const slug = name?.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'product';
     return `https://your-store.myshopify.com/products/${slug}`;
-  };
-
-  const getWinnerLoserStatus = (daysOld: number | null, inventory: number | null) => {
-    const d = daysOld ?? 0; const inv = inventory ?? 0;
-    if (d > 20 && inv > 10) return "loser";
-    return "winner";
   };
 
   const resetDateFilter = () => { setFilterDates([]); setFilterMonths([]); setFilterYears([]); };
@@ -729,6 +764,15 @@ export default function ProductMaster() {
             <SelectItem value="draft">Draft</SelectItem>
           </SelectContent>
         </Select>
+        {(locations?.length ?? 0) > 1 && (
+          <Select value={locationFilter} onValueChange={v => { setLocationFilter(v); setPage(0); }}>
+            <SelectTrigger className="w-[190px]"><MapPin className="h-3.5 w-3.5 mr-1 text-muted-foreground" /><SelectValue placeholder="Location" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Locations</SelectItem>
+              {locations?.map(l => <SelectItem key={l.shopify_location_id} value={l.shopify_location_id}>In stock at {l.location_name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        )}
         <Select value={inventoryFilter} onValueChange={v => { setInventoryFilter(v); setPage(0); }}>
           <SelectTrigger className="w-[150px]"><SelectValue placeholder="Inventory" /></SelectTrigger>
           <SelectContent>
@@ -760,15 +804,16 @@ export default function ProductMaster() {
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-10"><Checkbox checked={filteredData.data.length > 0 && filteredData.data.every(p => selected.has(p.product_id!))} onCheckedChange={selectPage} /></TableHead>
-                  <TableHead className="w-16">Status</TableHead>
+                  <TableHead className="w-24">
+                    <Tooltip><TooltipTrigger>Status</TooltipTrigger><TooltipContent>Sales trend (same as Product Velocity) or Dead Stock status</TooltipContent></Tooltip>
+                  </TableHead>
                   <TableHead>Name</TableHead>
                   <TableHead>SKU</TableHead>
                   <TableHead>Collection</TableHead>
                   <TableHead className="text-right">Store Stock</TableHead>
-                  <TableHead className="text-right">
-                    <Tooltip><TooltipTrigger className="flex items-center gap-1 ml-auto"><Warehouse className="h-3 w-3" />Central</TooltipTrigger><TooltipContent>Central WMS stock (shared across stores)</TooltipContent></Tooltip>
+                  <TableHead>
+                    <Tooltip><TooltipTrigger className="flex items-center gap-1"><MapPin className="h-3 w-3" />By Location</TooltipTrigger><TooltipContent>Available stock at each Shopify location (live)</TooltipContent></Tooltip>
                   </TableHead>
-                  <TableHead className="text-center">Stores</TableHead>
                   <TableHead className="text-right">Price</TableHead>
                   <TableHead className="text-right">Original</TableHead>
                   <TableHead className="text-right">Days</TableHead>
@@ -780,15 +825,17 @@ export default function ProductMaster() {
               </TableHeader>
               <TableBody>
                 {filteredData.data.map(p => {
-                  const status = getWinnerLoserStatus(p.days_old, p.total_inventory);
-                  const baseSku = p.sku?.split('-').slice(0, 2).join('-');
-                  const central = centralStockMap?.get(baseSku || '');
+                  const dead = pageSignals?.deadStatus.get(p.product_id!);
+                  const trend = getTrend(pageSignals?.velocity.get(p.product_id!) ?? { units_sold_7d: 0, units_sold_30d: 0 });
+                  const locStock = pageSignals?.byLocation.get(p.product_id!) ?? [];
                   const isEditingPrice = priceEditData?.productId === p.product_id;
                   return (
                     <TableRow key={p.product_id} data-state={selected.has(p.product_id!) ? "selected" : undefined}>
                       <TableCell><Checkbox checked={selected.has(p.product_id!)} onCheckedChange={() => toggleSelect(p.product_id!)} /></TableCell>
                       <TableCell>
-                        {status === "loser" ? <Badge variant="destructive" className="text-[10px]">Loser</Badge> : <Badge className="bg-emerald-500 hover:bg-emerald-600 text-[10px]">Winner</Badge>}
+                        {!pageSignals ? <span className="text-xs text-muted-foreground">…</span>
+                          : dead ? <Badge variant="outline" className={`text-[10px] whitespace-nowrap ${DEAD_STOCK_CLS[dead] ?? ""}`}>{dead}</Badge>
+                          : <Badge variant="outline" className={`text-[10px] gap-1 whitespace-nowrap ${TREND_CONFIG[trend].cls}`}>{TREND_CONFIG[trend].icon}{TREND_CONFIG[trend].label}</Badge>}
                       </TableCell>
                       <TableCell className="font-medium max-w-[200px] truncate">
                         <a href={makeShopifyLink(p.product_name || '')} target="_blank" rel="noopener noreferrer" className="hover:underline inline-flex items-center gap-1">
@@ -798,9 +845,17 @@ export default function ProductMaster() {
                       <TableCell className="font-mono text-xs">{p.sku}</TableCell>
                       <TableCell className="text-xs">{p.collection_name || '-'}</TableCell>
                       <TableCell className="text-right font-mono">{p.total_inventory}</TableCell>
-                      <TableCell className="text-right font-mono text-primary">{central?.centralStock?.toLocaleString() ?? '-'}</TableCell>
-                      <TableCell className="text-center">
-                        {central?.linkedStores ? <Badge variant="outline" className="text-[10px]">{central.linkedStores}</Badge> : '-'}
+                      <TableCell className="text-xs">
+                        {locStock.length === 0 ? <span className="text-muted-foreground">-</span> : (
+                          <div className="flex flex-col gap-0.5 min-w-[150px]">
+                            {locStock.map(l => (
+                              <div key={l.id} className={`flex justify-between gap-3 ${locationFilter === l.id ? "font-semibold" : ""}`}>
+                                <span className="truncate text-muted-foreground">{l.name}</span>
+                                <span className={`font-mono tabular-nums ${l.available <= 0 ? "text-destructive" : ""}`}>{l.available}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </TableCell>
 
                       {/* Price cell — inline editable */}

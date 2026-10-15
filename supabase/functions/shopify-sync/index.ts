@@ -724,7 +724,16 @@ async function fetchAndInsertVariant(supabase: any, conn: any, shopifyVariantId:
 // Upserts a single Shopify order and its line items.
 // Used by both the bulk sync loop and the real-time webhook handler.
 async function processSingleOrder(supabase: any, conn: any, o: any, currentShipping?: number): Promise<void> {
+  // Location the order was actually fulfilled from (latest non-cancelled fulfillment).
+  const liveFulfillments = (o.fulfillments ?? []).filter((f: any) => f?.location_id && f.status !== "cancelled");
+  const fulfillmentLocationId = liveFulfillments.length ? String(liveFulfillments[liveFulfillments.length - 1].location_id) : null;
+  const fulfillmentLocationName = fulfillmentLocationId
+    ? (await getLocationNames(normalizeDomain(conn.shop_domain), conn.access_token))[fulfillmentLocationId] ?? null
+    : null;
+
   const orderRow = {
+    fulfillment_location_id: fulfillmentLocationId,
+    fulfillment_location_name: fulfillmentLocationName,
     order_number: String(o.name || o.order_number || o.id),
     status: o.financial_status || o.fulfillment_status || "unknown",
     financial_status: o.financial_status || null,
@@ -841,6 +850,219 @@ async function processOrderWebhook(supabase: any, conn: any, payload: any): Prom
   const domain = normalizeDomain(conn.shop_domain);
   const shippingMap = await fetchCurrentShippingBatch(domain, conn.access_token, [String(payload.id)]);
   await processSingleOrder(supabase, conn, payload, shippingMap[String(payload.id)]);
+  // Isolated in its own try/catch: a bundle-sync failure must never break order/revenue sync.
+  try {
+    await syncBundleInventory(supabase, conn, payload);
+  } catch (e) {
+    console.error("syncBundleInventory failed for order", payload.id, ":", e instanceof Error ? e.message : String(e));
+  }
+}
+
+// Bundle Offers System products (Complete Azkar Bundle etc.) carry a `bundle.books`
+// metafield (list.product_reference) listing their component books, but sell as a
+// completely separate SKU/inventory — Shopify has no native link between the bundle's
+// stock and its components' stock (confirmed: productVariantComponents is empty on these
+// products). Buying the bundle does NOT decrement the real books' inventory on its own,
+// so we do it here. See project_bundle_inventory_sync.md.
+//
+// Scoped to PK only (2026-09-18) until proven correct — remove the domain gate to extend
+// to UK/KSA/UAE once verified against real orders.
+// Set BUNDLE_SYNC_DRY_RUN=false in the function's env vars to actually write inventory
+// adjustments; unset/"true" only logs what WOULD change.
+// Gated by store_id (shopify_connections.store_id), NOT shop_domain — PK's connection row
+// uses a legacy domain string ("darusslampk.myshopify.com") that does not match the current
+// myshopifyDomain ("g2nxeh-hm.myshopify.com"), which silently no-op'd an earlier domain-string
+// gate here. store_id is stable and was verified directly against shopify_connections.
+// PK: 3a9c6e9d-992d-4a1d-beeb-fe8fbb705cc9 — confirmed 4 bundle products w/ bundle.books metafield.
+// UK: 21309b04-5b7e-4cfd-9da2-e799bb9cf37b — confirmed 7 bundle products w/ bundle.books metafield
+//     (of 26 "*Bundle*"-titled products; the other 19 have no metafield yet — safe no-op each order).
+// KSA/UAE: no bundle products exist on either store — not enabled, nothing to do there.
+const BUNDLE_SYNC_ENABLED_STORE_IDS = [
+  "3a9c6e9d-992d-4a1d-beeb-fe8fbb705cc9", // PK
+  "21309b04-5b7e-4cfd-9da2-e799bb9cf37b", // UK
+];
+
+async function bundleGraphql(domain: string, token: string, query: string): Promise<any> {
+  const res = await fetch(`https://${domain}/admin/api/2024-01/graphql.json`, {
+    method: "POST",
+    headers: { "X-Shopify-Access-Token": token, "Content-Type": "application/json" },
+    body: JSON.stringify({ query }),
+  });
+  const data = await res.json();
+  if (data.errors) throw new Error(JSON.stringify(data.errors));
+  return data.data;
+}
+
+async function fetchPrimaryLocationId(domain: string, token: string): Promise<string | null> {
+  const data = await bundleGraphql(domain, token, `{ locations(first: 1) { edges { node { id } } } }`);
+  return data?.locations?.edges?.[0]?.node?.id ?? null;
+}
+
+// Returns component book inventoryItem IDs for a bundle product, or [] if it isn't one.
+async function resolveBundleComponents(domain: string, token: string, productId: string, orderId: string): Promise<string[]> {
+  const productGid = `gid://shopify/Product/${productId}`;
+  let books: string[] = [];
+  try {
+    const data = await bundleGraphql(domain, token, `{
+      product(id: "${productGid}") {
+        metafield(namespace: "bundle", key: "books") { value }
+      }
+    }`);
+    const raw = data?.product?.metafield?.value;
+    if (raw) books = JSON.parse(raw);
+  } catch (e) {
+    console.error(`bundle metafield fetch failed for product ${productId} (order ${orderId}):`, e instanceof Error ? e.message : String(e));
+    return [];
+  }
+  if (!Array.isArray(books) || books.length === 0) return [];
+
+  try {
+    const data = await bundleGraphql(domain, token, `{
+      nodes(ids: ${JSON.stringify(books)}) {
+        ... on Product { variants(first: 1) { edges { node { inventoryItem { id } } } } }
+      }
+    }`);
+    return (data?.nodes ?? [])
+      .filter((n: any) => n?.variants?.edges?.[0]?.node?.inventoryItem?.id)
+      .map((n: any) => n.variants.edges[0].node.inventoryItem.id);
+  } catch (e) {
+    console.error(`bundle component lookup failed for product ${productId} (order ${orderId}):`, e instanceof Error ? e.message : String(e));
+    return [];
+  }
+}
+
+// direction: -1 to decrement (sale), +1 to restock (refund/cancel).
+async function applyBundleInventoryChange(
+  domain: string, token: string, dryRun: boolean, orderId: string,
+  productId: string, title: string, qty: number, direction: 1 | -1, locationId: string,
+): Promise<void> {
+  const inventoryItemIds = await resolveBundleComponents(domain, token, productId, orderId);
+  if (inventoryItemIds.length === 0) return; // not a bundle product
+
+  const changes = inventoryItemIds.map((id) => ({ inventoryItemId: id, locationId, delta: direction * qty }));
+  const verb = direction === -1 ? "decrement" : "restock";
+
+  if (dryRun) {
+    console.log(`[DRY RUN] order ${orderId}: would ${verb} ${changes.length} books by ${qty} each for bundle product ${productId} (${title})`, JSON.stringify(changes));
+    return;
+  }
+
+  try {
+    const data = await bundleGraphql(domain, token, `mutation {
+      inventoryAdjustQuantities(input: {
+        reason: "correction",
+        name: "available",
+        changes: ${JSON.stringify(changes).replace(/"([a-zA-Z]+)":/g, "$1:")}
+      }) { userErrors { field message } }
+    }`);
+    const userErrors = data?.inventoryAdjustQuantities?.userErrors ?? [];
+    if (userErrors.length > 0) {
+      console.error(`bundle inventory ${verb} userErrors for order ${orderId}:`, JSON.stringify(userErrors));
+    } else {
+      console.log(`bundle sync: order ${orderId} ${verb}ed ${changes.length} books by ${qty} each for bundle product ${productId}`);
+    }
+  } catch (e) {
+    console.error(`bundle inventory ${verb} failed for order ${orderId}:`, e instanceof Error ? e.message : String(e));
+  }
+}
+
+async function syncBundleInventory(supabase: any, conn: any, payload: any): Promise<void> {
+  const domain = normalizeDomain(conn.shop_domain);
+  if (!BUNDLE_SYNC_ENABLED_STORE_IDS.includes(conn.store_id)) return;
+
+  const dryRun = (Deno.env.get("BUNDLE_SYNC_DRY_RUN") ?? "true") !== "false";
+  const orderId = String(payload.id);
+  const token = conn.access_token;
+
+  // Idempotency: claim this order once. orders/updated re-fires on every edit (tags,
+  // address, fulfillment...) and would otherwise decrement the same books repeatedly.
+  const { error: claimErr } = await supabase.from("bundle_order_sync")
+    .insert({ store_id: conn.store_id, shopify_order_id: orderId });
+  if (!claimErr) {
+    const lineItems = (payload.line_items ?? []).filter((li: any) => Number(li.quantity ?? 0) > 0 && li.product_id);
+    if (lineItems.length > 0) {
+      const locationId = await fetchPrimaryLocationId(domain, token);
+      if (!locationId) {
+        console.error(`bundle sync: no location found for ${domain}, skipping order ${orderId}`);
+      } else {
+        for (const li of lineItems) {
+          await applyBundleInventoryChange(domain, token, dryRun, orderId, String(li.product_id), li.title, Number(li.quantity), -1, locationId);
+        }
+      }
+    }
+  } else if (claimErr.code !== "23505") {
+    console.error("bundle_order_sync claim failed for order", orderId, ":", claimErr.message);
+    // fail safe — don't proceed to restock logic below either if the claim itself errored oddly
+    return;
+  }
+  // claimErr.code === "23505" (already decremented, or decrement claim already exists) falls
+  // through to restock checks below — cancellation/refunds can happen well after the sale.
+
+  await restockCancelledBundleOrder(supabase, conn, payload, domain, token, dryRun, orderId);
+  await restockRefundedBundleLineItems(supabase, conn, payload, domain, token, dryRun, orderId);
+}
+
+// Order-level cancellation — Shopify sets cancelled_at and fires orders/updated. Restocks every
+// bundle line item on the order exactly once (claimed via bundle_order_restock, key "cancel").
+async function restockCancelledBundleOrder(
+  supabase: any, conn: any, payload: any, domain: string, token: string, dryRun: boolean, orderId: string,
+): Promise<void> {
+  if (!payload.cancelled_at) return;
+
+  const { error: claimErr } = await supabase.from("bundle_order_restock")
+    .insert({ store_id: conn.store_id, restock_key: `cancel:${orderId}` });
+  if (claimErr) {
+    if (claimErr.code !== "23505") console.error("bundle_order_restock (cancel) claim failed for order", orderId, ":", claimErr.message);
+    return; // already restocked, or claim failed — fail safe either way
+  }
+
+  const lineItems = (payload.line_items ?? []).filter((li: any) => Number(li.quantity ?? 0) > 0 && li.product_id);
+  if (lineItems.length === 0) return;
+
+  const locationId = await fetchPrimaryLocationId(domain, token);
+  if (!locationId) {
+    console.error(`bundle restock (cancel): no location found for ${domain}, order ${orderId}`);
+    return;
+  }
+  for (const li of lineItems) {
+    await applyBundleInventoryChange(domain, token, dryRun, orderId, String(li.product_id), li.title, Number(li.quantity), 1, locationId);
+  }
+}
+
+// Line-item-level partial/full refunds — each refund carries its own refund_line_items with the
+// exact quantity refunded. Claimed per (refund_id, line_item_id) so a partial refund followed
+// later by another partial refund on the same order both restock correctly, exactly once each.
+async function restockRefundedBundleLineItems(
+  supabase: any, conn: any, payload: any, domain: string, token: string, dryRun: boolean, orderId: string,
+): Promise<void> {
+  const refunds = payload.refunds ?? [];
+  if (refunds.length === 0) return;
+
+  let locationId: string | null = null;
+  for (const refund of refunds) {
+    for (const rli of refund.refund_line_items ?? []) {
+      const qty = Number(rli.quantity ?? 0);
+      const li = rli.line_item;
+      if (qty <= 0 || !li?.product_id) continue;
+
+      const restockKey = `refund:${refund.id}:${li.id}`;
+      const { error: claimErr } = await supabase.from("bundle_order_restock")
+        .insert({ store_id: conn.store_id, restock_key: restockKey });
+      if (claimErr) {
+        if (claimErr.code !== "23505") console.error("bundle_order_restock (refund) claim failed:", restockKey, claimErr.message);
+        continue;
+      }
+
+      if (!locationId) {
+        locationId = await fetchPrimaryLocationId(domain, token);
+        if (!locationId) {
+          console.error(`bundle restock (refund): no location found for ${domain}, order ${orderId}`);
+          return;
+        }
+      }
+      await applyBundleInventoryChange(domain, token, dryRun, orderId, String(li.product_id), li.title, qty, 1, locationId);
+    }
+  }
 }
 
 // One-time targeted backfill for the total_shipping_price bug (see fetchCurrentShippingBatch)
@@ -1074,6 +1296,7 @@ async function syncInventory(supabase: any, conn: any, log: any, totalRef: { n: 
         .eq("shopify_inventory_item_id", iid);
       totalRef.n++;
     }
+    await writeLocationLevels(supabase, conn, ids, levels);
   }
 
   const page = (log.current_page ?? 0) + 1;
@@ -1102,6 +1325,72 @@ async function handleInventoryWebhook(supabase: any, conn: any, payload: any) {
     .update({ inventory_quantity: total })
     .eq("shopify_inventory_item_id", iid)
     .eq("store_id", conn.store_id);
+  await writeLocationLevels(supabase, conn, [iid], data.inventory_levels ?? []);
+}
+
+// ------------ Per-location stock ------------
+// Location names change rarely — cache per shop for the life of the worker.
+const locationNameCache = new Map<string, { at: number; names: Record<string, string> }>();
+
+async function getLocationNames(domain: string, token: string): Promise<Record<string, string>> {
+  const hit = locationNameCache.get(domain);
+  if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.names;
+  const res = await shopifyFetch(domain, token, "/locations.json");
+  if (!res.ok) return hit?.names ?? {};
+  const { locations } = await res.json();
+  const names: Record<string, string> = {};
+  for (const l of locations ?? []) names[String(l.id)] = l.name;
+  locationNameCache.set(domain, { at: Date.now(), names });
+  return names;
+}
+
+// Mirrors Shopify's per-location `available` into inventory_levels for the given items.
+// Rows for a location the item is no longer stocked at are removed, so the set always
+// matches Shopify. variants.inventory_quantity (the all-locations total) is written by the caller.
+async function writeLocationLevels(supabase: any, conn: any, itemIds: string[], levels: any[]) {
+  if (!itemIds.length) return;
+  try {
+    const { data: vars } = await supabase.from("variants")
+      .select("id, shopify_inventory_item_id")
+      .eq("store_id", conn.store_id)
+      .in("shopify_inventory_item_id", itemIds);
+    if (!vars?.length) return;
+    const names = await getLocationNames(normalizeDomain(conn.shop_domain), conn.access_token);
+    const byItem: Record<string, string[]> = {};
+    for (const v of vars) (byItem[String(v.shopify_inventory_item_id)] ??= []).push(v.id);
+
+    const now = new Date().toISOString();
+    const rows: any[] = [];
+    for (const lvl of levels) {
+      const iid = String(lvl.inventory_item_id);
+      for (const variantId of byItem[iid] ?? []) {
+        rows.push({
+          variant_id: variantId,
+          store_id: conn.store_id,
+          shopify_inventory_item_id: iid,
+          shopify_location_id: String(lvl.location_id),
+          location_name: names[String(lvl.location_id)] ?? null,
+          available_quantity: Number(lvl.available ?? 0),
+          reserved_quantity: 0,
+          updated_at: now,
+        });
+      }
+    }
+    if (rows.length) {
+      const { error } = await supabase.from("inventory_levels")
+        .upsert(rows, { onConflict: "variant_id,shopify_location_id" });
+      if (error) throw error;
+    }
+    // Drop stale locations for these variants
+    for (const [iid, variantIds] of Object.entries(byItem)) {
+      const keep = levels.filter((l: any) => String(l.inventory_item_id) === iid).map((l: any) => String(l.location_id));
+      let del = supabase.from("inventory_levels").delete().in("variant_id", variantIds);
+      if (keep.length) del = del.not("shopify_location_id", "in", `(${keep.join(",")})`);
+      await del;
+    }
+  } catch (e) {
+    console.error("writeLocationLevels failed:", e instanceof Error ? e.message : JSON.stringify(e));
+  }
 }
 
 // Called when Shopify fires products/create or products/update. Updates just this one

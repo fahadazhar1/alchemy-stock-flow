@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { exportToCSV } from "@/lib/export";
 import { useStoreFilter } from "@/hooks/useStoreFilter";
 import { cn } from "@/lib/utils";
+import { getTrend, TREND_CONFIG, type Trend } from "@/lib/productTrend";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent,
@@ -42,7 +43,6 @@ type OrderDetail = {
 };
 
 type SortCol = "units_sold_7d" | "units_sold_14d" | "units_sold_30d" | "product_name" | "total_inventory";
-type Trend   = "Spiking" | "Steady" | "Slowing" | "New";
 type InventoryStatus = "Out of Stock" | "Low Stock" | "In Stock";
 
 function getInventoryStatus(row: VelocityRow): InventoryStatus {
@@ -52,39 +52,6 @@ function getInventoryStatus(row: VelocityRow): InventoryStatus {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function getTrend(row: VelocityRow): Trend {
-  if (row.units_sold_30d === 0 && row.units_sold_7d === 0) return "New";
-  if (row.units_sold_30d === 0) return "Spiking";
-  const normalized = row.units_sold_7d * (30 / 7);
-  const ratio = normalized / row.units_sold_30d;
-  if (ratio > 1.3) return "Spiking";
-  if (ratio < 0.7) return "Slowing";
-  return "Steady";
-}
-
-const TREND_CONFIG: Record<Trend, { label: string; cls: string; icon: React.ReactNode }> = {
-  Spiking: {
-    label: "Spiking",
-    cls: "bg-red-100 text-red-700 border-red-200 dark:bg-red-950/40 dark:text-red-400 dark:border-red-800",
-    icon: <TrendingUp className="h-3 w-3" />,
-  },
-  Steady: {
-    label: "Steady",
-    cls: "bg-green-100 text-green-700 border-green-200 dark:bg-green-950/40 dark:text-green-400 dark:border-green-800",
-    icon: <Minus className="h-3 w-3" />,
-  },
-  Slowing: {
-    label: "Slowing",
-    cls: "bg-blue-100 text-blue-700 border-blue-200 dark:bg-blue-950/40 dark:text-blue-400 dark:border-blue-800",
-    icon: <TrendingDown className="h-3 w-3" />,
-  },
-  New: {
-    label: "No Sales",
-    cls: "bg-muted text-muted-foreground border-border",
-    icon: <Minus className="h-3 w-3" />,
-  },
-};
 
 function fmtDate(iso: string | null) {
   if (!iso) return "—";
